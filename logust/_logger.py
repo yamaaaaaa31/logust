@@ -42,9 +42,6 @@ def _to_log_level(level: LogLevel | str) -> LogLevel:
     return level
 
 
-# Pre-computed level values derived from LogLevel enum at import time
-# This avoids PyO3 crossings during logging while staying in sync with Rust
-# Fallback to static values if enum access fails during partial import
 try:
     _LEVEL_VALUES: dict[str, int] = {
         "trace": LogLevel.Trace.value,
@@ -57,6 +54,13 @@ try:
         "critical": LogLevel.Critical.value,
     }
 except (AttributeError, TypeError):
+    import warnings
+
+    warnings.warn(
+        "LogLevel enum access failed, using static fallback values",
+        RuntimeWarning,
+        stacklevel=1,
+    )
     _LEVEL_VALUES = {
         "trace": 5,
         "debug": 10,
@@ -68,9 +72,9 @@ except (AttributeError, TypeError):
         "critical": 50,
     }
 
-# Reverse map: numeric level values to level names
 _LEVEL_VALUE_MAP: dict[int, str] = {v: k for k, v in _LEVEL_VALUES.items()}
-assert len(_LEVEL_VALUE_MAP) == len(_LEVEL_VALUES), "Duplicate numeric level values detected"
+if len(_LEVEL_VALUE_MAP) != len(_LEVEL_VALUES):
+    raise ValueError("Duplicate numeric level values detected")
 
 
 class Logger:
@@ -102,22 +106,12 @@ class Logger:
         exception: str | None,
         depth: int,
     ) -> None:
-        """Internal method to log with level check and caller info.
-
-        Args:
-            level_value: Pre-computed numeric level value (avoids PyO3 crossing)
-            level_name: Method name on _inner to call
-            message: Log message
-            exception: Optional exception string
-            depth: Stack frame depth adjustment
-        """
-        # Fast path: check cached min level from Rust (1 PyO3 crossing only)
         if level_value < self._inner.min_level:
             return
-        # Get caller info only if we're going to log
-        name, function, line = _get_caller_info(depth + 1)  # +1 for this method
-        log_method = getattr(self._inner, level_name)
-        log_method(str(message), exception=exception, name=name, function=function, line=line)
+        name, function, line = _get_caller_info(depth + 1)
+        getattr(self._inner, level_name)(
+            str(message), exception=exception, name=name, function=function, line=line
+        )
 
     def trace(
         self, message: str, *, exception: str | None = None, _depth: int = 0, **kwargs: Any
@@ -237,24 +231,23 @@ class Logger:
             >>> logger.log("INFO", "Using built-in level by name")
             >>> logger.log(20, "Using built-in level by number")
         """
-        # Check if this is a built-in level name that we can optimize
         if isinstance(level, str):
             level_lower = level.lower()
             if level_lower in _LEVEL_VALUES:
-                # Use optimized path for built-in levels (pass pre-computed value)
                 self._log_with_level(
                     _LEVEL_VALUES[level_lower], level_lower, message, exception, _depth + 1
                 )
                 return
-        # Check if this is a built-in numeric level that we can optimize
         elif isinstance(level, int) and level in _LEVEL_VALUE_MAP:
-            level_name = _LEVEL_VALUE_MAP[level]
-            self._log_with_level(level, level_name, message, exception, _depth + 1)
+            self._log_with_level(
+                level, _LEVEL_VALUE_MAP[level], message, exception, _depth + 1
+            )
             return
 
-        # For custom/unknown levels, always call Rust (validates unknown levels)
         name, function, line = _get_caller_info(_depth + 1)
-        self._inner.log(level, str(message), exception=exception, name=name, function=function, line=line)
+        self._inner.log(
+            level, str(message), exception=exception, name=name, function=function, line=line
+        )
 
     def set_level(self, level: LogLevel | str) -> None:
         """Set minimum log level for console output."""
@@ -349,12 +342,9 @@ class Logger:
         """
         import sys
 
-        # Check if sink is stdout or stderr
         if sink is sys.stdout or sink is sys.stderr:
             stream_name = "stdout" if sink is sys.stdout else "stderr"
             resolved_level = _to_log_level(level) if level is not None else None
-
-            # Auto-detect colorize based on TTY if not specified
             resolved_colorize = colorize
             if resolved_colorize is None:
                 resolved_colorize = sink.isatty() if hasattr(sink, "isatty") else True
@@ -368,7 +358,6 @@ class Logger:
                 colorize=resolved_colorize,
             )
 
-        # File path sink
         sink_str = os.fspath(sink)
 
         resolved_level = _to_log_level(level) if level is not None else None
