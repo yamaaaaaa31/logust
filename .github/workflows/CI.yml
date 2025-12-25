@@ -115,8 +115,17 @@ jobs:
         platform:
           - runner: macos-15
             target: x86_64
+            deployment_target: "11.0"
           - runner: macos-14
             target: aarch64
+            deployment_target: "11.0"
+          # macOS 26 (Tahoe) builds
+          - runner: macos-15
+            target: x86_64
+            deployment_target: "26.0"
+          - runner: macos-14
+            target: aarch64
+            deployment_target: "26.0"
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -124,6 +133,8 @@ jobs:
           python-version: 3.x
       - name: Build wheels
         uses: PyO3/maturin-action@v1
+        env:
+          MACOSX_DEPLOYMENT_TARGET: ${{ matrix.platform.deployment_target }}
         with:
           target: ${{ matrix.platform.target }}
           args: --release --out dist --find-interpreter
@@ -131,7 +142,7 @@ jobs:
       - name: Upload wheels
         uses: actions/upload-artifact@v6
         with:
-          name: wheels-macos-${{ matrix.platform.target }}
+          name: wheels-macos-${{ matrix.platform.target }}-${{ matrix.platform.deployment_target }}
           path: dist
 
   sdist:
@@ -173,3 +184,9 @@ jobs:
         with:
           command: upload
           args: --non-interactive --skip-existing wheels-*/*
+      - name: Create GitHub Release
+        if: ${{ startsWith(github.ref, 'refs/tags/') }}
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: wheels-*/*

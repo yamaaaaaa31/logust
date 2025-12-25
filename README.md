@@ -2,6 +2,7 @@
 
 [![CI](https://github.com/yamaaaaaa31/logust/actions/workflows/test.yml/badge.svg)](https://github.com/yamaaaaaa31/logust/actions/workflows/test.yml)
 [![PyPI version](https://badge.fury.io/py/logust.svg)](https://badge.fury.io/py/logust)
+[![Downloads](https://static.pepy.tech/badge/logust)](https://pepy.tech/project/logust)
 [![Python Versions](https://img.shields.io/pypi/pyversions/logust.svg)](https://pypi.org/project/logust/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
