@@ -42,41 +42,21 @@ def _to_log_level(level: LogLevel | str) -> LogLevel:
     return level
 
 
-# Map of log level names to LogLevel enum for quick lookup
-_LEVEL_MAP: dict[str, LogLevel] = {
-    "trace": LogLevel.Trace,
-    "debug": LogLevel.Debug,
-    "info": LogLevel.Info,
-    "success": LogLevel.Success,
-    "warning": LogLevel.Warning,
-    "error": LogLevel.Error,
-    "fail": LogLevel.Fail,
-    "critical": LogLevel.Critical,
-}
-
-# Map of numeric level values to level names for quick lookup
-_LEVEL_VALUE_MAP: dict[int, str] = {
-    5: "trace",
-    10: "debug",
-    20: "info",
-    25: "success",
-    30: "warning",
-    40: "error",
-    45: "fail",
-    50: "critical",
-}
-
-# Pre-computed level values to avoid PyO3 crossings for LogLevel.value
+# Pre-computed level values derived from LogLevel enum at import time
+# This avoids PyO3 crossings during logging while staying in sync with Rust
 _LEVEL_VALUES: dict[str, int] = {
-    "trace": 5,
-    "debug": 10,
-    "info": 20,
-    "success": 25,
-    "warning": 30,
-    "error": 40,
-    "fail": 45,
-    "critical": 50,
+    "trace": LogLevel.Trace.value,
+    "debug": LogLevel.Debug.value,
+    "info": LogLevel.Info.value,
+    "success": LogLevel.Success.value,
+    "warning": LogLevel.Warning.value,
+    "error": LogLevel.Error.value,
+    "fail": LogLevel.Fail.value,
+    "critical": LogLevel.Critical.value,
 }
+
+# Reverse map: numeric level values to level names
+_LEVEL_VALUE_MAP: dict[int, str] = {v: k for k, v in _LEVEL_VALUES.items()}
 
 
 class Logger:
@@ -253,16 +233,12 @@ class Logger:
                 )
                 return
         # Check if this is a built-in numeric level that we can optimize
-        elif isinstance(level, int):
-            if level in _LEVEL_VALUE_MAP:
-                level_name = _LEVEL_VALUE_MAP[level]
-                self._log_with_level(level, level_name, message, exception, _depth + 1)
-                return
-            # Custom numeric level - still do early return check
-            if level < self._inner.min_level:
-                return
+        elif isinstance(level, int) and level in _LEVEL_VALUE_MAP:
+            level_name = _LEVEL_VALUE_MAP[level]
+            self._log_with_level(level, level_name, message, exception, _depth + 1)
+            return
 
-        # For custom levels, fall back to original behavior
+        # For custom/unknown levels, always call Rust (validates unknown levels)
         name, function, line = _get_caller_info(_depth + 1)
         self._inner.log(level, str(message), exception=exception, name=name, function=function, line=line)
 
