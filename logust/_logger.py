@@ -239,9 +239,7 @@ class Logger:
                 )
                 return
         elif isinstance(level, int) and level in _LEVEL_VALUE_MAP:
-            self._log_with_level(
-                level, _LEVEL_VALUE_MAP[level], message, exception, _depth + 1
-            )
+            self._log_with_level(level, _LEVEL_VALUE_MAP[level], message, exception, _depth + 1)
             return
 
         name, function, line = _get_caller_info(_depth + 1)
