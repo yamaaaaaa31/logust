@@ -5,6 +5,7 @@ mod sink;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
 use parking_lot::RwLock;
@@ -33,6 +34,8 @@ pub struct PyLogger {
     context: Arc<HashMap<String, String>>,
     /// Registered callbacks
     callbacks: Arc<RwLock<Vec<CallbackEntry>>>,
+    /// Cached minimum log level across all handlers and callbacks (shared via Arc)
+    cached_min_level: Arc<AtomicU32>,
 }
 
 #[pymethods]
@@ -44,6 +47,7 @@ impl PyLogger {
             handlers: Arc::new(RwLock::new(Vec::new())),
             context: empty_context(),
             callbacks: Arc::new(RwLock::new(Vec::new())),
+            cached_min_level: Arc::new(AtomicU32::new(u32::MAX)),
         };
 
         let console_level = level.unwrap_or_default();
@@ -54,6 +58,7 @@ impl PyLogger {
             filter: None,
         };
         logger.handlers.write().push(entry);
+        logger.update_min_level_cache();
 
         logger
     }
@@ -109,6 +114,7 @@ impl PyLogger {
         };
 
         self.handlers.write().push(entry);
+        self.update_min_level_cache();
         Ok(id)
     }
 
@@ -138,6 +144,7 @@ impl PyLogger {
         };
 
         self.handlers.write().push(entry);
+        self.update_min_level_cache();
         Ok(id)
     }
 
@@ -146,16 +153,20 @@ impl PyLogger {
     fn remove(&self, handler_id: Option<u64>) -> bool {
         let mut handlers = self.handlers.write();
 
-        if let Some(id) = handler_id {
+        let result = if let Some(id) = handler_id {
             if let Some(pos) = handlers.iter().position(|h| h.id == id) {
                 handlers.remove(pos);
-                return true;
+                true
+            } else {
+                false
             }
-            false
         } else {
             handlers.clear();
             true
-        }
+        };
+        drop(handlers); // Release lock before updating cache
+        self.update_min_level_cache();
+        result
     }
 
     /// Bind context values and return a new logger (zero-copy when no new keys)
@@ -178,18 +189,22 @@ impl PyLogger {
             handlers: Arc::clone(&self.handlers),
             context: new_context,
             callbacks: Arc::clone(&self.callbacks),
+            cached_min_level: Arc::clone(&self.cached_min_level),
         };
         Py::new(py, new_logger)
     }
 
     /// Set minimum log level for all console handlers
     fn set_level(&self, level: LogLevel) {
-        let mut handlers = self.handlers.write();
-        for entry in handlers.iter_mut() {
-            if let HandlerType::Console(ref mut h) = entry.handler {
-                h.level = level;
+        {
+            let mut handlers = self.handlers.write();
+            for entry in handlers.iter_mut() {
+                if let HandlerType::Console(ref mut h) = entry.handler {
+                    h.level = level;
+                }
             }
         }
+        self.update_min_level_cache();
     }
 
     /// Get current minimum log level (from first console handler)
@@ -220,51 +235,43 @@ impl PyLogger {
         false
     }
 
-    /// Get the minimum log level across all handlers and callbacks
-    fn get_min_level(&self) -> u32 {
-        let handlers = self.handlers.read();
-        let callbacks = self.callbacks.read();
-
-        let min_handler = handlers
-            .iter()
-            .map(|e| e.handler.level() as u32)
-            .min()
-            .unwrap_or(u32::MAX);
-
-        let min_callback = callbacks
-            .iter()
-            .map(|e| e.level as u32)
-            .min()
-            .unwrap_or(u32::MAX);
-
-        min_handler.min(min_callback)
+    /// Get the cached minimum log level across all handlers and callbacks
+    #[getter]
+    fn min_level(&self) -> u32 {
+        self.cached_min_level.load(Ordering::Relaxed)
     }
 
     /// Disable console output
     fn disable(&self) {
-        let mut handlers = self.handlers.write();
-        handlers.retain(|entry| !matches!(entry.handler, HandlerType::Console(_)));
+        {
+            let mut handlers = self.handlers.write();
+            handlers.retain(|entry| !matches!(entry.handler, HandlerType::Console(_)));
+        }
+        self.update_min_level_cache();
     }
 
     /// Enable console output with given level
     #[pyo3(signature = (level=None))]
     fn enable(&self, level: Option<LogLevel>) {
-        let mut handlers = self.handlers.write();
+        {
+            let mut handlers = self.handlers.write();
 
-        let has_console = handlers
-            .iter()
-            .any(|e| matches!(e.handler, HandlerType::Console(_)));
+            let has_console = handlers
+                .iter()
+                .any(|e| matches!(e.handler, HandlerType::Console(_)));
 
-        if !has_console {
-            let console_level = level.unwrap_or(LogLevel::Debug);
-            let console_handler = ConsoleHandler::new(console_level);
-            let entry = HandlerEntry {
-                id: handler::next_handler_id(),
-                handler: HandlerType::Console(console_handler),
-                filter: None,
-            };
-            handlers.push(entry);
+            if !has_console {
+                let console_level = level.unwrap_or(LogLevel::Debug);
+                let console_handler = ConsoleHandler::new(console_level);
+                let entry = HandlerEntry {
+                    id: handler::next_handler_id(),
+                    handler: HandlerType::Console(console_handler),
+                    filter: None,
+                };
+                handlers.push(entry);
+            }
         }
+        self.update_min_level_cache();
     }
 
     /// Check if console output is enabled
@@ -298,17 +305,23 @@ impl PyLogger {
             level: level.unwrap_or(LogLevel::Debug),
         };
         self.callbacks.write().push(entry);
+        self.update_min_level_cache();
         id
     }
 
     /// Remove a callback by ID
     fn remove_callback(&self, callback_id: u64) -> bool {
-        let mut callbacks = self.callbacks.write();
-        if let Some(pos) = callbacks.iter().position(|c| c.id == callback_id) {
-            callbacks.remove(pos);
-            return true;
-        }
-        false
+        let result = {
+            let mut callbacks = self.callbacks.write();
+            if let Some(pos) = callbacks.iter().position(|c| c.id == callback_id) {
+                callbacks.remove(pos);
+                true
+            } else {
+                false
+            }
+        };
+        self.update_min_level_cache();
+        result
     }
 
     #[pyo3(signature = (message, exception=None, name=None, function=None, line=None))]
@@ -393,6 +406,27 @@ impl PyLogger {
 }
 
 impl PyLogger {
+    /// Update the cached minimum level across all handlers and callbacks
+    fn update_min_level_cache(&self) {
+        let handlers = self.handlers.read();
+        let callbacks = self.callbacks.read();
+
+        let min_handler = handlers
+            .iter()
+            .map(|e| e.handler.level() as u32)
+            .min()
+            .unwrap_or(u32::MAX);
+
+        let min_callback = callbacks
+            .iter()
+            .map(|e| e.level as u32)
+            .min()
+            .unwrap_or(u32::MAX);
+
+        self.cached_min_level
+            .store(min_handler.min(min_callback), Ordering::Relaxed);
+    }
+
     /// Internal log method - optimized for performance
     #[inline]
     fn _log(&self, level: LogLevel, message: String, exception: Option<String>, name: Option<String>, function: Option<String>, line: Option<u32>) {

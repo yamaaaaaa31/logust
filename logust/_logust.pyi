@@ -106,8 +106,9 @@ class PyLogger:
         """Check if any handler would accept messages at the given level."""
         ...
 
-    def get_min_level(self) -> int:
-        """Get the minimum log level across all handlers and callbacks."""
+    @property
+    def min_level(self) -> int:
+        """Get the cached minimum log level across all handlers and callbacks."""
         ...
 
     def enable(self, level: LogLevel | None = None) -> None:

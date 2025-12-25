@@ -54,6 +54,18 @@ _LEVEL_MAP: dict[str, LogLevel] = {
     "critical": LogLevel.Critical,
 }
 
+# Map of numeric level values to level names for quick lookup
+_LEVEL_VALUE_MAP: dict[int, str] = {
+    5: "trace",
+    10: "debug",
+    20: "info",
+    25: "success",
+    30: "warning",
+    40: "error",
+    45: "fail",
+    50: "critical",
+}
+
 
 class Logger:
     """Main logger class wrapping the Rust PyLogger.
@@ -75,17 +87,6 @@ class Logger:
     ) -> None:
         self._inner = inner
         self._patchers = patchers or []
-        self._min_level_cache: int | None = None
-
-    def _invalidate_level_cache(self) -> None:
-        """Invalidate the cached minimum level."""
-        self._min_level_cache = None
-
-    def _get_min_level(self) -> int:
-        """Get minimum level with caching (reduces PyO3 calls)."""
-        if self._min_level_cache is None:
-            self._min_level_cache = self._inner.get_min_level()
-        return self._min_level_cache
 
     def _log_with_level(
         self,
@@ -104,8 +105,8 @@ class Logger:
             exception: Optional exception string
             depth: Stack frame depth adjustment
         """
-        # Fast path: pure Python check using cached min level (no PyO3 call)
-        if level.value < self._get_min_level():
+        # Fast path: check cached min level from Rust (shared across all bound loggers)
+        if level.value < self._inner.min_level:
             return
         # Get caller info only if we're going to log (single PyO3 call)
         name, function, line = _get_caller_info(depth + 1)  # +1 for this method
@@ -238,14 +239,19 @@ class Logger:
                 log_level = _LEVEL_MAP[level_lower]
                 self._log_with_level(log_level, level_lower, message, exception, _depth + 1)
                 return
+        # Check if this is a built-in numeric level that we can optimize
+        elif isinstance(level, int) and level in _LEVEL_VALUE_MAP:
+            level_name = _LEVEL_VALUE_MAP[level]
+            log_level = _LEVEL_MAP[level_name]
+            self._log_with_level(log_level, level_name, message, exception, _depth + 1)
+            return
 
-        # For custom levels or int levels, fall back to original behavior
+        # For custom levels, fall back to original behavior
         name, function, line = _get_caller_info(_depth + 1)
         self._inner.log(level, str(message), exception=exception, name=name, function=function, line=line)
 
     def set_level(self, level: LogLevel | str) -> None:
         """Set minimum log level for console output."""
-        self._invalidate_level_cache()
         self._inner.set_level(_to_log_level(level))
 
     def get_level(self) -> LogLevel:
@@ -265,12 +271,10 @@ class Logger:
 
     def enable(self, level: LogLevel | str | None = None) -> None:
         """Enable console logging."""
-        self._invalidate_level_cache()
         self._inner.enable(_to_log_level(level) if level is not None else None)
 
     def disable(self) -> None:
         """Disable console logging."""
-        self._invalidate_level_cache()
         self._inner.disable()
 
     def is_enabled(self) -> bool:
@@ -339,8 +343,6 @@ class Logger:
         """
         import sys
 
-        self._invalidate_level_cache()
-
         # Check if sink is stdout or stderr
         if sink is sys.stdout or sink is sys.stderr:
             stream_name = "stdout" if sink is sys.stdout else "stderr"
@@ -395,7 +397,6 @@ class Logger:
             >>> logger.remove(handler_id)  # Remove specific handler
             >>> logger.remove()  # Remove ALL handlers (including console)
         """
-        self._invalidate_level_cache()
         return self._inner.remove(handler_id)
 
     def bind(self, **kwargs: Any) -> Logger:
