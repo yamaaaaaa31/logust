@@ -10,7 +10,7 @@ A fast, Rust-powered Python logging library inspired by [loguru](https://github.
 
 ## Features
 
-- **Blazing Fast** - Rust-powered core delivers up to 16x faster performance than loguru
+- **Blazing Fast** - Rust-powered core delivers up to 17x faster performance than loguru
 - **Beautiful by Default** - Colored output with zero configuration needed
 - **Caller Information** - Automatic module, function, and line number in every log
 - **Console & File Sinks** - Output to stdout, stderr, or files with different formats
@@ -30,21 +30,21 @@ Comparison with Python logging and loguru (10,000 log messages):
 
 | Scenario | logging | loguru | logust | vs loguru |
 |----------|---------|--------|--------|-----------|
-| File write (sync) | 57.18 ms | 65.57 ms | **10.84 ms** | 6.1x faster |
-| Formatted messages | 55.99 ms | 65.81 ms | **11.62 ms** | 5.7x faster |
-| JSON serialize | N/A | 134.12 ms | **10.96 ms** | 12.2x faster |
-| Context binding | N/A | 64.12 ms | **10.35 ms** | 6.2x faster |
+| File write (sync) | 57 ms | 67 ms | **11 ms** | 6x faster |
+| Formatted messages | 56 ms | 67 ms | **11 ms** | 6x faster |
+| JSON serialize | N/A | 137 ms | **10 ms** | 14x faster |
+| Context binding | N/A | 66 ms | **10 ms** | 7x faster |
 
 ### Async writes
 
 | Scenario | loguru | logust | vs loguru |
 |----------|--------|--------|-----------|
-| File write (async) | 326.27 ms | **10.23 ms** | 31.9x faster |
-| Sync vs Async overhead | **4.3x slower** | **No overhead** | - |
+| File write (async) | 313 ms | **10 ms** | 31x faster |
+| Sync vs Async overhead | **4x slower** | **No overhead** | - |
 
 loguru's `enqueue=True` adds significant overhead due to Python's Queue. Logust uses Rust's lock-free channels, maintaining speed while offloading I/O.
 
-**Summary:** logust is **16.8x faster** than loguru on average with rich caller information included in every log message.
+**Summary:** logust is **17x faster** than loguru on average with rich caller information included in every log message.
 
 ## Installation
 
