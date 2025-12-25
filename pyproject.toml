@@ -1,0 +1,115 @@
+[build-system]
+requires = ["maturin>=1.10,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "logust"
+description = "A fast, Rust-powered Python logging library inspired by loguru"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [
+    { name = "yamaaaaaa31" }
+]
+keywords = ["logging", "logger", "rust", "performance", "loguru"]
+requires-python = ">=3.10"
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: Implementation :: PyPy",
+    "Topic :: System :: Logging",
+    "Typing :: Typed",
+]
+dynamic = ["version"]
+
+[project.urls]
+Homepage = "https://github.com/yamaaaaaa31/logust"
+Repository = "https://github.com/yamaaaaaa31/logust"
+Issues = "https://github.com/yamaaaaaa31/logust/issues"
+
+[project.optional-dependencies]
+dev = [
+    "mypy>=1.0",
+    "pre-commit>=4.0",
+    "ruff>=0.8",
+]
+test = [
+    "pytest>=8.0",
+    "pytest-cov>=4.0",
+]
+bench = [
+    "loguru>=0.7",
+]
+docs = [
+    "mkdocs-material>=9.5",
+    "mkdocstrings[python]>=0.24",
+    "mkdocs-minify-plugin>=0.8",
+]
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
+module-name = "logust._logust"
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+warn_return_any = true
+warn_unused_ignores = true
+
+[[tool.mypy.overrides]]
+module = "logust._logust"
+ignore_missing_imports = true
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = [
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # Pyflakes
+    "I",      # isort
+    "UP",     # pyupgrade
+    "B",      # flake8-bugbear
+    "C4",     # flake8-comprehensions
+    "RUF",    # Ruff-specific rules
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
+addopts = "-v --tb=short"
+
+[tool.coverage.run]
+branch = true
+source = ["logust"]
+omit = ["logust/_logust.pyi"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "\\.\\.\\.",
+]
+
+[dependency-groups]
+dev = [
+    "mypy>=1.19.1",
+    "pre-commit>=4.0",
+    "pytest-xdist>=3.8.0",
+    "ruff>=0.14.10",
+]

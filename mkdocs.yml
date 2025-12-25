@@ -1,0 +1,130 @@
+site_name: Logust
+site_description: Fast, Rust-powered Python logging with a loguru-style API, JSON output, and file rotation.
+site_url: https://yamaaaaaa31.github.io/logust/
+site_author: yamaaaaaa31
+repo_url: https://github.com/yamaaaaaa31/logust
+repo_name: yamaaaaaa31/logust
+edit_uri: edit/main/docs/
+copyright: Copyright (c) 2025 yamaaaaaa31
+
+theme:
+  name: material
+  language: en
+  font:
+    text: Roboto
+    code: Roboto Mono
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: deep purple
+      accent: purple
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: deep purple
+      accent: purple
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.sections
+    - navigation.expand
+    - navigation.path
+    - navigation.indexes
+    - toc.follow
+    - navigation.top
+    - toc.integrate
+    - search.suggest
+    - search.highlight
+    - search.share
+    - header.autohide
+    - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+    - content.footnote.tooltips
+    - content.action.edit
+  icon:
+    repo: fontawesome/brands/github
+    edit: material/pencil
+    view: material/eye
+  logo: assets/logo.svg
+  favicon: assets/logo.svg
+
+nav:
+  - Home: index.md
+  - Getting Started:
+      - Installation: getting-started/installation.md
+      - Quick Start: getting-started/quick-start.md
+  - Guide:
+      - Log Levels: guide/levels.md
+      - File Output: guide/file-output.md
+      - Formatting: guide/formatting.md
+      - Context Binding: guide/context.md
+      - Exception Handling: guide/exceptions.md
+      - Integrations: guide/integrations.md
+  - API Reference: api.md
+  - Comparison: comparison.md
+
+markdown_extensions:
+  - abbr
+  - pymdownx.arithmatex:
+      generic: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.betterem:
+      smart_enable: all
+  - pymdownx.caret
+  - pymdownx.emoji
+  - pymdownx.inlinehilite
+  - pymdownx.keys
+  - pymdownx.mark
+  - pymdownx.smartsymbols
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - admonition
+  - def_list
+  - pymdownx.details
+  - footnotes
+  - attr_list
+  - md_in_html
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - pymdownx.tilde
+  - tables
+  - toc:
+      permalink: true
+      permalink_title: Anchor link to this section
+
+plugins:
+  - search:
+      separator: '[\\s\\-,:!=\\[\\]()\"`/]+|\\.(?!\\d)|&[lg]t;|(?!\\b)(?=[A-Z][a-z])'
+  - minify:
+      minify_html: true
+  - mkdocstrings:
+      handlers:
+        python:
+          options:
+            show_source: false
+            show_root_heading: true
+            heading_level: 2
+
+extra:
+  generator: false
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/yamaaaaaa31/logust
+    - icon: fontawesome/brands/python
+      link: https://pypi.org/project/logust/
+
+extra_css:
+  - stylesheets/extra.css
