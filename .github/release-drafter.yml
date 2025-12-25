@@ -1,0 +1,63 @@
+name-template: 'Logust v$RESOLVED_VERSION ✨'
+tag-template: 'v$RESOLVED_VERSION'
+categories:
+  - title: '🚀 Core & Features'
+    labels:
+      - 'feature'
+      - 'enhancement'
+  - title: '🐞 Fixes & Stability'
+    labels:
+      - 'fix'
+      - 'bugfix'
+      - 'bug'
+  - title: '📚 Docs & Examples'
+    labels:
+      - 'documentation'
+      - 'docs'
+  - title: '🧹 Maintenance'
+    labels:
+      - 'chore'
+      - 'maintenance'
+  - title: '🔧 CI & Testing'
+    labels:
+      - 'ci'
+      - 'testing'
+      - 'github-actions'
+  - title: '📦 Dependencies'
+    labels:
+      - 'dependencies'
+      - 'deps'
+change-template: '- $TITLE (by @$AUTHOR) #$NUMBER'
+change-title-escapes: '\<*_&'
+version-resolver:
+  major:
+    labels:
+      - 'major'
+      - 'breaking-change'
+  minor:
+    labels:
+      - 'minor'
+      - 'feature'
+      - 'enhancement'
+  patch:
+    labels:
+      - 'patch'
+      - 'fix'
+      - 'bugfix'
+      - 'bug'
+      - 'chore'
+      - 'documentation'
+      - 'ci'
+      - 'testing'
+      - 'dependencies'
+  default: patch
+template: |
+  ## What's New
+
+  Thanks for helping make Logust better!
+
+  $CHANGES
+
+  ## Contributors
+
+  $CONTRIBUTORS
