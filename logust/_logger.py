@@ -356,7 +356,8 @@ class Logger:
                 colorize=resolved_colorize,
             )
 
-        sink_str = os.fspath(sink)
+        # At this point sink must be a path (str or PathLike), not TextIO
+        sink_str = os.fspath(sink)  # type: ignore[arg-type]
 
         resolved_level = _to_log_level(level) if level is not None else None
 

@@ -154,6 +154,9 @@ class PyLogger:
         level_arg: str | int,
         message: str,
         exception: str | None = None,
+        name: str | None = None,
+        function: str | None = None,
+        line: int | None = None,
     ) -> None:
         """Log at any level (built-in or custom)."""
         ...

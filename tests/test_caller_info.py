@@ -11,15 +11,15 @@ class TestCallerInfo:
     def test_caller_info_basic(self, tmp_path):
         """Test that caller info is captured correctly in file output."""
         log_file = tmp_path / "test.log"
-        code = f'''
+        code = f"""
 from logust import logger
 logger.remove()
-logger.add({repr(str(log_file))}, format="{{name}}:{{function}}:{{line}} - {{message}}")
+logger.add({str(log_file)!r}, format="{{name}}:{{function}}:{{line}} - {{message}}")
 def my_func():
     logger.info("test message")
 my_func()
 logger.complete()
-'''
+"""
         subprocess.run([sys.executable, "-c", code], check=True)
 
         content = log_file.read_text()
@@ -29,15 +29,15 @@ logger.complete()
     def test_caller_info_in_json(self, tmp_path):
         """Test that caller info is included in JSON output."""
         log_file = tmp_path / "test.json"
-        code = f'''
+        code = f"""
 from logust import logger
 logger.remove()
-logger.add({repr(str(log_file))}, serialize=True)
+logger.add({str(log_file)!r}, serialize=True)
 def my_func():
     logger.info("json test")
 my_func()
 logger.complete()
-'''
+"""
         subprocess.run([sys.executable, "-c", code], check=True)
 
         content = log_file.read_text().strip()
@@ -54,15 +54,15 @@ class TestCallerDepth:
     def test_direct_call_shows_caller(self, tmp_path):
         """Direct log call should show the actual caller function."""
         log_file = tmp_path / "test.log"
-        code = f'''
+        code = f"""
 from logust import logger
 logger.remove()
-logger.add({repr(str(log_file))}, format="{{function}} - {{message}}")
+logger.add({str(log_file)!r}, format="{{function}} - {{message}}")
 def actual_caller():
     logger.info("direct call")
 actual_caller()
 logger.complete()
-'''
+"""
         subprocess.run([sys.executable, "-c", code], check=True)
 
         content = log_file.read_text()
@@ -71,15 +71,15 @@ logger.complete()
     def test_opt_preserves_caller(self, tmp_path):
         """opt() should not affect caller info when depth=0."""
         log_file = tmp_path / "test.log"
-        code = f'''
+        code = f"""
 from logust import logger
 logger.remove()
-logger.add({repr(str(log_file))}, format="{{function}} - {{message}}")
+logger.add({str(log_file)!r}, format="{{function}} - {{message}}")
 def test_func():
     logger.opt().info("through opt")
 test_func()
 logger.complete()
-'''
+"""
         subprocess.run([sys.executable, "-c", code], check=True)
 
         content = log_file.read_text()
@@ -88,17 +88,17 @@ logger.complete()
     def test_opt_depth_adjusts_caller(self, tmp_path):
         """opt(depth=N) should skip N frames."""
         log_file = tmp_path / "test.log"
-        code = f'''
+        code = f"""
 from logust import logger
 logger.remove()
-logger.add({repr(str(log_file))}, format="{{function}} - {{message}}")
+logger.add({str(log_file)!r}, format="{{function}} - {{message}}")
 def wrapper():
     def inner():
         logger.opt(depth=1).info("with depth=1")
     inner()
 wrapper()
 logger.complete()
-'''
+"""
         subprocess.run([sys.executable, "-c", code], check=True)
 
         content = log_file.read_text()
@@ -108,10 +108,10 @@ logger.complete()
     def test_exception_shows_caller(self, tmp_path):
         """exception() should show the caller, not internal methods."""
         log_file = tmp_path / "test.log"
-        code = f'''
+        code = f"""
 from logust import logger
 logger.remove()
-logger.add({repr(str(log_file))}, format="{{function}} - {{message}}")
+logger.add({str(log_file)!r}, format="{{function}} - {{message}}")
 def my_exception_handler():
     try:
         raise ValueError("test")
@@ -119,7 +119,7 @@ def my_exception_handler():
         logger.exception("caught error")
 my_exception_handler()
 logger.complete()
-'''
+"""
         subprocess.run([sys.executable, "-c", code], check=True)
 
         content = log_file.read_text()
@@ -128,10 +128,10 @@ logger.complete()
     def test_catch_decorator_shows_call_site(self, tmp_path):
         """catch decorator should show where decorated function was called."""
         log_file = tmp_path / "test.log"
-        code = f'''
+        code = f"""
 from logust import logger
 logger.remove()
-logger.add({repr(str(log_file))}, format="{{function}} - {{message}}")
+logger.add({str(log_file)!r}, format="{{function}} - {{message}}")
 
 @logger.catch()
 def risky_func():
@@ -142,7 +142,7 @@ def caller_of_risky():
 
 caller_of_risky()
 logger.complete()
-'''
+"""
         subprocess.run([sys.executable, "-c", code], check=True)
 
         content = log_file.read_text()
@@ -156,13 +156,13 @@ class TestConsoleSink:
 
     def test_add_stdout_sink(self):
         """Test adding sys.stdout as sink outputs to stdout."""
-        code = '''
+        code = """
 import sys
 from logust import logger
 logger.remove()
 logger.add(sys.stdout, colorize=False, format="{message}")
 logger.info("stdout test")
-'''
+"""
         result = subprocess.run(
             [sys.executable, "-c", code],
             capture_output=True,
@@ -173,13 +173,13 @@ logger.info("stdout test")
 
     def test_add_stderr_sink(self):
         """Test adding sys.stderr as sink outputs to stderr."""
-        code = '''
+        code = """
 import sys
 from logust import logger
 logger.remove()
 logger.add(sys.stderr, colorize=False, format="{message}")
 logger.info("stderr test")
-'''
+"""
         result = subprocess.run(
             [sys.executable, "-c", code],
             capture_output=True,
@@ -190,13 +190,13 @@ logger.info("stderr test")
 
     def test_console_with_serialize(self):
         """Test JSON output to console."""
-        code = '''
+        code = """
 import sys
 from logust import logger
 logger.remove()
 logger.add(sys.stdout, serialize=True)
 logger.info("json test")
-'''
+"""
         result = subprocess.run(
             [sys.executable, "-c", code],
             capture_output=True,
@@ -207,14 +207,14 @@ logger.info("json test")
 
     def test_multiple_console_handlers(self):
         """Test multiple console handlers with different settings."""
-        code = '''
+        code = """
 import sys
 from logust import logger
 logger.remove()
 logger.add(sys.stdout, colorize=False, format="{message}")
 logger.add(sys.stderr, serialize=True)
 logger.info("multi test")
-'''
+"""
         result = subprocess.run(
             [sys.executable, "-c", code],
             capture_output=True,
@@ -231,13 +231,13 @@ class TestColorize:
 
     def test_colorize_true_includes_ansi(self):
         """Test that colorize=True includes ANSI codes."""
-        code = '''
+        code = """
 import sys
 from logust import logger
 logger.remove()
 logger.add(sys.stdout, colorize=True)
 logger.info("color test")
-'''
+"""
         result = subprocess.run(
             [sys.executable, "-c", code],
             capture_output=True,
@@ -248,13 +248,13 @@ logger.info("color test")
 
     def test_colorize_false_no_ansi(self):
         """Test that colorize=False excludes ANSI codes."""
-        code = '''
+        code = """
 import sys
 from logust import logger
 logger.remove()
 logger.add(sys.stdout, colorize=False)
 logger.info("no color test")
-'''
+"""
         result = subprocess.run(
             [sys.executable, "-c", code],
             capture_output=True,
@@ -265,13 +265,13 @@ logger.info("no color test")
 
     def test_serialize_no_ansi(self):
         """Test that serialize=True outputs plain JSON without ANSI."""
-        code = '''
+        code = """
 import sys
 from logust import logger
 logger.remove()
 logger.add(sys.stdout, serialize=True)
 logger.info("json test")
-'''
+"""
         result = subprocess.run(
             [sys.executable, "-c", code],
             capture_output=True,
@@ -290,18 +290,18 @@ class TestPerformance:
         # This is more of a behavioral test - we can't directly measure frame capture
         # but we can verify the level check works
         log_file = tmp_path / "test.log"
-        code = f'''
+        code = f"""
 from logust import logger
 logger.remove()
 # Add handler with WARNING level
-logger.add({repr(str(log_file))}, level="WARNING", format="{{message}}")
+logger.add({str(log_file)!r}, level="WARNING", format="{{message}}")
 # These should be skipped (level check before frame capture)
 logger.debug("debug msg")
 logger.info("info msg")
 # This should be logged
 logger.warning("warning msg")
 logger.complete()
-'''
+"""
         subprocess.run([sys.executable, "-c", code], check=True)
 
         content = log_file.read_text()
