@@ -1,0 +1,24 @@
+# CODEOWNERS - Automatically request reviews from code owners
+# https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Default owner for all files
+* @yamaaaaaa31
+
+# Rust core
+/src/ @yamaaaaaa31
+
+# Python bindings and package
+/logust/ @yamaaaaaa31
+
+# Documentation
+/docs/ @yamaaaaaa31
+README.md @yamaaaaaa31
+CONTRIBUTING.md @yamaaaaaa31
+CHANGELOG.md @yamaaaaaa31
+
+# CI/CD and GitHub configuration
+/.github/ @yamaaaaaa31
+
+# Build configuration
+Cargo.toml @yamaaaaaa31
+pyproject.toml @yamaaaaaa31

@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Question or Discussion
+    url: https://github.com/yamaaaaaa31/logust/discussions
+    about: Ask questions or start discussions about Logust
+  - name: Security Vulnerability
+    url: https://github.com/yamaaaaaa31/logust/security/advisories/new
+    about: Report security vulnerabilities privately
