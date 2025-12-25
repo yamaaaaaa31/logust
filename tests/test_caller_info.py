@@ -4,8 +4,6 @@ import json
 import subprocess
 import sys
 
-import pytest
-
 
 class TestCallerInfo:
     """Tests for caller info (name, function, line) in log output."""
@@ -149,7 +147,8 @@ logger.complete()
 
         content = log_file.read_text()
         # Should show caller_of_risky as the call site
-        assert "caller_of_risky - An error occurred" in content
+        assert "caller_of_risky -" in content
+        assert "An error occurred: oops" in content
 
 
 class TestConsoleSink:

@@ -133,6 +133,11 @@ impl PyLogger {
         let serialize = serialize.unwrap_or(false);
         let colorize = colorize.unwrap_or(!serialize);
         let format_config = FormatConfig::new(format, serialize);
+        if stream != "stdout" && stream != "stderr" {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "stream must be 'stdout' or 'stderr'",
+            ));
+        }
         let use_stderr = stream == "stderr";
 
         let id = handler::next_handler_id();

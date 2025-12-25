@@ -347,7 +347,7 @@ class Logger:
             resolved_level = _to_log_level(level) if level is not None else None
             resolved_colorize = colorize
             if resolved_colorize is None:
-                resolved_colorize = sink.isatty() if hasattr(sink, "isatty") else True
+                resolved_colorize = sink.isatty() if hasattr(sink, "isatty") else False
 
             return self._inner.add_console(
                 stream=stream_name,
