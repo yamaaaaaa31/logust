@@ -27,24 +27,26 @@ Results are from the included benchmark suite (`benchmarks/bench_throughput.py`)
 ### Summary
 
 ```
-logust vs loguru:  28.4x faster on average
-logust vs logging:  8.8x faster on average
+logust vs loguru:  17x faster on average
+logust vs logging:  5x faster on average
 ```
+
+Logust includes rich caller information (module, function, line) in every log message while maintaining excellent performance.
 
 ### Throughput
 
 | Scenario | logging | loguru | logust | vs loguru |
 |----------|---------|--------|--------|-----------|
-| File write (sync) | 74.91 ms | 74.56 ms | **6.58 ms** | 11.3x faster |
-| Formatted messages | 60.36 ms | 74.49 ms | **7.05 ms** | 10.6x faster |
-| JSON serialize | N/A | 147.31 ms | **5.33 ms** | 27.6x faster |
-| Context binding | N/A | 68.80 ms | **5.74 ms** | 12.0x faster |
+| File write (sync) | 57 ms | 67 ms | **11 ms** | 6x faster |
+| Formatted messages | 56 ms | 67 ms | **11 ms** | 6x faster |
+| JSON serialize | N/A | 137 ms | **10 ms** | 14x faster |
+| Context binding | N/A | 66 ms | **10 ms** | 7x faster |
 
 ### Async writes
 
 | Scenario | loguru | logust | vs loguru |
 |----------|--------|--------|-----------|
-| File write (async) | 332.27 ms | **5.78 ms** | 57.5x faster |
+| File write (async) | 313 ms | **10 ms** | 31x faster |
 
 ### Sync vs Async latency
 
@@ -52,8 +54,8 @@ This measures main thread time only - the true benefit of async is not blocking 
 
 | Library | Sync | Async | Effect |
 |---------|------|-------|--------|
-| loguru | 74.56 ms | 332.27 ms | **4.5x slower** |
-| logust | 6.58 ms | 5.78 ms | **No overhead** |
+| loguru | 66 ms | 319 ms | **4x slower** |
+| logust | 11 ms | 11 ms | **No overhead** |
 
 **Key finding**: loguru's `enqueue=True` adds significant overhead due to Python's `queue.Queue`. Logust uses Rust's lock-free crossbeam channels, maintaining speed while offloading I/O.
 
@@ -72,7 +74,7 @@ This measures main thread time only - the true benefit of async is not blocking 
 | Lazy evaluation | Yes | Yes |
 | Async writes | Yes | Yes |
 | Callable sinks | No | Yes |
-| Stack info (file, line) | No | Yes |
+| Stack info (module, function, line) | Yes | Yes |
 | Process/thread info | No | Yes |
 
 ## API differences

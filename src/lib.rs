@@ -6,6 +6,7 @@ mod sink;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use parking_lot::RwLock;
 use pyo3::prelude::*;
@@ -13,7 +14,7 @@ use pyo3::types::PyDict;
 
 pub use format::FormatConfig;
 pub use handler::{
-    ConsoleHandler, FileHandler, HandlerEntry, HandlerType, LogRecord, empty_context,
+    CallerInfo, ConsoleHandler, FileHandler, HandlerEntry, HandlerType, LogRecord, empty_context,
 };
 pub use level::{LevelInfo, LogLevel, get_level_by_no, get_level_info, register_level};
 pub use sink::{FileSink, FileSinkConfig, Rotation};
@@ -33,6 +34,8 @@ pub struct PyLogger {
     context: Arc<HashMap<String, String>>,
     /// Registered callbacks
     callbacks: Arc<RwLock<Vec<CallbackEntry>>>,
+    /// Cached minimum log level across all handlers and callbacks (shared via Arc)
+    cached_min_level: Arc<AtomicU32>,
 }
 
 #[pymethods]
@@ -44,6 +47,7 @@ impl PyLogger {
             handlers: Arc::new(RwLock::new(Vec::new())),
             context: empty_context(),
             callbacks: Arc::new(RwLock::new(Vec::new())),
+            cached_min_level: Arc::new(AtomicU32::new(u32::MAX)),
         };
 
         let console_level = level.unwrap_or_default();
@@ -54,6 +58,7 @@ impl PyLogger {
             filter: None,
         };
         logger.handlers.write().push(entry);
+        logger.update_min_level_cache();
 
         logger
     }
@@ -109,6 +114,43 @@ impl PyLogger {
         };
 
         self.handlers.write().push(entry);
+        self.update_min_level_cache();
+        Ok(id)
+    }
+
+    /// Add a console handler (stdout or stderr)
+    #[pyo3(signature = (stream, level=None, format=None, serialize=None, filter=None, colorize=None))]
+    fn add_console(
+        &self,
+        stream: String,
+        level: Option<LogLevel>,
+        format: Option<String>,
+        serialize: Option<bool>,
+        filter: Option<Py<PyAny>>,
+        colorize: Option<bool>,
+    ) -> PyResult<u64> {
+        let level = level.unwrap_or(LogLevel::Debug);
+        let serialize = serialize.unwrap_or(false);
+        let colorize = colorize.unwrap_or(!serialize);
+        let format_config = FormatConfig::new(format, serialize);
+        if stream != "stdout" && stream != "stderr" {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "stream must be 'stdout' or 'stderr'",
+            ));
+        }
+        let use_stderr = stream == "stderr";
+
+        let id = handler::next_handler_id();
+        let console_handler =
+            ConsoleHandler::with_options(level, format_config, colorize, use_stderr);
+        let entry = HandlerEntry {
+            id,
+            handler: HandlerType::Console(console_handler),
+            filter,
+        };
+
+        self.handlers.write().push(entry);
+        self.update_min_level_cache();
         Ok(id)
     }
 
@@ -117,16 +159,20 @@ impl PyLogger {
     fn remove(&self, handler_id: Option<u64>) -> bool {
         let mut handlers = self.handlers.write();
 
-        if let Some(id) = handler_id {
+        let result = if let Some(id) = handler_id {
             if let Some(pos) = handlers.iter().position(|h| h.id == id) {
                 handlers.remove(pos);
-                return true;
+                true
+            } else {
+                false
             }
-            false
         } else {
             handlers.clear();
             true
-        }
+        };
+        drop(handlers); // Release lock before updating cache
+        self.update_min_level_cache();
+        result
     }
 
     /// Bind context values and return a new logger (zero-copy when no new keys)
@@ -149,18 +195,22 @@ impl PyLogger {
             handlers: Arc::clone(&self.handlers),
             context: new_context,
             callbacks: Arc::clone(&self.callbacks),
+            cached_min_level: Arc::clone(&self.cached_min_level),
         };
         Py::new(py, new_logger)
     }
 
     /// Set minimum log level for all console handlers
     fn set_level(&self, level: LogLevel) {
-        let mut handlers = self.handlers.write();
-        for entry in handlers.iter_mut() {
-            if let HandlerType::Console(ref mut h) = entry.handler {
-                h.level = level;
+        {
+            let mut handlers = self.handlers.write();
+            for entry in handlers.iter_mut() {
+                if let HandlerType::Console(ref mut h) = entry.handler {
+                    h.level = level;
+                }
             }
         }
+        self.update_min_level_cache();
     }
 
     /// Get current minimum log level (from first console handler)
@@ -191,31 +241,43 @@ impl PyLogger {
         false
     }
 
+    /// Get the cached minimum log level across all handlers and callbacks
+    #[getter]
+    fn min_level(&self) -> u32 {
+        self.cached_min_level.load(Ordering::Relaxed)
+    }
+
     /// Disable console output
     fn disable(&self) {
-        let mut handlers = self.handlers.write();
-        handlers.retain(|entry| !matches!(entry.handler, HandlerType::Console(_)));
+        {
+            let mut handlers = self.handlers.write();
+            handlers.retain(|entry| !matches!(entry.handler, HandlerType::Console(_)));
+        }
+        self.update_min_level_cache();
     }
 
     /// Enable console output with given level
     #[pyo3(signature = (level=None))]
     fn enable(&self, level: Option<LogLevel>) {
-        let mut handlers = self.handlers.write();
+        {
+            let mut handlers = self.handlers.write();
 
-        let has_console = handlers
-            .iter()
-            .any(|e| matches!(e.handler, HandlerType::Console(_)));
+            let has_console = handlers
+                .iter()
+                .any(|e| matches!(e.handler, HandlerType::Console(_)));
 
-        if !has_console {
-            let console_level = level.unwrap_or(LogLevel::Debug);
-            let console_handler = ConsoleHandler::new(console_level);
-            let entry = HandlerEntry {
-                id: handler::next_handler_id(),
-                handler: HandlerType::Console(console_handler),
-                filter: None,
-            };
-            handlers.push(entry);
+            if !has_console {
+                let console_level = level.unwrap_or(LogLevel::Debug);
+                let console_handler = ConsoleHandler::new(console_level);
+                let entry = HandlerEntry {
+                    id: handler::next_handler_id(),
+                    handler: HandlerType::Console(console_handler),
+                    filter: None,
+                };
+                handlers.push(entry);
+            }
         }
+        self.update_min_level_cache();
     }
 
     /// Check if console output is enabled
@@ -249,57 +311,119 @@ impl PyLogger {
             level: level.unwrap_or(LogLevel::Debug),
         };
         self.callbacks.write().push(entry);
+        self.update_min_level_cache();
         id
     }
 
     /// Remove a callback by ID
     fn remove_callback(&self, callback_id: u64) -> bool {
-        let mut callbacks = self.callbacks.write();
-        if let Some(pos) = callbacks.iter().position(|c| c.id == callback_id) {
-            callbacks.remove(pos);
-            return true;
-        }
-        false
+        let result = {
+            let mut callbacks = self.callbacks.write();
+            if let Some(pos) = callbacks.iter().position(|c| c.id == callback_id) {
+                callbacks.remove(pos);
+                true
+            } else {
+                false
+            }
+        };
+        self.update_min_level_cache();
+        result
     }
 
-    #[pyo3(signature = (message, exception=None))]
-    fn trace(&self, message: String, exception: Option<String>) {
-        self._log(LogLevel::Trace, message, exception);
+    #[pyo3(signature = (message, exception=None, name=None, function=None, line=None))]
+    fn trace(
+        &self,
+        message: String,
+        exception: Option<String>,
+        name: Option<String>,
+        function: Option<String>,
+        line: Option<u32>,
+    ) {
+        self._log(LogLevel::Trace, message, exception, name, function, line);
     }
 
-    #[pyo3(signature = (message, exception=None))]
-    fn debug(&self, message: String, exception: Option<String>) {
-        self._log(LogLevel::Debug, message, exception);
+    #[pyo3(signature = (message, exception=None, name=None, function=None, line=None))]
+    fn debug(
+        &self,
+        message: String,
+        exception: Option<String>,
+        name: Option<String>,
+        function: Option<String>,
+        line: Option<u32>,
+    ) {
+        self._log(LogLevel::Debug, message, exception, name, function, line);
     }
 
-    #[pyo3(signature = (message, exception=None))]
-    fn info(&self, message: String, exception: Option<String>) {
-        self._log(LogLevel::Info, message, exception);
+    #[pyo3(signature = (message, exception=None, name=None, function=None, line=None))]
+    fn info(
+        &self,
+        message: String,
+        exception: Option<String>,
+        name: Option<String>,
+        function: Option<String>,
+        line: Option<u32>,
+    ) {
+        self._log(LogLevel::Info, message, exception, name, function, line);
     }
 
-    #[pyo3(signature = (message, exception=None))]
-    fn success(&self, message: String, exception: Option<String>) {
-        self._log(LogLevel::Success, message, exception);
+    #[pyo3(signature = (message, exception=None, name=None, function=None, line=None))]
+    fn success(
+        &self,
+        message: String,
+        exception: Option<String>,
+        name: Option<String>,
+        function: Option<String>,
+        line: Option<u32>,
+    ) {
+        self._log(LogLevel::Success, message, exception, name, function, line);
     }
 
-    #[pyo3(signature = (message, exception=None))]
-    fn warning(&self, message: String, exception: Option<String>) {
-        self._log(LogLevel::Warning, message, exception);
+    #[pyo3(signature = (message, exception=None, name=None, function=None, line=None))]
+    fn warning(
+        &self,
+        message: String,
+        exception: Option<String>,
+        name: Option<String>,
+        function: Option<String>,
+        line: Option<u32>,
+    ) {
+        self._log(LogLevel::Warning, message, exception, name, function, line);
     }
 
-    #[pyo3(signature = (message, exception=None))]
-    fn error(&self, message: String, exception: Option<String>) {
-        self._log(LogLevel::Error, message, exception);
+    #[pyo3(signature = (message, exception=None, name=None, function=None, line=None))]
+    fn error(
+        &self,
+        message: String,
+        exception: Option<String>,
+        name: Option<String>,
+        function: Option<String>,
+        line: Option<u32>,
+    ) {
+        self._log(LogLevel::Error, message, exception, name, function, line);
     }
 
-    #[pyo3(signature = (message, exception=None))]
-    fn fail(&self, message: String, exception: Option<String>) {
-        self._log(LogLevel::Fail, message, exception);
+    #[pyo3(signature = (message, exception=None, name=None, function=None, line=None))]
+    fn fail(
+        &self,
+        message: String,
+        exception: Option<String>,
+        name: Option<String>,
+        function: Option<String>,
+        line: Option<u32>,
+    ) {
+        self._log(LogLevel::Fail, message, exception, name, function, line);
     }
 
-    #[pyo3(signature = (message, exception=None))]
-    fn critical(&self, message: String, exception: Option<String>) {
-        self._log(LogLevel::Critical, message, exception);
+    #[pyo3(signature = (message, exception=None, name=None, function=None, line=None))]
+    fn critical(
+        &self,
+        message: String,
+        exception: Option<String>,
+        name: Option<String>,
+        function: Option<String>,
+        line: Option<u32>,
+    ) {
+        self._log(LogLevel::Critical, message, exception, name, function, line);
     }
 
     /// Register a custom log level
@@ -317,15 +441,18 @@ impl PyLogger {
     }
 
     /// Log at any level (built-in or custom)
-    #[pyo3(signature = (level_arg, message, exception=None))]
+    #[pyo3(signature = (level_arg, message, exception=None, name=None, function=None, line=None))]
     fn log(
         &self,
         level_arg: &Bound<'_, PyAny>,
         message: String,
         exception: Option<String>,
+        name: Option<String>,
+        function: Option<String>,
+        line: Option<u32>,
     ) -> PyResult<()> {
-        let level_info = if let Ok(name) = level_arg.extract::<String>() {
-            get_level_info(&name)
+        let level_info = if let Ok(lvl_name) = level_arg.extract::<String>() {
+            get_level_info(&lvl_name)
         } else if let Ok(no) = level_arg.extract::<u32>() {
             get_level_by_no(no)
         } else {
@@ -335,15 +462,44 @@ impl PyLogger {
         let info = level_info
             .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("Invalid log level"))?;
 
-        self._log_custom(info, message, exception);
+        self._log_custom(info, message, exception, name, function, line);
         Ok(())
     }
 }
 
 impl PyLogger {
+    /// Update the cached minimum level across all handlers and callbacks
+    fn update_min_level_cache(&self) {
+        let handlers = self.handlers.read();
+        let callbacks = self.callbacks.read();
+
+        let min_handler = handlers
+            .iter()
+            .map(|e| e.handler.level() as u32)
+            .min()
+            .unwrap_or(u32::MAX);
+
+        let min_callback = callbacks
+            .iter()
+            .map(|e| e.level as u32)
+            .min()
+            .unwrap_or(u32::MAX);
+
+        self.cached_min_level
+            .store(min_handler.min(min_callback), Ordering::Relaxed);
+    }
+
     /// Internal log method - optimized for performance
     #[inline]
-    fn _log(&self, level: LogLevel, message: String, exception: Option<String>) {
+    fn _log(
+        &self,
+        level: LogLevel,
+        message: String,
+        exception: Option<String>,
+        name: Option<String>,
+        function: Option<String>,
+        line: Option<u32>,
+    ) {
         let handlers = self.handlers.read();
         let callbacks = self.callbacks.read();
 
@@ -360,7 +516,13 @@ impl PyLogger {
 
         let extra = Arc::clone(&self.context);
 
-        let record = LogRecord::with_exception(level, message, extra, exception);
+        let caller = CallerInfo::new(
+            name.unwrap_or_default(),
+            function.unwrap_or_default(),
+            line.unwrap_or(0),
+        );
+
+        let record = LogRecord::with_caller(level, message, extra, exception, caller);
 
         if needs_gil {
             Python::attach(|py| {
@@ -414,7 +576,15 @@ impl PyLogger {
 
     /// Internal log method for custom levels - optimized
     #[inline]
-    fn _log_custom(&self, level_info: LevelInfo, message: String, exception: Option<String>) {
+    fn _log_custom(
+        &self,
+        level_info: LevelInfo,
+        message: String,
+        exception: Option<String>,
+        name: Option<String>,
+        function: Option<String>,
+        line: Option<u32>,
+    ) {
         let handlers = self.handlers.read();
         let callbacks = self.callbacks.read();
 
@@ -434,7 +604,19 @@ impl PyLogger {
 
         let extra = Arc::clone(&self.context);
 
-        let record = LogRecord::with_custom_level(level_info.clone(), message, extra, exception);
+        let caller = CallerInfo::new(
+            name.unwrap_or_default(),
+            function.unwrap_or_default(),
+            line.unwrap_or(0),
+        );
+
+        let record = LogRecord::with_custom_level_and_caller(
+            level_info.clone(),
+            message,
+            extra,
+            exception,
+            caller,
+        );
 
         if needs_gil {
             Python::attach(|py| {

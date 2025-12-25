@@ -67,7 +67,8 @@ class OptLogger:
         formatted = self._format_message(message, *args)
         exc = kwargs.pop("exception", None) or self._get_exception()
         log_method = getattr(self._logger, level)
-        log_method(formatted, exception=exc, **kwargs)
+        # Add depth: +1 for this method, +1 for the caller (trace/debug/etc), + user's depth
+        log_method(formatted, exception=exc, _depth=self._depth + 2, **kwargs)
 
     def trace(self, message: str, *args: Any, **kwargs: Any) -> None:
         """Output TRACE level log message with options."""
@@ -117,4 +118,5 @@ class OptLogger:
         # the level in advance, so we format and delegate to the logger
         formatted = self._format_message(message, *args)
         exc = kwargs.pop("exception", None) or self._get_exception()
-        self._logger.log(level, formatted, exception=exc, **kwargs)
+        # Add depth: +1 for this method, + user's depth
+        self._logger.log(level, formatted, exception=exc, _depth=self._depth + 1, **kwargs)

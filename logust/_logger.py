@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import functools
 import os
+import sys
 import traceback
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TextIO
 
 from ._logust import LogLevel, PyLogger
 
@@ -15,11 +16,65 @@ if TYPE_CHECKING:
     from ._opt import OptLogger
 
 
+def _get_caller_info(depth: int = 1) -> tuple[str, str, int]:
+    """Get caller information (module name, function name, line number).
+
+    Args:
+        depth: Number of frames to go back from the caller of this function
+
+    Returns:
+        Tuple of (module_name, function_name, line_number)
+    """
+    try:
+        frame = sys._getframe(depth + 1)  # +1 to skip this function itself
+        code = frame.f_code
+        # Get module name from globals, or use filename as fallback
+        module_name = frame.f_globals.get("__name__", code.co_filename)
+        return (module_name, code.co_name, frame.f_lineno)
+    except (ValueError, AttributeError):
+        return ("", "", 0)
+
+
 def _to_log_level(level: LogLevel | str) -> LogLevel:
     """Convert string level name to LogLevel enum."""
     if isinstance(level, str):
         return getattr(LogLevel, level.capitalize())  # type: ignore[no-any-return]
     return level
+
+
+try:
+    _LEVEL_VALUES: dict[str, int] = {
+        "trace": LogLevel.Trace.value,
+        "debug": LogLevel.Debug.value,
+        "info": LogLevel.Info.value,
+        "success": LogLevel.Success.value,
+        "warning": LogLevel.Warning.value,
+        "error": LogLevel.Error.value,
+        "fail": LogLevel.Fail.value,
+        "critical": LogLevel.Critical.value,
+    }
+except (AttributeError, TypeError):
+    import warnings
+
+    warnings.warn(
+        "LogLevel enum access failed, using static fallback values",
+        RuntimeWarning,
+        stacklevel=1,
+    )
+    _LEVEL_VALUES = {
+        "trace": 5,
+        "debug": 10,
+        "info": 20,
+        "success": 25,
+        "warning": 30,
+        "error": 40,
+        "fail": 45,
+        "critical": 50,
+    }
+
+_LEVEL_VALUE_MAP: dict[int, str] = {v: k for k, v in _LEVEL_VALUES.items()}
+if len(_LEVEL_VALUE_MAP) != len(_LEVEL_VALUES):
+    raise ValueError("Duplicate numeric level values detected")
 
 
 class Logger:
@@ -43,39 +98,70 @@ class Logger:
         self._inner = inner
         self._patchers = patchers or []
 
-    def trace(self, message: str, *, exception: str | None = None, **kwargs: Any) -> None:
+    def _log_with_level(
+        self,
+        level_value: int,
+        level_name: str,
+        message: str,
+        exception: str | None,
+        depth: int,
+    ) -> None:
+        if level_value < self._inner.min_level:
+            return
+        name, function, line = _get_caller_info(depth + 1)
+        getattr(self._inner, level_name)(
+            str(message), exception=exception, name=name, function=function, line=line
+        )
+
+    def trace(
+        self, message: str, *, exception: str | None = None, _depth: int = 0, **kwargs: Any
+    ) -> None:
         """Output TRACE level log message."""
-        self._inner.trace(str(message), exception=exception)
+        self._log_with_level(5, "trace", message, exception, _depth + 1)
 
-    def debug(self, message: str, *, exception: str | None = None, **kwargs: Any) -> None:
+    def debug(
+        self, message: str, *, exception: str | None = None, _depth: int = 0, **kwargs: Any
+    ) -> None:
         """Output DEBUG level log message."""
-        self._inner.debug(str(message), exception=exception)
+        self._log_with_level(10, "debug", message, exception, _depth + 1)
 
-    def info(self, message: str, *, exception: str | None = None, **kwargs: Any) -> None:
+    def info(
+        self, message: str, *, exception: str | None = None, _depth: int = 0, **kwargs: Any
+    ) -> None:
         """Output INFO level log message."""
-        self._inner.info(str(message), exception=exception)
+        self._log_with_level(20, "info", message, exception, _depth + 1)
 
-    def success(self, message: str, *, exception: str | None = None, **kwargs: Any) -> None:
+    def success(
+        self, message: str, *, exception: str | None = None, _depth: int = 0, **kwargs: Any
+    ) -> None:
         """Output SUCCESS level log message."""
-        self._inner.success(str(message), exception=exception)
+        self._log_with_level(25, "success", message, exception, _depth + 1)
 
-    def warning(self, message: str, *, exception: str | None = None, **kwargs: Any) -> None:
+    def warning(
+        self, message: str, *, exception: str | None = None, _depth: int = 0, **kwargs: Any
+    ) -> None:
         """Output WARNING level log message."""
-        self._inner.warning(str(message), exception=exception)
+        self._log_with_level(30, "warning", message, exception, _depth + 1)
 
-    def error(self, message: str, *, exception: str | None = None, **kwargs: Any) -> None:
+    def error(
+        self, message: str, *, exception: str | None = None, _depth: int = 0, **kwargs: Any
+    ) -> None:
         """Output ERROR level log message."""
-        self._inner.error(str(message), exception=exception)
+        self._log_with_level(40, "error", message, exception, _depth + 1)
 
-    def fail(self, message: str, *, exception: str | None = None, **kwargs: Any) -> None:
+    def fail(
+        self, message: str, *, exception: str | None = None, _depth: int = 0, **kwargs: Any
+    ) -> None:
         """Output FAIL level log message."""
-        self._inner.fail(str(message), exception=exception)
+        self._log_with_level(45, "fail", message, exception, _depth + 1)
 
-    def critical(self, message: str, *, exception: str | None = None, **kwargs: Any) -> None:
+    def critical(
+        self, message: str, *, exception: str | None = None, _depth: int = 0, **kwargs: Any
+    ) -> None:
         """Output CRITICAL level log message."""
-        self._inner.critical(str(message), exception=exception)
+        self._log_with_level(50, "critical", message, exception, _depth + 1)
 
-    def exception(self, message: str, **kwargs: Any) -> None:
+    def exception(self, message: str, *, _depth: int = 0, **kwargs: Any) -> None:
         """Log ERROR with current exception traceback.
 
         Must be called from within an except block to capture the exception.
@@ -83,6 +169,7 @@ class Logger:
 
         Args:
             message: The error message.
+            _depth: Internal depth adjustment for wrapper methods.
             **kwargs: Additional arguments passed to error().
 
         Examples:
@@ -92,14 +179,12 @@ class Logger:
             ...     logger.exception("Operation failed")
             # Output: ERROR with full traceback
         """
-        import sys
-
         exc_info = sys.exc_info()
         if exc_info[0] is not None:
             tb = traceback.format_exc()
-            self.error(message, exception=tb, **kwargs)
+            self.error(message, exception=tb, _depth=_depth + 1, **kwargs)
         else:
-            self.error(message, **kwargs)
+            self.error(message, _depth=_depth + 1, **kwargs)
 
     def level(
         self,
@@ -131,6 +216,7 @@ class Logger:
         message: str,
         *,
         exception: str | None = None,
+        _depth: int = 0,
         **kwargs: Any,
     ) -> None:
         """Log at any level (built-in or custom).
@@ -139,12 +225,27 @@ class Logger:
             level: Level name (str) or numeric value (int).
             message: Log message.
             exception: Optional exception traceback.
+            _depth: Internal depth adjustment for wrapper methods.
 
         Examples:
             >>> logger.log("INFO", "Using built-in level by name")
             >>> logger.log(20, "Using built-in level by number")
         """
-        self._inner.log(level, str(message), exception=exception)
+        if isinstance(level, str):
+            level_lower = level.lower()
+            if level_lower in _LEVEL_VALUES:
+                self._log_with_level(
+                    _LEVEL_VALUES[level_lower], level_lower, message, exception, _depth + 1
+                )
+                return
+        elif isinstance(level, int) and level in _LEVEL_VALUE_MAP:
+            self._log_with_level(level, _LEVEL_VALUE_MAP[level], message, exception, _depth + 1)
+            return
+
+        name, function, line = _get_caller_info(_depth + 1)
+        self._inner.log(
+            level, str(message), exception=exception, name=name, function=function, line=line
+        )
 
     def set_level(self, level: LogLevel | str) -> None:
         """Set minimum log level for console output."""
@@ -190,7 +291,7 @@ class Logger:
 
     def add(
         self,
-        sink: str | os.PathLike[str],
+        sink: str | os.PathLike[str] | TextIO,
         *,
         level: LogLevel | str | None = None,
         format: str | None = None,
@@ -200,22 +301,30 @@ class Logger:
         serialize: bool = False,
         filter: Callable[[dict[str, Any]], bool] | None = None,
         enqueue: bool = False,
+        colorize: bool | None = None,
     ) -> int:
-        """Add a handler (file sink).
+        """Add a handler (file or console sink).
 
         Args:
-            sink: Path to the log file (str or Path object).
+            sink: Path to the log file (str or Path object), or sys.stdout/sys.stderr.
             level: Minimum log level for this handler.
             format: Custom format string (e.g., "{time} | {level} | {message}").
             rotation: Rotation strategy ("daily", "hourly", "500 MB", etc.)
+                      Only valid for file sinks.
             retention: Retention policy ("10 days" or count as int)
+                       Only valid for file sinks.
             compression: Enable gzip compression for rotated files.
+                         Only valid for file sinks.
             serialize: Output as JSON instead of text format.
             filter: Optional callable that receives a record dict and returns
                     True if the record should be logged, False to skip.
             enqueue: If True, writes are queued and processed asynchronously
                      in a background thread (thread-safe).
                      If False (default), writes are synchronous (reliable).
+                     Only valid for file sinks.
+            colorize: Enable ANSI color codes (for console sinks).
+                      If None, auto-detect based on whether sink is a TTY.
+                      Only valid for console sinks.
 
         Returns:
             Handler ID for later removal.
@@ -226,8 +335,29 @@ class Logger:
             >>> logger.add("app.log", rotation="500 MB", retention="10 days")
             >>> logger.add("app.json", serialize=True)
             >>> logger.add("async.log", enqueue=True)  # Async writes
+            >>> logger.add(sys.stdout, colorize=True)  # Colored console output
+            >>> logger.add(sys.stderr, serialize=True)  # JSON to stderr
         """
-        sink_str = os.fspath(sink)
+        import sys
+
+        if sink is sys.stdout or sink is sys.stderr:
+            stream_name = "stdout" if sink is sys.stdout else "stderr"
+            resolved_level = _to_log_level(level) if level is not None else None
+            resolved_colorize = colorize
+            if resolved_colorize is None:
+                resolved_colorize = sink.isatty() if hasattr(sink, "isatty") else False
+
+            return self._inner.add_console(
+                stream=stream_name,
+                level=resolved_level,
+                format=format,
+                serialize=serialize,
+                filter=filter,
+                colorize=resolved_colorize,
+            )
+
+        # At this point sink must be a path (str or PathLike), not TextIO
+        sink_str = os.fspath(sink)  # type: ignore[arg-type]
 
         resolved_level = _to_log_level(level) if level is not None else None
 
@@ -342,7 +472,8 @@ class Logger:
                 except exception as e:
                     tb = traceback.format_exc()
                     log_method = getattr(self, level.lower())
-                    log_method(f"{message}: {e}", exception=tb)
+                    # _depth=1 to skip this wrapper and show caller of decorated function
+                    log_method(f"{message}: {e}", exception=tb, _depth=1)
                     if reraise:
                         raise
 
@@ -423,15 +554,16 @@ class Logger:
 
         Args:
             handlers: List of handler configurations. Each dict can have:
-                - sink (required): File path
+                - sink (required): File path or sys.stdout/sys.stderr
                 - level: Minimum log level
                 - format: Format string
-                - rotation: Rotation strategy
-                - retention: Retention policy
-                - compression: Enable compression
+                - rotation: Rotation strategy (file sinks only)
+                - retention: Retention policy (file sinks only)
+                - compression: Enable compression (file sinks only)
                 - serialize: Output as JSON
                 - filter: Filter function
-                - enqueue: Async writes (default False)
+                - enqueue: Async writes (file sinks only, default False)
+                - colorize: Enable ANSI colors (console sinks only)
             levels: List of custom level configurations. Each dict must have:
                 - name (required): Level name
                 - no (required): Numeric value
@@ -448,6 +580,8 @@ class Logger:
             ...     handlers=[
             ...         {"sink": "app.log", "level": "INFO"},
             ...         {"sink": "debug.log", "level": "DEBUG", "rotation": "1 day"},
+            ...         {"sink": sys.stdout, "colorize": True},
+            ...         {"sink": sys.stderr, "serialize": True},
             ...     ],
             ...     levels=[{"name": "NOTICE", "no": 25, "color": "cyan"}],
             ...     extra={"app": "myapp"},
@@ -481,6 +615,7 @@ class Logger:
                         serialize=handler_config.get("serialize", False),
                         filter=handler_config.get("filter"),
                         enqueue=handler_config.get("enqueue", False),
+                        colorize=handler_config.get("colorize"),
                     )
                     handler_ids.append(handler_id)
 

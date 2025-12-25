@@ -7,16 +7,18 @@ Make logs readable with templates, or switch to JSON.
 
 ## Default format
 
-The default log format is:
+The default log format includes caller information (module, function, line number):
 
 ```
-{time} | {level} | {message}
+{time} | {level:<8} | {name}:{function}:{line} - {message}
 ```
 
 Output:
 ```
-2025-12-24 15:52:42.199 | INFO     | Hello, Logust!
+2025-12-24 15:52:42.199 | INFO     | __main__:my_function:10 - Hello, Logust!
 ```
+
+This format is similar to uvicorn's log format, making it easy to identify where each log message originated.
 
 ## Custom format
 
@@ -36,9 +38,32 @@ logger.add("minimal.log", format="{message}")
 |-------|-------------|---------|
 | `{time}` | Timestamp | `2025-12-24 12:00:00.123` |
 | `{level}` | Log level name | `INFO` |
-| `{level:<8}` | Aligned level | `INFO    ` |
+| `{level:<8}` | Aligned level (width 8) | `INFO    ` |
 | `{message}` | Log message | `Hello, world!` |
+| `{name}` | Module/logger name | `__main__`, `myapp.utils` |
+| `{function}` | Function name | `process_request` |
+| `{line}` | Line number | `42` |
 | `{extra[key]}` | Extra context fields | `{extra[user_id]}` |
+
+### Caller information
+
+The `{name}`, `{function}`, and `{line}` tokens capture the call site:
+
+```python
+# myapp/handler.py, line 15
+def handle_request():
+    logger.info("Processing request")
+    # Output: myapp.handler:handle_request:15 - Processing request
+```
+
+When using `opt(depth=N)`, caller info is adjusted to skip N frames:
+
+```python
+def wrapper():
+    def inner():
+        logger.opt(depth=1).info("From wrapper")  # Shows 'wrapper', not 'inner'
+    inner()
+```
 
 ### Extra fields
 
@@ -61,17 +86,26 @@ For structured logging, use the `serialize` option:
 
 ```python
 logger.add("app.json", serialize=True)
-logger.info("User logged in")
+
+def handle_login():
+    logger.info("User logged in")
+
+handle_login()
 ```
 
 Output:
 ```json
 {
-  "time": "2025-12-24T12:00:00.123456",
+  "time": "2025-12-24 12:00:00.123",
   "level": "INFO",
-  "message": "User logged in"
+  "message": "User logged in",
+  "name": "__main__",
+  "function": "handle_login",
+  "line": 5
 }
 ```
+
+Caller information is automatically included in JSON output.
 
 ### JSON with context
 

@@ -78,7 +78,7 @@ if TYPE_CHECKING:
     def critical(message: str, *, exception: str | None = None, **kwargs: Any) -> None: ...
 
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 logger = Logger(_rust_logger)
 

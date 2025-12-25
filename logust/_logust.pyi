@@ -74,6 +74,18 @@ class PyLogger:
         """Add a file handler and return its ID."""
         ...
 
+    def add_console(
+        self,
+        stream: str,
+        level: LogLevel | None = None,
+        format: str | None = None,
+        serialize: bool | None = None,
+        filter: Callable[[dict[str, Any]], bool] | None = None,
+        colorize: bool | None = None,
+    ) -> int:
+        """Add a console handler (stdout or stderr)."""
+        ...
+
     def remove(self, handler_id: int | None = None) -> bool:
         """Remove a handler by ID, or all handlers if None."""
         ...
@@ -92,6 +104,11 @@ class PyLogger:
 
     def is_level_enabled(self, level: LogLevel) -> bool:
         """Check if any handler would accept messages at the given level."""
+        ...
+
+    @property
+    def min_level(self) -> int:
+        """Get the cached minimum log level across all handlers and callbacks."""
         ...
 
     def enable(self, level: LogLevel | None = None) -> None:
@@ -137,6 +154,9 @@ class PyLogger:
         level_arg: str | int,
         message: str,
         exception: str | None = None,
+        name: str | None = None,
+        function: str | None = None,
+        line: int | None = None,
     ) -> None:
         """Log at any level (built-in or custom)."""
         ...
