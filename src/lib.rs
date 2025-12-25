@@ -13,7 +13,7 @@ use pyo3::types::PyDict;
 
 pub use format::FormatConfig;
 pub use handler::{
-    ConsoleHandler, FileHandler, HandlerEntry, HandlerType, LogRecord, empty_context,
+    CallerInfo, ConsoleHandler, FileHandler, HandlerEntry, HandlerType, LogRecord, empty_context,
 };
 pub use level::{LevelInfo, LogLevel, get_level_by_no, get_level_info, register_level};
 pub use sink::{FileSink, FileSinkConfig, Rotation};
@@ -105,6 +105,35 @@ impl PyLogger {
         let entry = HandlerEntry {
             id,
             handler: HandlerType::File(file_handler),
+            filter,
+        };
+
+        self.handlers.write().push(entry);
+        Ok(id)
+    }
+
+    /// Add a console handler (stdout or stderr)
+    #[pyo3(signature = (stream, level=None, format=None, serialize=None, filter=None, colorize=None))]
+    fn add_console(
+        &self,
+        stream: String,
+        level: Option<LogLevel>,
+        format: Option<String>,
+        serialize: Option<bool>,
+        filter: Option<Py<PyAny>>,
+        colorize: Option<bool>,
+    ) -> PyResult<u64> {
+        let level = level.unwrap_or(LogLevel::Debug);
+        let serialize = serialize.unwrap_or(false);
+        let colorize = colorize.unwrap_or(!serialize);
+        let format_config = FormatConfig::new(format, serialize);
+        let use_stderr = stream == "stderr";
+
+        let id = handler::next_handler_id();
+        let console_handler = ConsoleHandler::with_options(level, format_config, colorize, use_stderr);
+        let entry = HandlerEntry {
+            id,
+            handler: HandlerType::Console(console_handler),
             filter,
         };
 
@@ -262,44 +291,44 @@ impl PyLogger {
         false
     }
 
-    #[pyo3(signature = (message, exception=None))]
-    fn trace(&self, message: String, exception: Option<String>) {
-        self._log(LogLevel::Trace, message, exception);
+    #[pyo3(signature = (message, exception=None, name=None, function=None, line=None))]
+    fn trace(&self, message: String, exception: Option<String>, name: Option<String>, function: Option<String>, line: Option<u32>) {
+        self._log(LogLevel::Trace, message, exception, name, function, line);
     }
 
-    #[pyo3(signature = (message, exception=None))]
-    fn debug(&self, message: String, exception: Option<String>) {
-        self._log(LogLevel::Debug, message, exception);
+    #[pyo3(signature = (message, exception=None, name=None, function=None, line=None))]
+    fn debug(&self, message: String, exception: Option<String>, name: Option<String>, function: Option<String>, line: Option<u32>) {
+        self._log(LogLevel::Debug, message, exception, name, function, line);
     }
 
-    #[pyo3(signature = (message, exception=None))]
-    fn info(&self, message: String, exception: Option<String>) {
-        self._log(LogLevel::Info, message, exception);
+    #[pyo3(signature = (message, exception=None, name=None, function=None, line=None))]
+    fn info(&self, message: String, exception: Option<String>, name: Option<String>, function: Option<String>, line: Option<u32>) {
+        self._log(LogLevel::Info, message, exception, name, function, line);
     }
 
-    #[pyo3(signature = (message, exception=None))]
-    fn success(&self, message: String, exception: Option<String>) {
-        self._log(LogLevel::Success, message, exception);
+    #[pyo3(signature = (message, exception=None, name=None, function=None, line=None))]
+    fn success(&self, message: String, exception: Option<String>, name: Option<String>, function: Option<String>, line: Option<u32>) {
+        self._log(LogLevel::Success, message, exception, name, function, line);
     }
 
-    #[pyo3(signature = (message, exception=None))]
-    fn warning(&self, message: String, exception: Option<String>) {
-        self._log(LogLevel::Warning, message, exception);
+    #[pyo3(signature = (message, exception=None, name=None, function=None, line=None))]
+    fn warning(&self, message: String, exception: Option<String>, name: Option<String>, function: Option<String>, line: Option<u32>) {
+        self._log(LogLevel::Warning, message, exception, name, function, line);
     }
 
-    #[pyo3(signature = (message, exception=None))]
-    fn error(&self, message: String, exception: Option<String>) {
-        self._log(LogLevel::Error, message, exception);
+    #[pyo3(signature = (message, exception=None, name=None, function=None, line=None))]
+    fn error(&self, message: String, exception: Option<String>, name: Option<String>, function: Option<String>, line: Option<u32>) {
+        self._log(LogLevel::Error, message, exception, name, function, line);
     }
 
-    #[pyo3(signature = (message, exception=None))]
-    fn fail(&self, message: String, exception: Option<String>) {
-        self._log(LogLevel::Fail, message, exception);
+    #[pyo3(signature = (message, exception=None, name=None, function=None, line=None))]
+    fn fail(&self, message: String, exception: Option<String>, name: Option<String>, function: Option<String>, line: Option<u32>) {
+        self._log(LogLevel::Fail, message, exception, name, function, line);
     }
 
-    #[pyo3(signature = (message, exception=None))]
-    fn critical(&self, message: String, exception: Option<String>) {
-        self._log(LogLevel::Critical, message, exception);
+    #[pyo3(signature = (message, exception=None, name=None, function=None, line=None))]
+    fn critical(&self, message: String, exception: Option<String>, name: Option<String>, function: Option<String>, line: Option<u32>) {
+        self._log(LogLevel::Critical, message, exception, name, function, line);
     }
 
     /// Register a custom log level
@@ -317,15 +346,18 @@ impl PyLogger {
     }
 
     /// Log at any level (built-in or custom)
-    #[pyo3(signature = (level_arg, message, exception=None))]
+    #[pyo3(signature = (level_arg, message, exception=None, name=None, function=None, line=None))]
     fn log(
         &self,
         level_arg: &Bound<'_, PyAny>,
         message: String,
         exception: Option<String>,
+        name: Option<String>,
+        function: Option<String>,
+        line: Option<u32>,
     ) -> PyResult<()> {
-        let level_info = if let Ok(name) = level_arg.extract::<String>() {
-            get_level_info(&name)
+        let level_info = if let Ok(lvl_name) = level_arg.extract::<String>() {
+            get_level_info(&lvl_name)
         } else if let Ok(no) = level_arg.extract::<u32>() {
             get_level_by_no(no)
         } else {
@@ -335,7 +367,7 @@ impl PyLogger {
         let info = level_info
             .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("Invalid log level"))?;
 
-        self._log_custom(info, message, exception);
+        self._log_custom(info, message, exception, name, function, line);
         Ok(())
     }
 }
@@ -343,7 +375,7 @@ impl PyLogger {
 impl PyLogger {
     /// Internal log method - optimized for performance
     #[inline]
-    fn _log(&self, level: LogLevel, message: String, exception: Option<String>) {
+    fn _log(&self, level: LogLevel, message: String, exception: Option<String>, name: Option<String>, function: Option<String>, line: Option<u32>) {
         let handlers = self.handlers.read();
         let callbacks = self.callbacks.read();
 
@@ -360,7 +392,13 @@ impl PyLogger {
 
         let extra = Arc::clone(&self.context);
 
-        let record = LogRecord::with_exception(level, message, extra, exception);
+        let caller = CallerInfo::new(
+            name.unwrap_or_default(),
+            function.unwrap_or_default(),
+            line.unwrap_or(0),
+        );
+
+        let record = LogRecord::with_caller(level, message, extra, exception, caller);
 
         if needs_gil {
             Python::attach(|py| {
@@ -414,7 +452,7 @@ impl PyLogger {
 
     /// Internal log method for custom levels - optimized
     #[inline]
-    fn _log_custom(&self, level_info: LevelInfo, message: String, exception: Option<String>) {
+    fn _log_custom(&self, level_info: LevelInfo, message: String, exception: Option<String>, name: Option<String>, function: Option<String>, line: Option<u32>) {
         let handlers = self.handlers.read();
         let callbacks = self.callbacks.read();
 
@@ -434,7 +472,13 @@ impl PyLogger {
 
         let extra = Arc::clone(&self.context);
 
-        let record = LogRecord::with_custom_level(level_info.clone(), message, extra, exception);
+        let caller = CallerInfo::new(
+            name.unwrap_or_default(),
+            function.unwrap_or_default(),
+            line.unwrap_or(0),
+        );
+
+        let record = LogRecord::with_custom_level_and_caller(level_info.clone(), message, extra, exception, caller);
 
         if needs_gil {
             Python::attach(|py| {

@@ -6,7 +6,7 @@ log records, callbacks, and configuration dictionaries.
 
 from __future__ import annotations
 
-from typing import Any, NamedTuple, Protocol, TypedDict
+from typing import Any, NamedTuple, Protocol, TextIO, TypedDict
 
 
 class RecordLevel(NamedTuple):
@@ -109,18 +109,24 @@ class HandlerConfig(TypedDict, total=False):
     """Configuration dict for logger.configure() handlers.
 
     Attributes:
-        sink: File path for the log output (required).
+        sink: File path or sys.stdout/sys.stderr for output (required).
         level: Minimum log level (name or numeric value).
         format: Custom format string.
         rotation: Rotation strategy ("daily", "hourly", "500 MB").
+                  Only valid for file sinks.
         retention: Retention policy ("10 days" or count as int).
+                   Only valid for file sinks.
         compression: Enable gzip compression for rotated files.
+                     Only valid for file sinks.
         serialize: Output as JSON instead of text format.
         filter: Filter callback function.
         enqueue: Enable async writes (default True).
+                 Only valid for file sinks.
+        colorize: Enable ANSI color codes for console sinks.
+                  If not specified, auto-detect based on TTY.
     """
 
-    sink: str
+    sink: str | TextIO
     level: str | int
     format: str
     rotation: str
@@ -129,6 +135,7 @@ class HandlerConfig(TypedDict, total=False):
     serialize: bool
     filter: FilterCallback
     enqueue: bool
+    colorize: bool
 
 
 class LevelConfig(TypedDict, total=False):

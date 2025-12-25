@@ -29,6 +29,20 @@ pub fn empty_context() -> Arc<HashMap<String, String>> {
     Arc::clone(&EMPTY_CONTEXT)
 }
 
+/// Caller information for log records
+#[derive(Clone, Debug, Default)]
+pub struct CallerInfo {
+    pub name: String,
+    pub function: String,
+    pub line: u32,
+}
+
+impl CallerInfo {
+    pub fn new(name: String, function: String, line: u32) -> Self {
+        CallerInfo { name, function, line }
+    }
+}
+
 /// Log record containing all information about a log message
 #[derive(Clone, Debug)]
 pub struct LogRecord {
@@ -38,6 +52,7 @@ pub struct LogRecord {
     pub message: String,
     pub extra: Arc<HashMap<String, String>>,
     pub exception: Option<String>,
+    pub caller: CallerInfo,
 }
 
 impl LogRecord {
@@ -50,6 +65,7 @@ impl LogRecord {
             message,
             extra: empty_context(),
             exception: None,
+            caller: CallerInfo::default(),
         }
     }
 
@@ -66,6 +82,26 @@ impl LogRecord {
             message,
             extra,
             exception: None,
+            caller: CallerInfo::default(),
+        }
+    }
+
+    /// Create a new log record with caller info and exception
+    pub fn with_caller(
+        level: LogLevel,
+        message: String,
+        extra: Arc<HashMap<String, String>>,
+        exception: Option<String>,
+        caller: CallerInfo,
+    ) -> Self {
+        LogRecord {
+            timestamp: Local::now(),
+            level,
+            level_info: None,
+            message,
+            extra,
+            exception,
+            caller,
         }
     }
 
@@ -83,6 +119,7 @@ impl LogRecord {
             message,
             extra,
             exception,
+            caller: CallerInfo::default(),
         }
     }
 
@@ -100,6 +137,26 @@ impl LogRecord {
             message,
             extra,
             exception,
+            caller: CallerInfo::default(),
+        }
+    }
+
+    /// Create a log record with custom level info and caller
+    pub fn with_custom_level_and_caller(
+        level_info: LevelInfo,
+        message: String,
+        extra: Arc<HashMap<String, String>>,
+        exception: Option<String>,
+        caller: CallerInfo,
+    ) -> Self {
+        LogRecord {
+            timestamp: Local::now(),
+            level: LogLevel::Debug,
+            level_info: Some(level_info),
+            message,
+            extra,
+            exception,
+            caller,
         }
     }
 
@@ -164,6 +221,7 @@ pub struct ConsoleHandler {
     pub level: LogLevel,
     pub format: FormatConfig,
     pub colorize: bool,
+    pub use_stderr: bool,
 }
 
 impl ConsoleHandler {
@@ -172,6 +230,7 @@ impl ConsoleHandler {
             level,
             format: FormatConfig::default(),
             colorize: true,
+            use_stderr: false,
         }
     }
 
@@ -181,13 +240,32 @@ impl ConsoleHandler {
             level,
             format,
             colorize,
+            use_stderr: false,
+        }
+    }
+
+    pub fn with_options(
+        level: LogLevel,
+        format: FormatConfig,
+        colorize: bool,
+        use_stderr: bool,
+    ) -> Self {
+        ConsoleHandler {
+            level,
+            format,
+            colorize,
+            use_stderr,
         }
     }
 
     pub fn handle(&self, record: &LogRecord) -> io::Result<()> {
         if record.level_no() >= self.level as u32 {
             let output = self.format.format_record(record, self.colorize);
-            println!("{}", output);
+            if self.use_stderr {
+                eprintln!("{}", output);
+            } else {
+                println!("{}", output);
+            }
         }
         Ok(())
     }

@@ -7,8 +7,8 @@ use serde::Serialize;
 use crate::handler::LogRecord;
 use crate::level::LogLevel;
 
-/// Default log format template
-const DEFAULT_FORMAT_TEMPLATE: &str = "{time} | {level:<8} | {message}";
+/// Default log format template (loguru-compatible with caller info)
+const DEFAULT_FORMAT_TEMPLATE: &str = "{time} | {level:<8} | {name}:{function}:{line} - {message}";
 
 /// Default time format with milliseconds
 const DEFAULT_TIME_FORMAT: &str = "%Y-%m-%d %H:%M:%S%.3f";
@@ -31,6 +31,12 @@ pub enum FormatToken {
     Message,
     /// {extra[key]} placeholder
     Extra(String),
+    /// {name} placeholder - module/logger name
+    Name,
+    /// {function} placeholder - function name
+    Function,
+    /// {line} placeholder - line number
+    Line,
 }
 
 /// Parse a template string into tokens
@@ -60,6 +66,12 @@ fn parse_template(template: &str) -> Vec<FormatToken> {
                 tokens.push(FormatToken::Message);
             } else if placeholder == "level" {
                 tokens.push(FormatToken::Level);
+            } else if placeholder == "name" {
+                tokens.push(FormatToken::Name);
+            } else if placeholder == "function" {
+                tokens.push(FormatToken::Function);
+            } else if placeholder == "line" {
+                tokens.push(FormatToken::Line);
             } else if let Some(width_str) = placeholder.strip_prefix("level:<") {
                 if let Ok(width) = width_str.parse::<usize>() {
                     tokens.push(FormatToken::LevelWidth(width));
@@ -255,6 +267,11 @@ impl FormatConfig {
 
     /// Format a LogRecord using pre-parsed tokens (O(n) single pass)
     fn format_record_template(&self, record: &LogRecord, colorize: bool) -> String {
+        // Force color output when colorize is explicitly requested
+        if colorize {
+            colored::control::set_override(true);
+        }
+
         let level_name = record.level_name();
         let level_color = record
             .level_info
@@ -302,12 +319,38 @@ impl FormatConfig {
                         result.push_str(value);
                     }
                 }
+                FormatToken::Name => {
+                    if colorize {
+                        result.push_str(&record.caller.name.cyan().to_string());
+                    } else {
+                        result.push_str(&record.caller.name);
+                    }
+                }
+                FormatToken::Function => {
+                    if colorize {
+                        result.push_str(&record.caller.function.cyan().to_string());
+                    } else {
+                        result.push_str(&record.caller.function);
+                    }
+                }
+                FormatToken::Line => {
+                    if colorize {
+                        result.push_str(&record.caller.line.to_string().cyan().to_string());
+                    } else {
+                        result.push_str(&record.caller.line.to_string());
+                    }
+                }
             }
         }
 
         if let Some(ref exc) = record.exception {
             result.push('\n');
             result.push_str(exc);
+        }
+
+        // Reset color override to respect environment for other outputs
+        if colorize {
+            colored::control::unset_override();
         }
 
         result
@@ -320,16 +363,29 @@ impl FormatConfig {
             time: String,
             level: &'a str,
             message: &'a str,
+            #[serde(skip_serializing_if = "str::is_empty")]
+            name: &'a str,
+            #[serde(skip_serializing_if = "str::is_empty")]
+            function: &'a str,
+            #[serde(skip_serializing_if = "is_zero")]
+            line: u32,
             #[serde(skip_serializing_if = "HashMap::is_empty")]
             extra: &'a HashMap<String, String>,
             #[serde(skip_serializing_if = "Option::is_none")]
             exception: &'a Option<String>,
         }
 
+        fn is_zero(n: &u32) -> bool {
+            *n == 0
+        }
+
         let json_record = JsonRecord {
             time: record.timestamp.format(&self.time_format).to_string(),
             level: record.level_name(),
             message: &record.message,
+            name: &record.caller.name,
+            function: &record.caller.function,
+            line: record.caller.line,
             extra: &record.extra,
             exception: &record.exception,
         };
@@ -347,6 +403,11 @@ impl FormatConfig {
         exception: &Option<String>,
         colorize: bool,
     ) -> String {
+        // Force color output when colorize is explicitly requested
+        if colorize {
+            colored::control::set_override(true);
+        }
+
         let level_name = level.as_str();
         let level_color = level.color();
 
@@ -390,12 +451,19 @@ impl FormatConfig {
                         result.push_str(value);
                     }
                 }
+                // These tokens are not available in this context (no caller info)
+                FormatToken::Name | FormatToken::Function | FormatToken::Line => {}
             }
         }
 
         if let Some(exc) = exception {
             result.push('\n');
             result.push_str(exc);
+        }
+
+        // Reset color override to respect environment for other outputs
+        if colorize {
+            colored::control::unset_override();
         }
 
         result

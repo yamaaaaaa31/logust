@@ -74,6 +74,18 @@ class PyLogger:
         """Add a file handler and return its ID."""
         ...
 
+    def add_console(
+        self,
+        stream: str,
+        level: LogLevel | None = None,
+        format: str | None = None,
+        serialize: bool | None = None,
+        filter: Callable[[dict[str, Any]], bool] | None = None,
+        colorize: bool | None = None,
+    ) -> int:
+        """Add a console handler (stdout or stderr)."""
+        ...
+
     def remove(self, handler_id: int | None = None) -> bool:
         """Remove a handler by ID, or all handlers if None."""
         ...
