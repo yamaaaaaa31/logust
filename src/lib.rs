@@ -5,8 +5,8 @@ mod sink;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use parking_lot::RwLock;
 use pyo3::prelude::*;
@@ -141,7 +141,8 @@ impl PyLogger {
         let use_stderr = stream == "stderr";
 
         let id = handler::next_handler_id();
-        let console_handler = ConsoleHandler::with_options(level, format_config, colorize, use_stderr);
+        let console_handler =
+            ConsoleHandler::with_options(level, format_config, colorize, use_stderr);
         let entry = HandlerEntry {
             id,
             handler: HandlerType::Console(console_handler),
@@ -330,42 +331,98 @@ impl PyLogger {
     }
 
     #[pyo3(signature = (message, exception=None, name=None, function=None, line=None))]
-    fn trace(&self, message: String, exception: Option<String>, name: Option<String>, function: Option<String>, line: Option<u32>) {
+    fn trace(
+        &self,
+        message: String,
+        exception: Option<String>,
+        name: Option<String>,
+        function: Option<String>,
+        line: Option<u32>,
+    ) {
         self._log(LogLevel::Trace, message, exception, name, function, line);
     }
 
     #[pyo3(signature = (message, exception=None, name=None, function=None, line=None))]
-    fn debug(&self, message: String, exception: Option<String>, name: Option<String>, function: Option<String>, line: Option<u32>) {
+    fn debug(
+        &self,
+        message: String,
+        exception: Option<String>,
+        name: Option<String>,
+        function: Option<String>,
+        line: Option<u32>,
+    ) {
         self._log(LogLevel::Debug, message, exception, name, function, line);
     }
 
     #[pyo3(signature = (message, exception=None, name=None, function=None, line=None))]
-    fn info(&self, message: String, exception: Option<String>, name: Option<String>, function: Option<String>, line: Option<u32>) {
+    fn info(
+        &self,
+        message: String,
+        exception: Option<String>,
+        name: Option<String>,
+        function: Option<String>,
+        line: Option<u32>,
+    ) {
         self._log(LogLevel::Info, message, exception, name, function, line);
     }
 
     #[pyo3(signature = (message, exception=None, name=None, function=None, line=None))]
-    fn success(&self, message: String, exception: Option<String>, name: Option<String>, function: Option<String>, line: Option<u32>) {
+    fn success(
+        &self,
+        message: String,
+        exception: Option<String>,
+        name: Option<String>,
+        function: Option<String>,
+        line: Option<u32>,
+    ) {
         self._log(LogLevel::Success, message, exception, name, function, line);
     }
 
     #[pyo3(signature = (message, exception=None, name=None, function=None, line=None))]
-    fn warning(&self, message: String, exception: Option<String>, name: Option<String>, function: Option<String>, line: Option<u32>) {
+    fn warning(
+        &self,
+        message: String,
+        exception: Option<String>,
+        name: Option<String>,
+        function: Option<String>,
+        line: Option<u32>,
+    ) {
         self._log(LogLevel::Warning, message, exception, name, function, line);
     }
 
     #[pyo3(signature = (message, exception=None, name=None, function=None, line=None))]
-    fn error(&self, message: String, exception: Option<String>, name: Option<String>, function: Option<String>, line: Option<u32>) {
+    fn error(
+        &self,
+        message: String,
+        exception: Option<String>,
+        name: Option<String>,
+        function: Option<String>,
+        line: Option<u32>,
+    ) {
         self._log(LogLevel::Error, message, exception, name, function, line);
     }
 
     #[pyo3(signature = (message, exception=None, name=None, function=None, line=None))]
-    fn fail(&self, message: String, exception: Option<String>, name: Option<String>, function: Option<String>, line: Option<u32>) {
+    fn fail(
+        &self,
+        message: String,
+        exception: Option<String>,
+        name: Option<String>,
+        function: Option<String>,
+        line: Option<u32>,
+    ) {
         self._log(LogLevel::Fail, message, exception, name, function, line);
     }
 
     #[pyo3(signature = (message, exception=None, name=None, function=None, line=None))]
-    fn critical(&self, message: String, exception: Option<String>, name: Option<String>, function: Option<String>, line: Option<u32>) {
+    fn critical(
+        &self,
+        message: String,
+        exception: Option<String>,
+        name: Option<String>,
+        function: Option<String>,
+        line: Option<u32>,
+    ) {
         self._log(LogLevel::Critical, message, exception, name, function, line);
     }
 
@@ -434,7 +491,15 @@ impl PyLogger {
 
     /// Internal log method - optimized for performance
     #[inline]
-    fn _log(&self, level: LogLevel, message: String, exception: Option<String>, name: Option<String>, function: Option<String>, line: Option<u32>) {
+    fn _log(
+        &self,
+        level: LogLevel,
+        message: String,
+        exception: Option<String>,
+        name: Option<String>,
+        function: Option<String>,
+        line: Option<u32>,
+    ) {
         let handlers = self.handlers.read();
         let callbacks = self.callbacks.read();
 
@@ -511,7 +576,15 @@ impl PyLogger {
 
     /// Internal log method for custom levels - optimized
     #[inline]
-    fn _log_custom(&self, level_info: LevelInfo, message: String, exception: Option<String>, name: Option<String>, function: Option<String>, line: Option<u32>) {
+    fn _log_custom(
+        &self,
+        level_info: LevelInfo,
+        message: String,
+        exception: Option<String>,
+        name: Option<String>,
+        function: Option<String>,
+        line: Option<u32>,
+    ) {
         let handlers = self.handlers.read();
         let callbacks = self.callbacks.read();
 
@@ -537,7 +610,13 @@ impl PyLogger {
             line.unwrap_or(0),
         );
 
-        let record = LogRecord::with_custom_level_and_caller(level_info.clone(), message, extra, exception, caller);
+        let record = LogRecord::with_custom_level_and_caller(
+            level_info.clone(),
+            message,
+            extra,
+            exception,
+            caller,
+        );
 
         if needs_gil {
             Python::attach(|py| {

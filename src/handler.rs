@@ -39,7 +39,11 @@ pub struct CallerInfo {
 
 impl CallerInfo {
     pub fn new(name: String, function: String, line: u32) -> Self {
-        CallerInfo { name, function, line }
+        CallerInfo {
+            name,
+            function,
+            line,
+        }
     }
 }
 
