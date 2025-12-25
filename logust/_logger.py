@@ -66,6 +66,18 @@ _LEVEL_VALUE_MAP: dict[int, str] = {
     50: "critical",
 }
 
+# Pre-computed level values to avoid PyO3 crossings for LogLevel.value
+_LEVEL_VALUES: dict[str, int] = {
+    "trace": 5,
+    "debug": 10,
+    "info": 20,
+    "success": 25,
+    "warning": 30,
+    "error": 40,
+    "fail": 45,
+    "critical": 50,
+}
+
 
 class Logger:
     """Main logger class wrapping the Rust PyLogger.
@@ -90,7 +102,7 @@ class Logger:
 
     def _log_with_level(
         self,
-        level: LogLevel,
+        level_value: int,
         level_name: str,
         message: str,
         exception: str | None,
@@ -99,16 +111,16 @@ class Logger:
         """Internal method to log with level check and caller info.
 
         Args:
-            level: LogLevel enum value for level check
+            level_value: Pre-computed numeric level value (avoids PyO3 crossing)
             level_name: Method name on _inner to call
             message: Log message
             exception: Optional exception string
             depth: Stack frame depth adjustment
         """
-        # Fast path: check cached min level from Rust (shared across all bound loggers)
-        if level.value < self._inner.min_level:
+        # Fast path: check cached min level from Rust (1 PyO3 crossing only)
+        if level_value < self._inner.min_level:
             return
-        # Get caller info only if we're going to log (single PyO3 call)
+        # Get caller info only if we're going to log
         name, function, line = _get_caller_info(depth + 1)  # +1 for this method
         log_method = getattr(self._inner, level_name)
         log_method(str(message), exception=exception, name=name, function=function, line=line)
@@ -117,49 +129,49 @@ class Logger:
         self, message: str, *, exception: str | None = None, _depth: int = 0, **kwargs: Any
     ) -> None:
         """Output TRACE level log message."""
-        self._log_with_level(LogLevel.Trace, "trace", message, exception, _depth + 1)
+        self._log_with_level(5, "trace", message, exception, _depth + 1)
 
     def debug(
         self, message: str, *, exception: str | None = None, _depth: int = 0, **kwargs: Any
     ) -> None:
         """Output DEBUG level log message."""
-        self._log_with_level(LogLevel.Debug, "debug", message, exception, _depth + 1)
+        self._log_with_level(10, "debug", message, exception, _depth + 1)
 
     def info(
         self, message: str, *, exception: str | None = None, _depth: int = 0, **kwargs: Any
     ) -> None:
         """Output INFO level log message."""
-        self._log_with_level(LogLevel.Info, "info", message, exception, _depth + 1)
+        self._log_with_level(20, "info", message, exception, _depth + 1)
 
     def success(
         self, message: str, *, exception: str | None = None, _depth: int = 0, **kwargs: Any
     ) -> None:
         """Output SUCCESS level log message."""
-        self._log_with_level(LogLevel.Success, "success", message, exception, _depth + 1)
+        self._log_with_level(25, "success", message, exception, _depth + 1)
 
     def warning(
         self, message: str, *, exception: str | None = None, _depth: int = 0, **kwargs: Any
     ) -> None:
         """Output WARNING level log message."""
-        self._log_with_level(LogLevel.Warning, "warning", message, exception, _depth + 1)
+        self._log_with_level(30, "warning", message, exception, _depth + 1)
 
     def error(
         self, message: str, *, exception: str | None = None, _depth: int = 0, **kwargs: Any
     ) -> None:
         """Output ERROR level log message."""
-        self._log_with_level(LogLevel.Error, "error", message, exception, _depth + 1)
+        self._log_with_level(40, "error", message, exception, _depth + 1)
 
     def fail(
         self, message: str, *, exception: str | None = None, _depth: int = 0, **kwargs: Any
     ) -> None:
         """Output FAIL level log message."""
-        self._log_with_level(LogLevel.Fail, "fail", message, exception, _depth + 1)
+        self._log_with_level(45, "fail", message, exception, _depth + 1)
 
     def critical(
         self, message: str, *, exception: str | None = None, _depth: int = 0, **kwargs: Any
     ) -> None:
         """Output CRITICAL level log message."""
-        self._log_with_level(LogLevel.Critical, "critical", message, exception, _depth + 1)
+        self._log_with_level(50, "critical", message, exception, _depth + 1)
 
     def exception(self, message: str, *, _depth: int = 0, **kwargs: Any) -> None:
         """Log ERROR with current exception traceback.
@@ -234,17 +246,21 @@ class Logger:
         # Check if this is a built-in level name that we can optimize
         if isinstance(level, str):
             level_lower = level.lower()
-            if level_lower in _LEVEL_MAP:
-                # Use optimized path for built-in levels
-                log_level = _LEVEL_MAP[level_lower]
-                self._log_with_level(log_level, level_lower, message, exception, _depth + 1)
+            if level_lower in _LEVEL_VALUES:
+                # Use optimized path for built-in levels (pass pre-computed value)
+                self._log_with_level(
+                    _LEVEL_VALUES[level_lower], level_lower, message, exception, _depth + 1
+                )
                 return
         # Check if this is a built-in numeric level that we can optimize
-        elif isinstance(level, int) and level in _LEVEL_VALUE_MAP:
-            level_name = _LEVEL_VALUE_MAP[level]
-            log_level = _LEVEL_MAP[level_name]
-            self._log_with_level(log_level, level_name, message, exception, _depth + 1)
-            return
+        elif isinstance(level, int):
+            if level in _LEVEL_VALUE_MAP:
+                level_name = _LEVEL_VALUE_MAP[level]
+                self._log_with_level(level, level_name, message, exception, _depth + 1)
+                return
+            # Custom numeric level - still do early return check
+            if level < self._inner.min_level:
+                return
 
         # For custom levels, fall back to original behavior
         name, function, line = _get_caller_info(_depth + 1)
