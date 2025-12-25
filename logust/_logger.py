@@ -12,12 +12,15 @@ from typing import TYPE_CHECKING, Any, TextIO
 
 from ._logust import LogLevel, PyLogger
 
+if TYPE_CHECKING:
+    from ._opt import OptLogger
+
 
 def _get_caller_info(depth: int = 1) -> tuple[str, str, int]:
     """Get caller information (module name, function name, line number).
 
     Args:
-        depth: Number of frames to go back (1 = immediate caller)
+        depth: Number of frames to go back from the caller of this function
 
     Returns:
         Tuple of (module_name, function_name, line_number)
@@ -31,15 +34,25 @@ def _get_caller_info(depth: int = 1) -> tuple[str, str, int]:
     except (ValueError, AttributeError):
         return ("", "", 0)
 
-if TYPE_CHECKING:
-    from ._opt import OptLogger
-
 
 def _to_log_level(level: LogLevel | str) -> LogLevel:
     """Convert string level name to LogLevel enum."""
     if isinstance(level, str):
         return getattr(LogLevel, level.capitalize())  # type: ignore[no-any-return]
     return level
+
+
+# Map of log level names to LogLevel enum for quick lookup
+_LEVEL_MAP: dict[str, LogLevel] = {
+    "trace": LogLevel.Trace,
+    "debug": LogLevel.Debug,
+    "info": LogLevel.Info,
+    "success": LogLevel.Success,
+    "warning": LogLevel.Warning,
+    "error": LogLevel.Error,
+    "fail": LogLevel.Fail,
+    "critical": LogLevel.Critical,
+}
 
 
 class Logger:
@@ -63,47 +76,80 @@ class Logger:
         self._inner = inner
         self._patchers = patchers or []
 
-    def trace(self, message: str, *, exception: str | None = None, **kwargs: Any) -> None:
+    def _log_with_level(
+        self,
+        level: LogLevel,
+        level_name: str,
+        message: str,
+        exception: str | None,
+        depth: int,
+    ) -> None:
+        """Internal method to log with level check and caller info.
+
+        Args:
+            level: LogLevel enum value for level check
+            level_name: Method name on _inner to call
+            message: Log message
+            exception: Optional exception string
+            depth: Stack frame depth adjustment
+        """
+        # Early return if level is not enabled (performance optimization)
+        if not self._inner.is_level_enabled(level):
+            return
+        # Get caller info only if we're going to log
+        name, function, line = _get_caller_info(depth + 1)  # +1 for this method
+        log_method = getattr(self._inner, level_name)
+        log_method(str(message), exception=exception, name=name, function=function, line=line)
+
+    def trace(
+        self, message: str, *, exception: str | None = None, _depth: int = 0, **kwargs: Any
+    ) -> None:
         """Output TRACE level log message."""
-        name, function, line = _get_caller_info()
-        self._inner.trace(str(message), exception=exception, name=name, function=function, line=line)
+        self._log_with_level(LogLevel.Trace, "trace", message, exception, _depth + 1)
 
-    def debug(self, message: str, *, exception: str | None = None, **kwargs: Any) -> None:
+    def debug(
+        self, message: str, *, exception: str | None = None, _depth: int = 0, **kwargs: Any
+    ) -> None:
         """Output DEBUG level log message."""
-        name, function, line = _get_caller_info()
-        self._inner.debug(str(message), exception=exception, name=name, function=function, line=line)
+        self._log_with_level(LogLevel.Debug, "debug", message, exception, _depth + 1)
 
-    def info(self, message: str, *, exception: str | None = None, **kwargs: Any) -> None:
+    def info(
+        self, message: str, *, exception: str | None = None, _depth: int = 0, **kwargs: Any
+    ) -> None:
         """Output INFO level log message."""
-        name, function, line = _get_caller_info()
-        self._inner.info(str(message), exception=exception, name=name, function=function, line=line)
+        self._log_with_level(LogLevel.Info, "info", message, exception, _depth + 1)
 
-    def success(self, message: str, *, exception: str | None = None, **kwargs: Any) -> None:
+    def success(
+        self, message: str, *, exception: str | None = None, _depth: int = 0, **kwargs: Any
+    ) -> None:
         """Output SUCCESS level log message."""
-        name, function, line = _get_caller_info()
-        self._inner.success(str(message), exception=exception, name=name, function=function, line=line)
+        self._log_with_level(LogLevel.Success, "success", message, exception, _depth + 1)
 
-    def warning(self, message: str, *, exception: str | None = None, **kwargs: Any) -> None:
+    def warning(
+        self, message: str, *, exception: str | None = None, _depth: int = 0, **kwargs: Any
+    ) -> None:
         """Output WARNING level log message."""
-        name, function, line = _get_caller_info()
-        self._inner.warning(str(message), exception=exception, name=name, function=function, line=line)
+        self._log_with_level(LogLevel.Warning, "warning", message, exception, _depth + 1)
 
-    def error(self, message: str, *, exception: str | None = None, **kwargs: Any) -> None:
+    def error(
+        self, message: str, *, exception: str | None = None, _depth: int = 0, **kwargs: Any
+    ) -> None:
         """Output ERROR level log message."""
-        name, function, line = _get_caller_info()
-        self._inner.error(str(message), exception=exception, name=name, function=function, line=line)
+        self._log_with_level(LogLevel.Error, "error", message, exception, _depth + 1)
 
-    def fail(self, message: str, *, exception: str | None = None, **kwargs: Any) -> None:
+    def fail(
+        self, message: str, *, exception: str | None = None, _depth: int = 0, **kwargs: Any
+    ) -> None:
         """Output FAIL level log message."""
-        name, function, line = _get_caller_info()
-        self._inner.fail(str(message), exception=exception, name=name, function=function, line=line)
+        self._log_with_level(LogLevel.Fail, "fail", message, exception, _depth + 1)
 
-    def critical(self, message: str, *, exception: str | None = None, **kwargs: Any) -> None:
+    def critical(
+        self, message: str, *, exception: str | None = None, _depth: int = 0, **kwargs: Any
+    ) -> None:
         """Output CRITICAL level log message."""
-        name, function, line = _get_caller_info()
-        self._inner.critical(str(message), exception=exception, name=name, function=function, line=line)
+        self._log_with_level(LogLevel.Critical, "critical", message, exception, _depth + 1)
 
-    def exception(self, message: str, **kwargs: Any) -> None:
+    def exception(self, message: str, *, _depth: int = 0, **kwargs: Any) -> None:
         """Log ERROR with current exception traceback.
 
         Must be called from within an except block to capture the exception.
@@ -111,6 +157,7 @@ class Logger:
 
         Args:
             message: The error message.
+            _depth: Internal depth adjustment for wrapper methods.
             **kwargs: Additional arguments passed to error().
 
         Examples:
@@ -120,14 +167,12 @@ class Logger:
             ...     logger.exception("Operation failed")
             # Output: ERROR with full traceback
         """
-        import sys
-
         exc_info = sys.exc_info()
         if exc_info[0] is not None:
             tb = traceback.format_exc()
-            self.error(message, exception=tb, **kwargs)
+            self.error(message, exception=tb, _depth=_depth + 1, **kwargs)
         else:
-            self.error(message, **kwargs)
+            self.error(message, _depth=_depth + 1, **kwargs)
 
     def level(
         self,
@@ -159,6 +204,7 @@ class Logger:
         message: str,
         *,
         exception: str | None = None,
+        _depth: int = 0,
         **kwargs: Any,
     ) -> None:
         """Log at any level (built-in or custom).
@@ -167,12 +213,14 @@ class Logger:
             level: Level name (str) or numeric value (int).
             message: Log message.
             exception: Optional exception traceback.
+            _depth: Internal depth adjustment for wrapper methods.
 
         Examples:
             >>> logger.log("INFO", "Using built-in level by name")
             >>> logger.log(20, "Using built-in level by number")
         """
-        name, function, line = _get_caller_info()
+        # For custom levels, we can't easily check if enabled, so always get caller info
+        name, function, line = _get_caller_info(_depth + 1)
         self._inner.log(level, str(message), exception=exception, name=name, function=function, line=line)
 
     def set_level(self, level: LogLevel | str) -> None:
@@ -403,7 +451,8 @@ class Logger:
                 except exception as e:
                     tb = traceback.format_exc()
                     log_method = getattr(self, level.lower())
-                    log_method(f"{message}: {e}", exception=tb)
+                    # _depth=1 to skip this wrapper and show caller of decorated function
+                    log_method(f"{message}: {e}", exception=tb, _depth=1)
                     if reraise:
                         raise
 

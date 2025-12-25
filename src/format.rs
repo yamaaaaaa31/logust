@@ -1,11 +1,53 @@
 use std::collections::HashMap;
 
 use chrono::{DateTime, Local};
-use colored::Colorize;
+use colored::Color;
 use serde::Serialize;
 
 use crate::handler::LogRecord;
 use crate::level::LogLevel;
+
+/// Apply ANSI color code to text (thread-safe, no global state)
+#[inline]
+fn colorize_text(text: &str, color: Color, bold: bool) -> String {
+    let color_code = match color {
+        Color::Black => "30",
+        Color::Red => "31",
+        Color::Green => "32",
+        Color::Yellow => "33",
+        Color::Blue => "34",
+        Color::Magenta => "35",
+        Color::Cyan => "36",
+        Color::White => "37",
+        Color::BrightBlack => "90",
+        Color::BrightRed => "91",
+        Color::BrightGreen => "92",
+        Color::BrightYellow => "93",
+        Color::BrightBlue => "94",
+        Color::BrightMagenta => "95",
+        Color::BrightCyan => "96",
+        Color::BrightWhite => "97",
+        _ => "0", // Default/reset
+    };
+
+    if bold {
+        format!("\x1b[1;{}m{}\x1b[0m", color_code, text)
+    } else {
+        format!("\x1b[{}m{}\x1b[0m", color_code, text)
+    }
+}
+
+/// Apply dim style to text (thread-safe)
+#[inline]
+fn dim_text(text: &str) -> String {
+    format!("\x1b[2m{}\x1b[0m", text)
+}
+
+/// Apply cyan color to text (thread-safe)
+#[inline]
+fn cyan_text(text: &str) -> String {
+    format!("\x1b[36m{}\x1b[0m", text)
+}
 
 /// Default log format template (loguru-compatible with caller info)
 const DEFAULT_FORMAT_TEMPLATE: &str = "{time} | {level:<8} | {name}:{function}:{line} - {message}";
@@ -265,13 +307,8 @@ impl FormatConfig {
         }
     }
 
-    /// Format a LogRecord using pre-parsed tokens (O(n) single pass)
+    /// Format a LogRecord using pre-parsed tokens (O(n) single pass, thread-safe)
     fn format_record_template(&self, record: &LogRecord, colorize: bool) -> String {
-        // Force color output when colorize is explicitly requested
-        if colorize {
-            colored::control::set_override(true);
-        }
-
         let level_name = record.level_name();
         let level_color = record
             .level_info
@@ -281,13 +318,13 @@ impl FormatConfig {
 
         let time_raw = record.timestamp.format(&self.time_format).to_string();
         let time_fmt = if colorize {
-            time_raw.dimmed().to_string()
+            dim_text(&time_raw)
         } else {
             time_raw
         };
 
         let level_fmt = if colorize {
-            level_name.color(level_color).bold().to_string()
+            colorize_text(level_name, level_color, true)
         } else {
             level_name.to_string()
         };
@@ -309,7 +346,7 @@ impl FormatConfig {
                 FormatToken::LevelWidth(width) => {
                     let padded = format!("{:<width$}", level_name, width = width);
                     if colorize {
-                        result.push_str(&padded.color(level_color).bold().to_string());
+                        result.push_str(&colorize_text(&padded, level_color, true));
                     } else {
                         result.push_str(&padded);
                     }
@@ -321,23 +358,24 @@ impl FormatConfig {
                 }
                 FormatToken::Name => {
                     if colorize {
-                        result.push_str(&record.caller.name.cyan().to_string());
+                        result.push_str(&cyan_text(&record.caller.name));
                     } else {
                         result.push_str(&record.caller.name);
                     }
                 }
                 FormatToken::Function => {
                     if colorize {
-                        result.push_str(&record.caller.function.cyan().to_string());
+                        result.push_str(&cyan_text(&record.caller.function));
                     } else {
                         result.push_str(&record.caller.function);
                     }
                 }
                 FormatToken::Line => {
+                    let line_str = record.caller.line.to_string();
                     if colorize {
-                        result.push_str(&record.caller.line.to_string().cyan().to_string());
+                        result.push_str(&cyan_text(&line_str));
                     } else {
-                        result.push_str(&record.caller.line.to_string());
+                        result.push_str(&line_str);
                     }
                 }
             }
@@ -346,11 +384,6 @@ impl FormatConfig {
         if let Some(ref exc) = record.exception {
             result.push('\n');
             result.push_str(exc);
-        }
-
-        // Reset color override to respect environment for other outputs
-        if colorize {
-            colored::control::unset_override();
         }
 
         result
@@ -393,7 +426,7 @@ impl FormatConfig {
         serde_json::to_string(&json_record).unwrap_or_else(|_| record.message.clone())
     }
 
-    /// Format using pre-parsed tokens (O(n) single pass)
+    /// Format using pre-parsed tokens (O(n) single pass, thread-safe)
     fn format_template(
         &self,
         timestamp: &DateTime<Local>,
@@ -403,23 +436,18 @@ impl FormatConfig {
         exception: &Option<String>,
         colorize: bool,
     ) -> String {
-        // Force color output when colorize is explicitly requested
-        if colorize {
-            colored::control::set_override(true);
-        }
-
         let level_name = level.as_str();
         let level_color = level.color();
 
         let time_raw = timestamp.format(&self.time_format).to_string();
         let time_fmt = if colorize {
-            time_raw.dimmed().to_string()
+            dim_text(&time_raw)
         } else {
             time_raw
         };
 
         let level_fmt = if colorize {
-            level_name.color(level_color).bold().to_string()
+            colorize_text(level_name, level_color, true)
         } else {
             level_name.to_string()
         };
@@ -441,7 +469,7 @@ impl FormatConfig {
                 FormatToken::LevelWidth(width) => {
                     let padded = format!("{:<width$}", level_name, width = width);
                     if colorize {
-                        result.push_str(&padded.color(level_color).bold().to_string());
+                        result.push_str(&colorize_text(&padded, level_color, true));
                     } else {
                         result.push_str(&padded);
                     }
@@ -459,11 +487,6 @@ impl FormatConfig {
         if let Some(exc) = exception {
             result.push('\n');
             result.push_str(exc);
-        }
-
-        // Reset color override to respect environment for other outputs
-        if colorize {
-            colored::control::unset_override();
         }
 
         result
@@ -622,12 +645,19 @@ mod tests {
     #[test]
     fn test_parse_template() {
         let tokens = parse_template(DEFAULT_FORMAT_TEMPLATE);
-        assert_eq!(tokens.len(), 5);
+        // Template: "{time} | {level:<8} | {name}:{function}:{line} - {message}"
+        assert_eq!(tokens.len(), 11);
         assert!(matches!(tokens[0], FormatToken::Time));
         assert!(matches!(&tokens[1], FormatToken::Static(s) if s == " | "));
         assert!(matches!(tokens[2], FormatToken::LevelWidth(8)));
         assert!(matches!(&tokens[3], FormatToken::Static(s) if s == " | "));
-        assert!(matches!(tokens[4], FormatToken::Message));
+        assert!(matches!(tokens[4], FormatToken::Name));
+        assert!(matches!(&tokens[5], FormatToken::Static(s) if s == ":"));
+        assert!(matches!(tokens[6], FormatToken::Function));
+        assert!(matches!(&tokens[7], FormatToken::Static(s) if s == ":"));
+        assert!(matches!(tokens[8], FormatToken::Line));
+        assert!(matches!(&tokens[9], FormatToken::Static(s) if s == " - "));
+        assert!(matches!(tokens[10], FormatToken::Message));
     }
 
     #[test]
