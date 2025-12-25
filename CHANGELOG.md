@@ -7,12 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2025-12-25
+
 ### Added
-- Initial public release preparation
-- Comprehensive documentation (README, CONTRIBUTING, CODE_OF_CONDUCT, SECURITY)
-- Pre-commit hooks for code quality
-- GitHub Issue and PR templates
-- CI/CD workflows for testing and release
+
+#### Caller Information
+- Caller info (module name, function name, line number) in log output
+- New format tokens: `{name}`, `{function}`, `{line}`
+- Default format now includes caller info: `{time} | {level:<8} | {name}:{function}:{line} - {message}`
+- Caller info included in JSON serialized output
+
+#### Console Sink Support
+- `logger.add(sys.stdout)` and `logger.add(sys.stderr)` support
+- `colorize` parameter for console handlers
+- Auto-detect colorize based on TTY when not specified
+
+### Changed
+- `opt(depth=N)` now correctly adjusts caller frame for caller info
+- Performance optimization: level check before frame capture
+
+### Fixed
+- Caller info now shows correct location through `opt()`, `exception()`, `catch()` wrappers
+- Thread-safe colorization (removed global `set_override`)
 
 ## [0.1.0] - 2025-01-XX
 

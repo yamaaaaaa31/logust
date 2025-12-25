@@ -10,8 +10,10 @@ A fast, Rust-powered Python logging library inspired by [loguru](https://github.
 
 ## Features
 
-- **Blazing Fast** - Rust-powered core delivers up to 20x faster performance than loguru
+- **Blazing Fast** - Rust-powered core delivers up to 16x faster performance than loguru
 - **Beautiful by Default** - Colored output with zero configuration needed
+- **Caller Information** - Automatic module, function, and line number in every log
+- **Console & File Sinks** - Output to stdout, stderr, or files with different formats
 - **Simple API** - loguru-compatible interface for easy migration
 - **File Management** - Size/time-based rotation, retention policies, gzip compression
 - **JSON Support** - Built-in serialization for structured logging
@@ -28,21 +30,21 @@ Comparison with Python logging and loguru (10,000 log messages):
 
 | Scenario | logging | loguru | logust | vs loguru |
 |----------|---------|--------|--------|-----------|
-| File write (sync) | 74.91 ms | 74.56 ms | **6.58 ms** | 11.3x faster |
-| Formatted messages | 60.36 ms | 74.49 ms | **7.05 ms** | 10.6x faster |
-| JSON serialize | N/A | 147.31 ms | **5.33 ms** | 27.6x faster |
-| Context binding | N/A | 68.80 ms | **5.74 ms** | 12.0x faster |
+| File write (sync) | 57.18 ms | 65.57 ms | **10.84 ms** | 6.1x faster |
+| Formatted messages | 55.99 ms | 65.81 ms | **11.62 ms** | 5.7x faster |
+| JSON serialize | N/A | 134.12 ms | **10.96 ms** | 12.2x faster |
+| Context binding | N/A | 64.12 ms | **10.35 ms** | 6.2x faster |
 
 ### Async writes
 
 | Scenario | loguru | logust | vs loguru |
 |----------|--------|--------|-----------|
-| File write (async) | 332.27 ms | **5.78 ms** | 57.5x faster |
-| Sync vs Async overhead | **4.5x slower** | **No overhead** | - |
+| File write (async) | 326.27 ms | **10.23 ms** | 31.9x faster |
+| Sync vs Async overhead | **4.3x slower** | **No overhead** | - |
 
 loguru's `enqueue=True` adds significant overhead due to Python's Queue. Logust uses Rust's lock-free channels, maintaining speed while offloading I/O.
 
-**Summary:** logust is **28.4x faster** than loguru and **8.8x faster** than standard logging on average.
+**Summary:** logust is **16.8x faster** than loguru on average with rich caller information included in every log message.
 
 ## Installation
 
@@ -64,12 +66,14 @@ logust.success("Success message")
 
 Output:
 ```
-2025-12-25 12:00:00.123 | INFO     | Hello, Logust!
-2025-12-25 12:00:00.123 | DEBUG    | Debug message
-2025-12-25 12:00:00.123 | WARNING  | Warning message
-2025-12-25 12:00:00.123 | ERROR    | Error message
-2025-12-25 12:00:00.123 | SUCCESS  | Success message
+2025-12-25 12:00:00.123 | INFO     | __main__:<module>:3 - Hello, Logust!
+2025-12-25 12:00:00.123 | DEBUG    | __main__:<module>:4 - Debug message
+2025-12-25 12:00:00.123 | WARNING  | __main__:<module>:5 - Warning message
+2025-12-25 12:00:00.123 | ERROR    | __main__:<module>:6 - Error message
+2025-12-25 12:00:00.123 | SUCCESS  | __main__:<module>:7 - Success message
 ```
+
+The default format includes caller information (module, function, line) for easy debugging.
 
 ## Log Levels
 
@@ -137,6 +141,27 @@ logger.add("async.log", enqueue=True)
 - Time-based: `"7 days"`, `"30 days"`
 - Count-based: `5` (keep last 5 files)
 
+## Console Output
+
+```python
+import sys
+from logust import logger
+
+# Remove default console handler
+logger.remove()
+
+# Add stdout with colors
+logger.add(sys.stdout, colorize=True)
+
+# Add stderr with JSON output
+logger.add(sys.stderr, serialize=True)
+
+# Multiple outputs with different formats
+logger.add(sys.stdout, colorize=True, format="{level} | {message}")
+logger.add(sys.stderr, serialize=True)  # JSON to stderr
+logger.add("app.log", rotation="daily")  # File for archival
+```
+
 ## JSON Output
 
 ```python
@@ -162,10 +187,13 @@ from logust import logger
 logger.add("custom.log", format="[{level}] {message}")
 
 # Available placeholders:
-# {time}     - Timestamp
-# {level}    - Log level name
-# {level:<8} - Level with width specifier
-# {message}  - Log message
+# {time}       - Timestamp
+# {level}      - Log level name
+# {level:<8}   - Level with width specifier
+# {message}    - Log message
+# {name}       - Module name
+# {function}   - Function name
+# {line}       - Line number
 # {extra[key]} - Extra context fields
 ```
 
@@ -450,12 +478,13 @@ setup_fastapi(app, skip_routes=["/health"])
 |--------|------|-------------|
 | `level` | `str \| LogLevel` | Minimum level for handler |
 | `format` | `str` | Custom format template |
-| `rotation` | `str` | Rotation strategy |
-| `retention` | `str \| int` | Retention policy |
-| `compression` | `bool` | Gzip rotated files |
+| `rotation` | `str` | Rotation strategy (files only) |
+| `retention` | `str \| int` | Retention policy (files only) |
+| `compression` | `bool` | Gzip rotated files (files only) |
 | `serialize` | `bool` | JSON output |
 | `filter` | `callable` | Filter function |
-| `enqueue` | `bool` | Async writes |
+| `enqueue` | `bool` | Async writes (files only) |
+| `colorize` | `bool` | ANSI colors (console only, auto-detect if None) |
 
 ### Opt Options (`opt()`)
 

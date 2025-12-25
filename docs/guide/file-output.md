@@ -14,6 +14,63 @@ handler_id = logger.add("app.log")
 logger.info("This goes to app.log")
 ```
 
+## Console sinks (stdout/stderr)
+
+In addition to files, you can add handlers for stdout and stderr:
+
+```python
+import sys
+from logust import logger
+
+# Remove default console output
+logger.remove()
+
+# Add stdout with colors
+logger.add(sys.stdout, colorize=True)
+
+# Add stderr for JSON output
+logger.add(sys.stderr, serialize=True)
+
+# Both outputs simultaneously
+logger.info("Goes to both stdout and stderr")
+```
+
+### Colorize option
+
+Control ANSI color codes in console output:
+
+```python
+import sys
+from logust import logger
+
+# Auto-detect TTY (default when colorize=None)
+logger.add(sys.stdout)  # Colors if terminal, plain if piped
+
+# Force colors on
+logger.add(sys.stdout, colorize=True)
+
+# Force colors off
+logger.add(sys.stdout, colorize=False)
+```
+
+### Multiple outputs with different formats
+
+```python
+import sys
+from logust import logger
+
+logger.remove()
+
+# Human-readable console output
+logger.add(sys.stdout, colorize=True, format="{level} | {message}")
+
+# JSON to stderr for log aggregation
+logger.add(sys.stderr, serialize=True)
+
+# File for archival
+logger.add("app.log", rotation="daily", retention="30 days")
+```
+
 ## Common recipes
 
 ```python
@@ -35,6 +92,7 @@ logger.add("app.log", rotation="daily", compression=True)
 ## Handler options
 
 ```python
+# File handler options
 logger.add(
     "app.log",
     level="INFO",           # Minimum log level
@@ -45,6 +103,16 @@ logger.add(
     serialize=True,         # JSON output
     filter=None,            # Filter callback
     enqueue=False,          # Sync writes (default)
+)
+
+# Console handler options
+logger.add(
+    sys.stdout,
+    level="INFO",           # Minimum log level
+    format="{time} | {level} | {message}",  # Custom format
+    serialize=False,        # JSON output
+    filter=None,            # Filter callback
+    colorize=True,          # ANSI color codes (console only)
 )
 ```
 

@@ -220,6 +220,26 @@ impl PyLogger {
         false
     }
 
+    /// Get the minimum log level across all handlers and callbacks
+    fn get_min_level(&self) -> u32 {
+        let handlers = self.handlers.read();
+        let callbacks = self.callbacks.read();
+
+        let min_handler = handlers
+            .iter()
+            .map(|e| e.handler.level() as u32)
+            .min()
+            .unwrap_or(u32::MAX);
+
+        let min_callback = callbacks
+            .iter()
+            .map(|e| e.level as u32)
+            .min()
+            .unwrap_or(u32::MAX);
+
+        min_handler.min(min_callback)
+    }
+
     /// Disable console output
     fn disable(&self) {
         let mut handlers = self.handlers.write();

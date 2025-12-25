@@ -16,7 +16,7 @@ class TestCallerInfo:
         code = f'''
 from logust import logger
 logger.remove()
-logger.add("{log_file}", format="{{name}}:{{function}}:{{line}} - {{message}}")
+logger.add({repr(str(log_file))}, format="{{name}}:{{function}}:{{line}} - {{message}}")
 def my_func():
     logger.info("test message")
 my_func()
@@ -34,7 +34,7 @@ logger.complete()
         code = f'''
 from logust import logger
 logger.remove()
-logger.add("{log_file}", serialize=True)
+logger.add({repr(str(log_file))}, serialize=True)
 def my_func():
     logger.info("json test")
 my_func()
@@ -59,7 +59,7 @@ class TestCallerDepth:
         code = f'''
 from logust import logger
 logger.remove()
-logger.add("{log_file}", format="{{function}} - {{message}}")
+logger.add({repr(str(log_file))}, format="{{function}} - {{message}}")
 def actual_caller():
     logger.info("direct call")
 actual_caller()
@@ -76,7 +76,7 @@ logger.complete()
         code = f'''
 from logust import logger
 logger.remove()
-logger.add("{log_file}", format="{{function}} - {{message}}")
+logger.add({repr(str(log_file))}, format="{{function}} - {{message}}")
 def test_func():
     logger.opt().info("through opt")
 test_func()
@@ -93,7 +93,7 @@ logger.complete()
         code = f'''
 from logust import logger
 logger.remove()
-logger.add("{log_file}", format="{{function}} - {{message}}")
+logger.add({repr(str(log_file))}, format="{{function}} - {{message}}")
 def wrapper():
     def inner():
         logger.opt(depth=1).info("with depth=1")
@@ -113,7 +113,7 @@ logger.complete()
         code = f'''
 from logust import logger
 logger.remove()
-logger.add("{log_file}", format="{{function}} - {{message}}")
+logger.add({repr(str(log_file))}, format="{{function}} - {{message}}")
 def my_exception_handler():
     try:
         raise ValueError("test")
@@ -133,7 +133,7 @@ logger.complete()
         code = f'''
 from logust import logger
 logger.remove()
-logger.add("{log_file}", format="{{function}} - {{message}}")
+logger.add({repr(str(log_file))}, format="{{function}} - {{message}}")
 
 @logger.catch()
 def risky_func():
@@ -295,7 +295,7 @@ class TestPerformance:
 from logust import logger
 logger.remove()
 # Add handler with WARNING level
-logger.add("{log_file}", level="WARNING", format="{{message}}")
+logger.add({repr(str(log_file))}, level="WARNING", format="{{message}}")
 # These should be skipped (level check before frame capture)
 logger.debug("debug msg")
 logger.info("info msg")

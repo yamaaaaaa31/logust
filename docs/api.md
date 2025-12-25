@@ -30,17 +30,24 @@ logger.log(level, message, **kwargs)  # Any level
 ### Handler management
 
 ```python
+# File sink
 handler_id = logger.add(
-    sink,                    # File path (str or Path)
+    sink,                    # File path (str or Path) or sys.stdout/sys.stderr
     level=None,              # Minimum level (LogLevel or str)
     format=None,             # Format string
-    rotation=None,           # "500 MB", "daily", "hourly"
-    retention=None,          # "10 days" or count (int)
-    compression=False,       # Gzip compression
+    rotation=None,           # "500 MB", "daily", "hourly" (files only)
+    retention=None,          # "10 days" or count (int) (files only)
+    compression=False,       # Gzip compression (files only)
     serialize=False,         # JSON output
     filter=None,             # Filter function
-    enqueue=False,           # Async writes
+    enqueue=False,           # Async writes (files only)
+    colorize=None,           # ANSI colors (console only, auto-detect if None)
 )
+
+# Console sink
+import sys
+logger.add(sys.stdout, colorize=True)   # stdout with colors
+logger.add(sys.stderr, serialize=True)  # stderr with JSON
 
 logger.remove(handler_id)    # Remove specific
 logger.remove()              # Remove all
@@ -175,6 +182,9 @@ record: LogRecord = {
     "level_no": 20,
     "message": "Hello",
     "timestamp": "2025-12-24T12:00:00",
+    "name": "__main__",           # Module name
+    "function": "my_function",    # Function name
+    "line": 42,                   # Line number
     "exception": None,
     "extra": {"user_id": "123"},
 }

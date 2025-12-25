@@ -27,24 +27,26 @@ Results are from the included benchmark suite (`benchmarks/bench_throughput.py`)
 ### Summary
 
 ```
-logust vs loguru:  28.4x faster on average
-logust vs logging:  8.8x faster on average
+logust vs loguru:  16.8x faster on average
+logust vs logging:  4.6x faster on average
 ```
+
+Logust includes rich caller information (module, function, line) in every log message while maintaining excellent performance.
 
 ### Throughput
 
 | Scenario | logging | loguru | logust | vs loguru |
 |----------|---------|--------|--------|-----------|
-| File write (sync) | 74.91 ms | 74.56 ms | **6.58 ms** | 11.3x faster |
-| Formatted messages | 60.36 ms | 74.49 ms | **7.05 ms** | 10.6x faster |
-| JSON serialize | N/A | 147.31 ms | **5.33 ms** | 27.6x faster |
-| Context binding | N/A | 68.80 ms | **5.74 ms** | 12.0x faster |
+| File write (sync) | 57.18 ms | 65.57 ms | **10.84 ms** | 6.1x faster |
+| Formatted messages | 55.99 ms | 65.81 ms | **11.62 ms** | 5.7x faster |
+| JSON serialize | N/A | 134.12 ms | **10.96 ms** | 12.2x faster |
+| Context binding | N/A | 64.12 ms | **10.35 ms** | 6.2x faster |
 
 ### Async writes
 
 | Scenario | loguru | logust | vs loguru |
 |----------|--------|--------|-----------|
-| File write (async) | 332.27 ms | **5.78 ms** | 57.5x faster |
+| File write (async) | 326.27 ms | **10.23 ms** | 31.9x faster |
 
 ### Sync vs Async latency
 
@@ -52,8 +54,8 @@ This measures main thread time only - the true benefit of async is not blocking 
 
 | Library | Sync | Async | Effect |
 |---------|------|-------|--------|
-| loguru | 74.56 ms | 332.27 ms | **4.5x slower** |
-| logust | 6.58 ms | 5.78 ms | **No overhead** |
+| loguru | 70.44 ms | 299.61 ms | **4.3x slower** |
+| logust | 10.64 ms | 11.57 ms | **No overhead** |
 
 **Key finding**: loguru's `enqueue=True` adds significant overhead due to Python's `queue.Queue`. Logust uses Rust's lock-free crossbeam channels, maintaining speed while offloading I/O.
 
@@ -72,7 +74,7 @@ This measures main thread time only - the true benefit of async is not blocking 
 | Lazy evaluation | Yes | Yes |
 | Async writes | Yes | Yes |
 | Callable sinks | No | Yes |
-| Stack info (file, line) | No | Yes |
+| Stack info (module, function, line) | Yes | Yes |
 | Process/thread info | No | Yes |
 
 ## API differences

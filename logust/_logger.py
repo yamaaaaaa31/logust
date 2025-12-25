@@ -75,6 +75,17 @@ class Logger:
     ) -> None:
         self._inner = inner
         self._patchers = patchers or []
+        self._min_level_cache: int | None = None
+
+    def _invalidate_level_cache(self) -> None:
+        """Invalidate the cached minimum level."""
+        self._min_level_cache = None
+
+    def _get_min_level(self) -> int:
+        """Get minimum level with caching (reduces PyO3 calls)."""
+        if self._min_level_cache is None:
+            self._min_level_cache = self._inner.get_min_level()
+        return self._min_level_cache
 
     def _log_with_level(
         self,
@@ -93,10 +104,10 @@ class Logger:
             exception: Optional exception string
             depth: Stack frame depth adjustment
         """
-        # Early return if level is not enabled (performance optimization)
-        if not self._inner.is_level_enabled(level):
+        # Fast path: pure Python check using cached min level (no PyO3 call)
+        if level.value < self._get_min_level():
             return
-        # Get caller info only if we're going to log
+        # Get caller info only if we're going to log (single PyO3 call)
         name, function, line = _get_caller_info(depth + 1)  # +1 for this method
         log_method = getattr(self._inner, level_name)
         log_method(str(message), exception=exception, name=name, function=function, line=line)
@@ -219,12 +230,22 @@ class Logger:
             >>> logger.log("INFO", "Using built-in level by name")
             >>> logger.log(20, "Using built-in level by number")
         """
-        # For custom levels, we can't easily check if enabled, so always get caller info
+        # Check if this is a built-in level name that we can optimize
+        if isinstance(level, str):
+            level_lower = level.lower()
+            if level_lower in _LEVEL_MAP:
+                # Use optimized path for built-in levels
+                log_level = _LEVEL_MAP[level_lower]
+                self._log_with_level(log_level, level_lower, message, exception, _depth + 1)
+                return
+
+        # For custom levels or int levels, fall back to original behavior
         name, function, line = _get_caller_info(_depth + 1)
         self._inner.log(level, str(message), exception=exception, name=name, function=function, line=line)
 
     def set_level(self, level: LogLevel | str) -> None:
         """Set minimum log level for console output."""
+        self._invalidate_level_cache()
         self._inner.set_level(_to_log_level(level))
 
     def get_level(self) -> LogLevel:
@@ -244,10 +265,12 @@ class Logger:
 
     def enable(self, level: LogLevel | str | None = None) -> None:
         """Enable console logging."""
+        self._invalidate_level_cache()
         self._inner.enable(_to_log_level(level) if level is not None else None)
 
     def disable(self) -> None:
         """Disable console logging."""
+        self._invalidate_level_cache()
         self._inner.disable()
 
     def is_enabled(self) -> bool:
@@ -316,6 +339,8 @@ class Logger:
         """
         import sys
 
+        self._invalidate_level_cache()
+
         # Check if sink is stdout or stderr
         if sink is sys.stdout or sink is sys.stderr:
             stream_name = "stdout" if sink is sys.stdout else "stderr"
@@ -370,6 +395,7 @@ class Logger:
             >>> logger.remove(handler_id)  # Remove specific handler
             >>> logger.remove()  # Remove ALL handlers (including console)
         """
+        self._invalidate_level_cache()
         return self._inner.remove(handler_id)
 
     def bind(self, **kwargs: Any) -> Logger:
