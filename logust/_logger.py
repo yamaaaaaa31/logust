@@ -44,19 +44,33 @@ def _to_log_level(level: LogLevel | str) -> LogLevel:
 
 # Pre-computed level values derived from LogLevel enum at import time
 # This avoids PyO3 crossings during logging while staying in sync with Rust
-_LEVEL_VALUES: dict[str, int] = {
-    "trace": LogLevel.Trace.value,
-    "debug": LogLevel.Debug.value,
-    "info": LogLevel.Info.value,
-    "success": LogLevel.Success.value,
-    "warning": LogLevel.Warning.value,
-    "error": LogLevel.Error.value,
-    "fail": LogLevel.Fail.value,
-    "critical": LogLevel.Critical.value,
-}
+# Fallback to static values if enum access fails during partial import
+try:
+    _LEVEL_VALUES: dict[str, int] = {
+        "trace": LogLevel.Trace.value,
+        "debug": LogLevel.Debug.value,
+        "info": LogLevel.Info.value,
+        "success": LogLevel.Success.value,
+        "warning": LogLevel.Warning.value,
+        "error": LogLevel.Error.value,
+        "fail": LogLevel.Fail.value,
+        "critical": LogLevel.Critical.value,
+    }
+except (AttributeError, TypeError):
+    _LEVEL_VALUES = {
+        "trace": 5,
+        "debug": 10,
+        "info": 20,
+        "success": 25,
+        "warning": 30,
+        "error": 40,
+        "fail": 45,
+        "critical": 50,
+    }
 
 # Reverse map: numeric level values to level names
 _LEVEL_VALUE_MAP: dict[int, str] = {v: k for k, v in _LEVEL_VALUES.items()}
+assert len(_LEVEL_VALUE_MAP) == len(_LEVEL_VALUES), "Duplicate numeric level values detected"
 
 
 class Logger:
