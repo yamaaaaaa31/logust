@@ -6,7 +6,10 @@
 name: CI
 
 on:
-  workflow_dispatch:  # Manual trigger only
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
 
 permissions:
   contents: read
