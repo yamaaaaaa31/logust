@@ -743,7 +743,15 @@ impl PyLogger {
     ) -> Bound<'py, PyDict> {
         let dict = PyDict::new(py);
 
-        // Basic fields
+        // Extra FIRST (flat expansion for backward compat)
+        // This allows built-in fields to take precedence and prevents spoofing
+        let extra_dict = PyDict::new(py);
+        for (key, value) in record.extra.iter() {
+            let _ = dict.set_item(key.as_str(), value.as_str());
+            let _ = extra_dict.set_item(key.as_str(), value.as_str());
+        }
+
+        // Basic fields (override any extra with same name)
         let _ = dict.set_item("level", level.as_str());
         let _ = dict.set_item("message", &record.message);
         let _ = dict.set_item("timestamp", record.timestamp.to_rfc3339());
@@ -766,12 +774,7 @@ impl PyLogger {
             format_elapsed(&LOGGER_START_TIME, &record.timestamp),
         );
 
-        // Extra: both flat (for backward compat) and nested (for {extra[key]})
-        let extra_dict = PyDict::new(py);
-        for (key, value) in record.extra.iter() {
-            let _ = dict.set_item(key.as_str(), value.as_str());
-            let _ = extra_dict.set_item(key.as_str(), value.as_str());
-        }
+        // Extra as nested dict (for {extra[key]} access)
         let _ = dict.set_item("extra", extra_dict);
 
         // Exception

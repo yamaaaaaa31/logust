@@ -20,8 +20,9 @@ if TYPE_CHECKING:
 # Pre-compiled regex for format specifiers (e.g., {level:<8})
 _FORMAT_SPEC_PATTERN = re.compile(r"\{(\w+(?:\[\w+\])?):([^}]+)\}")
 
-# Cached process info (immutable during process lifetime)
+# Cached process info (invalidated on fork by checking PID)
 _CACHED_PROCESS_INFO: tuple[str, int] | None = None
+_CACHED_PROCESS_PID: int | None = None
 
 
 def _get_caller_info(depth: int = 1) -> tuple[str, str, int, str]:
@@ -58,13 +59,16 @@ def _get_thread_info() -> tuple[str, int]:
 def _get_process_info() -> tuple[str, int]:
     """Get current process name and ID.
 
-    Caches the result since process info is immutable during process lifetime.
+    Caches the result, but invalidates cache after fork (detected by PID change).
 
     Returns:
         Tuple of (process_name, process_id)
     """
-    global _CACHED_PROCESS_INFO
-    if _CACHED_PROCESS_INFO is not None:
+    global _CACHED_PROCESS_INFO, _CACHED_PROCESS_PID
+    current_pid = os.getpid()
+
+    # Invalidate cache if PID changed (fork occurred)
+    if _CACHED_PROCESS_INFO is not None and _CACHED_PROCESS_PID == current_pid:
         return _CACHED_PROCESS_INFO
 
     try:
@@ -73,7 +77,8 @@ def _get_process_info() -> tuple[str, int]:
         name = multiprocessing.current_process().name
     except Exception:
         name = "MainProcess"
-    _CACHED_PROCESS_INFO = (name, os.getpid())
+    _CACHED_PROCESS_INFO = (name, current_pid)
+    _CACHED_PROCESS_PID = current_pid
     return _CACHED_PROCESS_INFO
 
 
@@ -559,13 +564,16 @@ class Logger:
         try:
             result = template
 
-            # Step 1: Handle format specifiers (e.g., {level:<8}) using pre-compiled regex
+            # Step 1: Handle format specifiers (e.g., {level:<8}, {message:<50})
+            # Process ALL tokens including message to avoid double-replacement issues
             def replace_with_spec(match: re.Match[str]) -> str:
                 key = match.group(1)
                 spec = match.group(2)
                 if key == "message":
-                    # Don't replace message yet, leave placeholder
-                    return match.group(0)
+                    try:
+                        return f"{{:{spec}}}".format(message)
+                    except (ValueError, KeyError):
+                        return str(message)
                 value = format_kwargs.get(key, "")
                 try:
                     return f"{{:{spec}}}".format(value)
@@ -578,15 +586,9 @@ class Logger:
             for key, value in format_kwargs.items():
                 result = result.replace(f"{{{key}}}", str(value))
 
-            # Step 3: Replace message LAST (to prevent {level} etc in message from being replaced)
+            # Step 3: Replace {message} LAST (simple replacement only)
+            # This prevents {level} etc in message content from being replaced
             result = result.replace("{message}", str(message))
-            # Also handle {message:spec} if it wasn't replaced in step 1
-            result = _FORMAT_SPEC_PATTERN.sub(
-                lambda m: (
-                    f"{{:{m.group(2)}}}".format(message) if m.group(1) == "message" else m.group(0)
-                ),
-                result,
-            )
 
             return result
         except Exception:
