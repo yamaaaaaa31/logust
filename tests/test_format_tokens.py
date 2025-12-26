@@ -5,9 +5,6 @@ from __future__ import annotations
 import re
 import threading
 from pathlib import Path
-from typing import Any
-
-import pytest
 
 from logust import Logger, LogLevel
 from logust._logust import PyLogger

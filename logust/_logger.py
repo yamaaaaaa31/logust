@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import functools
 import os
+import re
 import sys
+import threading
 import traceback
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
@@ -14,6 +16,12 @@ from ._logust import LogLevel, PyLogger
 
 if TYPE_CHECKING:
     from ._opt import OptLogger
+
+# Pre-compiled regex for format specifiers (e.g., {level:<8})
+_FORMAT_SPEC_PATTERN = re.compile(r"\{(\w+(?:\[\w+\])?):([^}]+)\}")
+
+# Cached process info (immutable during process lifetime)
+_CACHED_PROCESS_INFO: tuple[str, int] | None = None
 
 
 def _get_caller_info(depth: int = 1) -> tuple[str, str, int, str]:
@@ -43,8 +51,6 @@ def _get_thread_info() -> tuple[str, int]:
     Returns:
         Tuple of (thread_name, thread_id)
     """
-    import threading
-
     thread = threading.current_thread()
     return (thread.name, thread.ident or 0)
 
@@ -52,16 +58,23 @@ def _get_thread_info() -> tuple[str, int]:
 def _get_process_info() -> tuple[str, int]:
     """Get current process name and ID.
 
+    Caches the result since process info is immutable during process lifetime.
+
     Returns:
         Tuple of (process_name, process_id)
     """
+    global _CACHED_PROCESS_INFO
+    if _CACHED_PROCESS_INFO is not None:
+        return _CACHED_PROCESS_INFO
+
     try:
         import multiprocessing
 
         name = multiprocessing.current_process().name
     except Exception:
         name = "MainProcess"
-    return (name, os.getpid())
+    _CACHED_PROCESS_INFO = (name, os.getpid())
+    return _CACHED_PROCESS_INFO
 
 
 def _to_log_level(level: LogLevel | str) -> LogLevel:
@@ -521,10 +534,9 @@ class Logger:
             Formatted log message string.
         """
         # Build format kwargs from record
-        format_kwargs = {
+        format_kwargs: dict[str, Any] = {
             "time": record.get("timestamp", ""),
             "level": record.get("level", ""),
-            "message": record.get("message", ""),
             "name": record.get("name", ""),
             "function": record.get("function", ""),
             "line": record.get("line", 0),
@@ -541,27 +553,45 @@ class Logger:
             for key, value in extra.items():
                 format_kwargs[f"extra[{key}]"] = value
 
-        # Format with width specifiers support (e.g., {level:<8})
+        # Get message separately (will be replaced last)
+        message = record.get("message", "")
+
         try:
-            # Simple template substitution
             result = template
+
+            # Step 1: Handle format specifiers (e.g., {level:<8}) using pre-compiled regex
+            def replace_with_spec(match: re.Match[str]) -> str:
+                key = match.group(1)
+                spec = match.group(2)
+                if key == "message":
+                    # Don't replace message yet, leave placeholder
+                    return match.group(0)
+                value = format_kwargs.get(key, "")
+                try:
+                    return f"{{:{spec}}}".format(value)
+                except (ValueError, KeyError):
+                    return str(value)
+
+            result = _FORMAT_SPEC_PATTERN.sub(replace_with_spec, result)
+
+            # Step 2: Replace simple tokens (except message)
             for key, value in format_kwargs.items():
-                # Handle {key} and {key:<N} patterns
                 result = result.replace(f"{{{key}}}", str(value))
 
-                # Handle width specifiers like {level:<8}
-                import re
-
-                pattern = re.compile(rf"\{{{key}:([^}}]+)\}}")
-                for match in pattern.finditer(result):
-                    format_spec = match.group(1)
-                    formatted_value = f"{{:{format_spec}}}".format(value)
-                    result = result.replace(match.group(0), formatted_value)
+            # Step 3: Replace message LAST (to prevent {level} etc in message from being replaced)
+            result = result.replace("{message}", str(message))
+            # Also handle {message:spec} if it wasn't replaced in step 1
+            result = _FORMAT_SPEC_PATTERN.sub(
+                lambda m: (
+                    f"{{:{m.group(2)}}}".format(message) if m.group(1) == "message" else m.group(0)
+                ),
+                result,
+            )
 
             return result
         except Exception:
             # Fallback to basic format
-            return f"{record.get('level', '')} | {record.get('message', '')}"
+            return f"{record.get('level', '')} | {message}"
 
     def remove(self, handler_id: int | None = None) -> bool:
         """Remove a handler by ID, or all handlers if None.

@@ -5,8 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-import pytest
-
 from logust import Logger, LogLevel
 from logust._logust import PyLogger
 
@@ -273,3 +271,124 @@ class TestCallableSinkEdgeCases:
 
         assert len(collector.messages) == 1
         assert "Class method test" in collector.messages[0]
+
+
+class TestCallableSinkFormatTokens:
+    """Test callable sink with new format tokens."""
+
+    def test_callable_with_elapsed(self, tmp_path: Path) -> None:
+        """Test that {elapsed} token works with callable sink."""
+        inner = PyLogger(LogLevel.Trace)
+        logger = Logger(inner)
+        logger.disable()
+
+        messages: list[str] = []
+        logger.add(lambda msg: messages.append(msg), format="{elapsed} | {message}")
+
+        logger.info("Elapsed test")
+
+        assert len(messages) == 1
+        # elapsed format: HH:MM:SS.mmm
+        import re
+
+        assert re.match(r"\d{2}:\d{2}:\d{2}\.\d{3} \| Elapsed test", messages[0])
+
+    def test_callable_with_thread(self, tmp_path: Path) -> None:
+        """Test that {thread} token works with callable sink."""
+        inner = PyLogger(LogLevel.Trace)
+        logger = Logger(inner)
+        logger.disable()
+
+        messages: list[str] = []
+        logger.add(lambda msg: messages.append(msg), format="{thread} | {message}")
+
+        logger.info("Thread test")
+
+        assert len(messages) == 1
+        # thread format: ThreadName:ID
+        assert ":" in messages[0]
+        assert "Thread test" in messages[0]
+
+    def test_callable_with_process(self, tmp_path: Path) -> None:
+        """Test that {process} token works with callable sink."""
+        inner = PyLogger(LogLevel.Trace)
+        logger = Logger(inner)
+        logger.disable()
+
+        messages: list[str] = []
+        logger.add(lambda msg: messages.append(msg), format="{process} | {message}")
+
+        logger.info("Process test")
+
+        assert len(messages) == 1
+        # process format: ProcessName:ID
+        assert ":" in messages[0]
+        assert "Process test" in messages[0]
+
+    def test_callable_with_file(self, tmp_path: Path) -> None:
+        """Test that {file} token works with callable sink."""
+        inner = PyLogger(LogLevel.Trace)
+        logger = Logger(inner)
+        logger.disable()
+
+        messages: list[str] = []
+        logger.add(lambda msg: messages.append(msg), format="{file}:{line} | {message}")
+
+        logger.info("File test")
+
+        assert len(messages) == 1
+        # file should be the test file name
+        assert "test_callable_sink.py" in messages[0]
+        assert "File test" in messages[0]
+
+    def test_callable_with_extra(self, tmp_path: Path) -> None:
+        """Test that {extra[key]} token works with callable sink."""
+        inner = PyLogger(LogLevel.Trace)
+        logger = Logger(inner)
+        logger.disable()
+
+        messages: list[str] = []
+        bound_logger = logger.bind(user="alice", request_id="12345")
+        bound_logger.add(
+            lambda msg: messages.append(msg),
+            format="{extra[user]} - {extra[request_id]} | {message}",
+        )
+
+        bound_logger.info("Extra test")
+
+        assert len(messages) == 1
+        assert "alice" in messages[0]
+        assert "12345" in messages[0]
+        assert "Extra test" in messages[0]
+
+    def test_message_containing_braces(self, tmp_path: Path) -> None:
+        """Test that {level} etc in message are not replaced."""
+        inner = PyLogger(LogLevel.Trace)
+        logger = Logger(inner)
+        logger.disable()
+
+        messages: list[str] = []
+        logger.add(lambda msg: messages.append(msg), format="{level} | {message}")
+
+        # Message contains literal {level} which should NOT be replaced
+        logger.info("Error code: {level} is invalid")
+
+        assert len(messages) == 1
+        # The {level} in message should remain as-is, not become "INFO"
+        assert "INFO | Error code: {level} is invalid" == messages[0]
+
+    def test_callable_with_name_function(self, tmp_path: Path) -> None:
+        """Test that {name} and {function} tokens work with callable sink."""
+        inner = PyLogger(LogLevel.Trace)
+        logger = Logger(inner)
+        logger.disable()
+
+        messages: list[str] = []
+        logger.add(lambda msg: messages.append(msg), format="{name}:{function} | {message}")
+
+        logger.info("Caller test")
+
+        assert len(messages) == 1
+        # Should contain function name
+        assert "test_callable_with_name_function" in messages[0]
+        assert "Caller test" in messages[0]

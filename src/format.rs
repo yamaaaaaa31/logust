@@ -9,14 +9,15 @@ use crate::handler::LogRecord;
 use crate::level::LogLevel;
 
 /// Logger initialization time for elapsed calculation
-static LOGGER_START_TIME: LazyLock<DateTime<Local>> = LazyLock::new(Local::now);
+pub static LOGGER_START_TIME: LazyLock<DateTime<Local>> = LazyLock::new(Local::now);
 
 /// Format elapsed time as HH:MM:SS.mmm
-fn format_elapsed(start: &DateTime<Local>, now: &DateTime<Local>) -> String {
+/// Handles negative durations (e.g., clock adjustment) by clamping to 0
+pub fn format_elapsed(start: &DateTime<Local>, now: &DateTime<Local>) -> String {
     let duration = *now - *start;
-    let total_millis = duration.num_milliseconds();
+    let total_millis = duration.num_milliseconds().max(0) as u64;
     let millis = (total_millis % 1000) as u32;
-    let total_secs = (total_millis / 1000) as u64;
+    let total_secs = total_millis / 1000;
     let hours = total_secs / 3600;
     let minutes = (total_secs % 3600) / 60;
     let seconds = total_secs % 60;

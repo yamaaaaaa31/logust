@@ -12,7 +12,7 @@ use parking_lot::RwLock;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
-pub use format::FormatConfig;
+pub use format::{FormatConfig, LOGGER_START_TIME, format_elapsed};
 pub use handler::{
     CallerInfo, ConsoleHandler, FileHandler, HandlerEntry, HandlerType, LogRecord, ProcessInfo,
     ThreadInfo, empty_context,
@@ -742,15 +742,43 @@ impl PyLogger {
         record: &LogRecord,
     ) -> Bound<'py, PyDict> {
         let dict = PyDict::new(py);
+
+        // Basic fields
         let _ = dict.set_item("level", level.as_str());
         let _ = dict.set_item("message", &record.message);
         let _ = dict.set_item("timestamp", record.timestamp.to_rfc3339());
+
+        // Caller info
+        let _ = dict.set_item("name", &record.caller.name);
+        let _ = dict.set_item("function", &record.caller.function);
+        let _ = dict.set_item("line", record.caller.line);
+        let _ = dict.set_item("file", &record.caller.file);
+
+        // Thread/process info
+        let _ = dict.set_item("thread_name", &record.thread.name);
+        let _ = dict.set_item("thread_id", record.thread.id);
+        let _ = dict.set_item("process_name", &record.process.name);
+        let _ = dict.set_item("process_id", record.process.id);
+
+        // Elapsed time
+        let _ = dict.set_item(
+            "elapsed",
+            format_elapsed(&LOGGER_START_TIME, &record.timestamp),
+        );
+
+        // Extra: both flat (for backward compat) and nested (for {extra[key]})
+        let extra_dict = PyDict::new(py);
         for (key, value) in record.extra.iter() {
             let _ = dict.set_item(key.as_str(), value.as_str());
+            let _ = extra_dict.set_item(key.as_str(), value.as_str());
         }
+        let _ = dict.set_item("extra", extra_dict);
+
+        // Exception
         if let Some(ref exc) = record.exception {
             let _ = dict.set_item("exception", exc.as_str());
         }
+
         dict
     }
 
