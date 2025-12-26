@@ -377,6 +377,25 @@ class TestCallableSinkFormatTokens:
         # The {level} in message should remain as-is, not become "INFO"
         assert "INFO | Error code: {level} is invalid" == messages[0]
 
+    def test_message_with_spec_containing_braces(self, tmp_path: Path) -> None:
+        """Test that {level} in message is preserved even with format spec."""
+        inner = PyLogger(LogLevel.Trace)
+        logger = Logger(inner)
+        logger.disable()
+
+        messages: list[str] = []
+        # Use {message:<50} with a format specifier
+        logger.add(lambda msg: messages.append(msg), format="{level} | {message:<50}")
+
+        # Message contains literal {level} which should NOT be replaced
+        logger.info("Error: {level} happened")
+
+        assert len(messages) == 1
+        # The {level} in message should remain as-is, not become "INFO"
+        # Message should be left-padded to 50 chars
+        assert messages[0].startswith("INFO | Error: {level} happened")
+        assert len(messages[0]) == len("INFO | ") + 50
+
     def test_callable_with_name_function(self, tmp_path: Path) -> None:
         """Test that {name} and {function} tokens work with callable sink."""
         inner = PyLogger(LogLevel.Trace)

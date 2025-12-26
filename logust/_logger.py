@@ -564,6 +564,10 @@ class Logger:
         try:
             result = template
 
+            # Escape markers for braces in message content
+            _LBRACE = "\x00LBRACE\x00"
+            _RBRACE = "\x00RBRACE\x00"
+
             # Step 1: Handle format specifiers (e.g., {level:<8}, {message:<50})
             # Process ALL tokens including message to avoid double-replacement issues
             def replace_with_spec(match: re.Match[str]) -> str:
@@ -571,9 +575,12 @@ class Logger:
                 spec = match.group(2)
                 if key == "message":
                     try:
-                        return f"{{:{spec}}}".format(message)
+                        formatted = f"{{:{spec}}}".format(message)
+                        # Escape braces to prevent token replacement in Step 2
+                        return formatted.replace("{", _LBRACE).replace("}", _RBRACE)
                     except (ValueError, KeyError):
-                        return str(message)
+                        escaped = str(message)
+                        return escaped.replace("{", _LBRACE).replace("}", _RBRACE)
                 value = format_kwargs.get(key, "")
                 try:
                     return f"{{:{spec}}}".format(value)
@@ -589,6 +596,9 @@ class Logger:
             # Step 3: Replace {message} LAST (simple replacement only)
             # This prevents {level} etc in message content from being replaced
             result = result.replace("{message}", str(message))
+
+            # Step 4: Restore escaped braces from {message:spec}
+            result = result.replace(_LBRACE, "{").replace(_RBRACE, "}")
 
             return result
         except Exception:

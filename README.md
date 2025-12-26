@@ -10,7 +10,7 @@ A fast, Rust-powered Python logging library inspired by [loguru](https://github.
 
 ## Features
 
-- **Blazing Fast** - Rust-powered core delivers up to 12x faster performance than loguru
+- **Blazing Fast** - Rust-powered core delivers 4-21x faster performance than loguru
 - **Beautiful by Default** - Colored output with zero configuration needed
 - **Caller Information** - Automatic module, function, and line number in every log
 - **Flexible Sinks** - Output to console, files, or any callable (lambda, function)
@@ -44,7 +44,7 @@ Comparison with Python logging and loguru (10,000 log messages, all with caller 
 
 loguru's `enqueue=True` adds significant overhead due to Python's Queue. Logust uses Rust's lock-free channels, maintaining speed while offloading I/O.
 
-**Summary:** logust is **12x faster** than loguru on average with rich caller information included in every log message.
+**Summary:** logust is **4-21x faster** than loguru with rich caller information included in every log message (sync: 4-9x, async: 21x).
 
 ## Installation
 
