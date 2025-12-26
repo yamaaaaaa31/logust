@@ -683,6 +683,10 @@ class Logger:
             >>> logger.add(sys.stderr, serialize=True)  # JSON to stderr
             >>> logger.add(lambda msg: print(msg))  # Callable sink
             >>> logger.add("app.log", collect=CollectOptions(caller=False))
+
+        Note:
+            For callable sinks, use remove_callback() instead of remove() to
+            remove the handler.
         """
         import sys
 

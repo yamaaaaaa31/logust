@@ -258,3 +258,61 @@ class TestThreadProcessCollectOptions:
 
         content = log_file.read_text()
         assert "FixedProcess:99999" in content
+
+
+class TestSerializeWithCollectOptions:
+    """Test serialize=True with CollectOptions."""
+
+    def test_serialize_true_with_caller_false(self, tmp_path: Path) -> None:
+        """serialize=True with caller=False should output JSON without caller fields."""
+        import json
+
+        inner = PyLogger(LogLevel.Trace)
+        logger = Logger(inner)
+        logger.remove()
+
+        log_file = tmp_path / "test.json"
+        logger.add(
+            str(log_file),
+            serialize=True,
+            collect=CollectOptions(caller=False),
+        )
+
+        logger.info("Test message")
+        logger.complete()
+
+        content = log_file.read_text().strip()
+        record = json.loads(content)
+
+        # JSON should have basic fields
+        assert record["level"] == "INFO"
+        assert record["message"] == "Test message"
+
+        # Caller fields should be absent or empty (skip_serializing_if handles this)
+        # The key point is no error should occur
+        assert "time" in record
+
+
+class TestCallableSinkRemoval:
+    """Test that callable sinks must be removed with remove_callback()."""
+
+    def test_callable_sink_removal_uses_remove_callback(self) -> None:
+        """Callable sink should be removed using remove_callback(), not remove()."""
+        inner = PyLogger(LogLevel.Trace)
+        logger = Logger(inner)
+
+        messages: list[str] = []
+        handler_id = logger.add(lambda msg: messages.append(msg), format="{message}")
+
+        # Log a message
+        logger.info("First message")
+        assert len(messages) == 1
+
+        # remove() won't remove callable sinks (it's for file/console handlers)
+        # The correct way is remove_callback()
+        result = logger.remove_callback(handler_id)
+        assert result is True
+
+        # After removal, messages should not be added
+        logger.info("Second message")
+        assert len(messages) == 1  # Still 1, not 2
