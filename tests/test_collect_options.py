@@ -61,8 +61,12 @@ class TestCollectOptionsUnionLogic:
         content2 = log2.read_text()
         assert "test_conflicting_collect_options_false_and_none" in content2
 
-    def test_fixed_caller_info_with_multiple_handlers(self, tmp_path: Path) -> None:
-        """Fixed CallerInfo should be used when no handler has True."""
+    def test_fixed_caller_info_with_explicit_settings(self, tmp_path: Path) -> None:
+        """Fixed CallerInfo should be used when all handlers have explicit settings.
+
+        When all handlers have explicit CollectOptions settings (no auto-detect),
+        fixed values can be used.
+        """
         inner = PyLogger(LogLevel.Trace)
         logger = Logger(inner)
         logger.remove()
@@ -73,14 +77,14 @@ class TestCollectOptionsUnionLogic:
         log1 = tmp_path / "log1.log"
         logger.add(str(log1), format="{function}:{line} | {message}", collect=CollectOptions(caller=fixed_caller))
 
-        # Handler 2: auto-detect (None)
+        # Handler 2: explicit caller=False (not auto-detect)
         log2 = tmp_path / "log2.log"
-        logger.add(str(log2), format="{message}")
+        logger.add(str(log2), format="{message}", collect=CollectOptions(caller=False))
 
         logger.info("Test message")
         logger.complete()
 
-        # Handler 1 should use fixed caller info
+        # Handler 1 should use fixed caller info (no auto-detect handler)
         content1 = log1.read_text()
         assert "fixed_func:999" in content1
 
@@ -294,10 +298,10 @@ class TestSerializeWithCollectOptions:
 
 
 class TestCallableSinkRemoval:
-    """Test that callable sinks must be removed with remove_callback()."""
+    """Test that callable sinks can be removed with remove() or remove_callback()."""
 
-    def test_callable_sink_removal_uses_remove_callback(self) -> None:
-        """Callable sink should be removed using remove_callback(), not remove()."""
+    def test_callable_sink_removal_via_remove_callback(self) -> None:
+        """Callable sink can be removed using remove_callback()."""
         inner = PyLogger(LogLevel.Trace)
         logger = Logger(inner)
 
@@ -308,11 +312,107 @@ class TestCallableSinkRemoval:
         logger.info("First message")
         assert len(messages) == 1
 
-        # remove() won't remove callable sinks (it's for file/console handlers)
-        # The correct way is remove_callback()
+        # remove_callback() works for callable sinks
         result = logger.remove_callback(handler_id)
         assert result is True
 
         # After removal, messages should not be added
         logger.info("Second message")
         assert len(messages) == 1  # Still 1, not 2
+
+    def test_callable_sink_removal_via_remove(self) -> None:
+        """Callable sink can also be removed using remove() (redirects to remove_callback)."""
+        inner = PyLogger(LogLevel.Trace)
+        logger = Logger(inner)
+
+        messages: list[str] = []
+        handler_id = logger.add(lambda msg: messages.append(msg), format="{message}")
+
+        # Log a message
+        logger.info("First message")
+        assert len(messages) == 1
+
+        # remove() now correctly redirects to remove_callback() for callable sinks
+        result = logger.remove(handler_id)
+        assert result is True
+
+        # After removal, messages should not be added
+        logger.info("Second message")
+        assert len(messages) == 1  # Still 1, not 2
+
+
+class TestCallbackWithCollectOptions:
+    """Test that callbacks always receive full records regardless of CollectOptions."""
+
+    def test_callback_with_caller_false_still_collects(self) -> None:
+        """Callback with caller=False should still receive caller info.
+
+        Callbacks always need full records (TokenRequirements::all() in Rust),
+        so caller=False should not prevent collection.
+        """
+        inner = PyLogger(LogLevel.Trace)
+        logger = Logger(inner)
+        logger.remove()
+
+        records: list[dict] = []
+
+        def capture_record(record: dict) -> None:
+            records.append(record.copy())
+
+        # Add callback with caller=False - should NOT prevent collection
+        logger.add_callback(capture_record)
+        # Also add a handler with caller=False via add()
+        messages: list[str] = []
+        logger.add(
+            lambda msg: messages.append(msg),
+            format="{message}",
+            collect=CollectOptions(caller=False),
+        )
+
+        logger.info("Test message")
+
+        # Callback should still receive caller info because callbacks need full records
+        assert len(records) == 1
+        record = records[0]
+        # The record should have caller info (function should be this test function)
+        assert "function" in record
+        assert record["function"] == "test_callback_with_caller_false_still_collects"
+
+
+class TestFixedValueVsAutoDectect:
+    """Test that auto-detect wins over fixed value when another handler needs dynamic info."""
+
+    def test_fixed_value_does_not_block_auto_detect(self, tmp_path: Path) -> None:
+        """Fixed value should not prevent dynamic collection when format needs it.
+
+        If Handler A has fixed caller and Handler B's format needs caller,
+        dynamic collection should be used (not the fixed value).
+        """
+        inner = PyLogger(LogLevel.Trace)
+        logger = Logger(inner)
+        logger.remove()
+
+        fixed_caller = CallerInfo(
+            name="fixed_module", function="fixed_func", line=999, file="fixed.py"
+        )
+
+        # Handler 1: fixed caller info
+        log1 = tmp_path / "fixed.log"
+        logger.add(
+            str(log1),
+            format="{function}:{line} | {message}",
+            collect=CollectOptions(caller=fixed_caller),
+        )
+
+        # Handler 2: auto-detect from format (needs caller)
+        log2 = tmp_path / "dynamic.log"
+        logger.add(str(log2), format="{function}:{line} | {message}")
+
+        logger.info("Test message")
+        logger.complete()
+
+        # Handler 2 needs actual caller info, so dynamic collection should be used
+        content2 = log2.read_text()
+        # Should have actual function name, not "fixed_func"
+        assert "test_fixed_value_does_not_block_auto_detect" in content2
+        assert "fixed_func" not in content2

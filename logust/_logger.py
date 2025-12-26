@@ -195,23 +195,30 @@ class Logger:
         inner: PyLogger,
         patchers: list[Callable[[dict[str, Any]], None]] | None = None,
         collect_options: dict[int, CollectOptions] | None = None,
+        callback_ids: set[int] | None = None,
     ) -> None:
         self._inner = inner
         self._patchers = patchers or []
         # Handler ID -> CollectOptions mapping (shared between bound loggers)
         self._collect_options: dict[int, CollectOptions] = collect_options or {}
+        # Track callback IDs for proper removal via remove()
+        self._callback_ids: set[int] = callback_ids or set()
 
     def _compute_effective_requirements(
         self,
     ) -> tuple[bool | CallerInfo, bool | ThreadInfo, bool | ProcessInfo]:
         """Compute effective requirements considering CollectOptions.
 
-        Uses union logic for conflict resolution:
-        - Priority order: True > FixedValue > False > None (auto-detect)
-        - If ANY handler has True: collect dynamically
-        - If no True but ANY has FixedValue: use that fixed value
-        - If no True/FixedValue but ANY has False: don't collect
-        - If all are None: use Rust auto-detection
+        Priority order (highest to lowest):
+        1. True - explicit request to collect dynamically
+        2. Rust needs - callbacks/filters/format require the data
+        3. Fixed value - use fixed value when no dynamic need
+        4. False/else - don't collect
+
+        Key principle: If Rust needs the data (callbacks always need full records,
+        or format requires it), we MUST collect regardless of caller=False.
+        The caller=False setting means "I don't need it for my output", not
+        "prevent collection for the entire system".
 
         Returns:
             Tuple of (caller_requirement, thread_requirement, process_requirement)
@@ -225,100 +232,72 @@ class Logger:
                 self._inner.needs_process_info,
             )
 
-        # Collect all explicit settings from CollectOptions
-        # Track: has_true, fixed_value, has_false, has_none for each category
+        # Track explicit settings from CollectOptions
         caller_true = False
         caller_fixed: CallerInfo | None = None
-        caller_false = False
         caller_none = False  # At least one handler uses auto-detect
+        caller_false = False  # At least one handler explicitly disabled
 
         thread_true = False
         thread_fixed: ThreadInfo | None = None
-        thread_false = False
         thread_none = False
+        thread_false = False
 
         process_true = False
         process_fixed: ProcessInfo | None = None
-        process_false = False
         process_none = False
+        process_false = False
 
         for opts in self._collect_options.values():
-            # Caller
             if opts.caller is True:
                 caller_true = True
             elif isinstance(opts.caller, CallerInfo):
-                caller_fixed = opts.caller
+                if caller_fixed is None:
+                    caller_fixed = opts.caller
+            elif opts.caller is None:
+                caller_none = True
             elif opts.caller is False:
                 caller_false = True
-            else:  # opts.caller is None
-                caller_none = True
 
-            # Thread
             if opts.thread is True:
                 thread_true = True
             elif isinstance(opts.thread, ThreadInfo):
-                thread_fixed = opts.thread
+                if thread_fixed is None:
+                    thread_fixed = opts.thread
+            elif opts.thread is None:
+                thread_none = True
             elif opts.thread is False:
                 thread_false = True
-            else:
-                thread_none = True
 
-            # Process
             if opts.process is True:
                 process_true = True
             elif isinstance(opts.process, ProcessInfo):
-                process_fixed = opts.process
+                if process_fixed is None:
+                    process_fixed = opts.process
+            elif opts.process is None:
+                process_none = True
             elif opts.process is False:
                 process_false = True
-            else:
-                process_none = True
 
-        # Determine effective requirements using union logic:
-        # - True always wins
-        # - Fixed value next
-        # - If ANY handler needs it (via auto-detect from format), collect
-        #   This includes handlers in _collect_options with None, AND
-        #   handlers without CollectOptions entry entirely
-        # - False only wins when no other handler needs the data
-
-        # Check if Rust's need comes from handlers outside _collect_options
-        # (e.g., default console handler before remove() is called).
-        # Since add() now always creates entries, untracked handlers should be rare.
-        # If any handler explicitly said False, they're accounted for, so don't assume untracked.
-        caller_untracked = (
-            self._inner.needs_caller_info
-            and not caller_true
-            and caller_fixed is None
-            and not caller_none
-            and not caller_false
-        )
-        thread_untracked = (
-            self._inner.needs_thread_info
-            and not thread_true
-            and thread_fixed is None
-            and not thread_none
-            and not thread_false
-        )
-        process_untracked = (
-            self._inner.needs_process_info
-            and not process_true
-            and process_fixed is None
-            and not process_none
-            and not process_false
-        )
+        # Priority:
+        # 1. True - explicit dynamic collection request
+        # 2. Rust needs + any handler has None (auto-detect) - collect dynamically
+        #    This handles callbacks (which add auto-detect entries) and format auto-detection
+        # 3. Fixed value - use when no auto-detect handler requires dynamic collection
+        # 4. False - explicit disable, respected when no other handler needs it
+        # 5. else - don't collect
 
         # Caller
         if caller_true:
             needs_caller: bool | CallerInfo = True
+        elif self._inner.needs_caller_info and caller_none:
+            # At least one handler uses auto-detect and Rust says it's needed
+            needs_caller = True
         elif caller_fixed is not None:
+            # No auto-detect handler needs it, use fixed value
             needs_caller = caller_fixed
-        elif caller_none and self._inner.needs_caller_info:
-            # Handler with None (auto-detect) in _collect_options needs caller
-            needs_caller = True
-        elif caller_untracked:
-            # Handler without CollectOptions entry needs caller (union: collect)
-            needs_caller = True
         elif caller_false:
+            # Explicit False, no auto-detect or True to override
             needs_caller = False
         else:
             needs_caller = False
@@ -326,12 +305,10 @@ class Logger:
         # Thread
         if thread_true:
             needs_thread: bool | ThreadInfo = True
+        elif self._inner.needs_thread_info and thread_none:
+            needs_thread = True
         elif thread_fixed is not None:
             needs_thread = thread_fixed
-        elif thread_none and self._inner.needs_thread_info:
-            needs_thread = True
-        elif thread_untracked:
-            needs_thread = True
         elif thread_false:
             needs_thread = False
         else:
@@ -340,12 +317,10 @@ class Logger:
         # Process
         if process_true:
             needs_process: bool | ProcessInfo = True
+        elif self._inner.needs_process_info and process_none:
+            needs_process = True
         elif process_fixed is not None:
             needs_process = process_fixed
-        elif process_none and self._inner.needs_process_info:
-            needs_process = True
-        elif process_untracked:
-            needs_process = True
         elif process_false:
             needs_process = False
         else:
@@ -701,6 +676,8 @@ class Logger:
             )
             # Always track handler with CollectOptions (default to auto-detect if not specified)
             self._collect_options[handler_id] = collect if collect is not None else CollectOptions()
+            # Track as callback for proper removal via remove()
+            self._callback_ids.add(handler_id)
             return handler_id
 
         if sink is sys.stdout or sink is sys.stderr:
@@ -832,12 +809,17 @@ class Logger:
             >>> logger.remove(handler_id)  # Remove specific handler
             >>> logger.remove()  # Remove ALL handlers (including console)
         """
+        # If this is a callable sink, redirect to remove_callback
+        if handler_id is not None and handler_id in self._callback_ids:
+            return self.remove_callback(handler_id)
+
         result = self._inner.remove(handler_id)
-        # Clean up CollectOptions
+        # Clean up CollectOptions and callback_ids
         if handler_id is not None:
             self._collect_options.pop(handler_id, None)
         else:
             self._collect_options.clear()
+            self._callback_ids.clear()
         return result
 
     def bind(self, **kwargs: Any) -> Logger:
@@ -855,7 +837,12 @@ class Logger:
             # Output includes extra context in JSON mode
         """
         new_inner = self._inner.bind(kwargs)
-        return Logger(new_inner, patchers=self._patchers.copy(), collect_options=self._collect_options)
+        return Logger(
+            new_inner,
+            patchers=self._patchers.copy(),
+            collect_options=self._collect_options,
+            callback_ids=self._callback_ids,
+        )
 
     @contextmanager
     def contextualize(self, **kwargs: Any) -> Generator[Logger, None, None]:
@@ -948,7 +935,11 @@ class Logger:
             >>> logger.remove_callback(callback_id)
         """
         resolved_level = _to_log_level(level) if level is not None else None
-        return self._inner.add_callback(callback, resolved_level)
+        callback_id = self._inner.add_callback(callback, resolved_level)
+        # Track with default CollectOptions (auto-detect) so callbacks get full records
+        self._collect_options[callback_id] = CollectOptions()
+        self._callback_ids.add(callback_id)
+        return callback_id
 
     def remove_callback(self, callback_id: int) -> bool:
         """Remove a callback by ID.
@@ -960,8 +951,9 @@ class Logger:
             True if callback was removed, False otherwise.
         """
         result = self._inner.remove_callback(callback_id)
-        # Clean up CollectOptions for this callback (callable sinks use callback IDs)
+        # Clean up CollectOptions and callback_ids tracking
         self._collect_options.pop(callback_id, None)
+        self._callback_ids.discard(callback_id)
         return result
 
     def patch(self, patcher: Callable[[dict[str, Any]], None]) -> Logger:
@@ -990,7 +982,12 @@ class Logger:
         """
         new_patchers = self._patchers.copy()
         new_patchers.append(patcher)
-        return Logger(self._inner, patchers=new_patchers, collect_options=self._collect_options)
+        return Logger(
+            self._inner,
+            patchers=new_patchers,
+            collect_options=self._collect_options,
+            callback_ids=self._callback_ids,
+        )
 
     def configure(
         self,
