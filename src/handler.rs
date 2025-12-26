@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use chrono::{DateTime, Local};
 use pyo3::prelude::*;
 
-use crate::format::FormatConfig;
+use crate::format::{FormatConfig, TokenRequirements};
 use crate::level::{LevelInfo, LogLevel};
 use crate::sink::FileSink;
 
@@ -293,6 +293,14 @@ impl HandlerType {
         match self {
             HandlerType::Console(h) => h.level,
             HandlerType::File(h) => h.level,
+        }
+    }
+
+    /// Get token requirements for this handler
+    pub fn requirements(&self) -> TokenRequirements {
+        match self {
+            HandlerType::Console(h) => h.format.requirements(),
+            HandlerType::File(h) => h.format.requirements(),
         }
     }
 }

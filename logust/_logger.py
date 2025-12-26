@@ -10,15 +10,68 @@ import threading
 import traceback
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, TextIO
 
 from ._logust import LogLevel, PyLogger
+from ._template import ParsedCallableTemplate
+
+
+@dataclass(frozen=True, slots=True)
+class CallerInfo:
+    """Fixed caller information for log records.
+
+    Used with CollectOptions to provide static caller info instead of
+    dynamically collecting it from the call stack.
+    """
+
+    name: str = ""
+    function: str = ""
+    line: int = 0
+    file: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class ThreadInfo:
+    """Fixed thread information for log records.
+
+    Used with CollectOptions to provide static thread info instead of
+    dynamically collecting it.
+    """
+
+    name: str = ""
+    id: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class ProcessInfo:
+    """Fixed process information for log records.
+
+    Used with CollectOptions to provide static process info instead of
+    dynamically collecting it.
+    """
+
+    name: str = ""
+    id: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class CollectOptions:
+    """Options for controlling information collection per handler.
+
+    Each field can be:
+    - None: Auto-detect from format string (default)
+    - False: Never collect this info (use empty defaults)
+    - True: Always collect this info
+    - CallerInfo/ThreadInfo/ProcessInfo: Use fixed values
+    """
+
+    caller: bool | CallerInfo | None = None
+    thread: bool | ThreadInfo | None = None
+    process: bool | ProcessInfo | None = None
 
 if TYPE_CHECKING:
     from ._opt import OptLogger
-
-# Pre-compiled regex for format specifiers (e.g., {level:<8})
-_FORMAT_SPEC_PATTERN = re.compile(r"\{(\w+(?:\[\w+\])?):([^}]+)\}")
 
 # Cached process info (invalidated on fork by checking PID)
 _CACHED_PROCESS_INFO: tuple[str, int] | None = None
@@ -141,9 +194,58 @@ class Logger:
         self,
         inner: PyLogger,
         patchers: list[Callable[[dict[str, Any]], None]] | None = None,
+        collect_options: dict[int, CollectOptions] | None = None,
     ) -> None:
         self._inner = inner
         self._patchers = patchers or []
+        # Handler ID -> CollectOptions mapping (shared between bound loggers)
+        self._collect_options: dict[int, CollectOptions] = collect_options or {}
+
+    def _compute_effective_requirements(
+        self,
+    ) -> tuple[bool | CallerInfo, bool | ThreadInfo, bool | ProcessInfo]:
+        """Compute effective requirements considering CollectOptions.
+
+        Returns:
+            Tuple of (caller_requirement, thread_requirement, process_requirement)
+            where each is True (collect), False (skip), or a fixed value instance.
+        """
+        # Start with Rust-detected requirements
+        needs_caller: bool | CallerInfo = self._inner.needs_caller_info
+        needs_thread: bool | ThreadInfo = self._inner.needs_thread_info
+        needs_process: bool | ProcessInfo = self._inner.needs_process_info
+
+        if not self._collect_options:
+            return needs_caller, needs_thread, needs_process
+
+        # Check all CollectOptions for overrides
+        # Logic: explicit False/fixed values override auto-detection
+        for opts in self._collect_options.values():
+            # Caller
+            if opts.caller is False:
+                needs_caller = False
+            elif isinstance(opts.caller, CallerInfo):
+                needs_caller = opts.caller
+            elif opts.caller is True:
+                needs_caller = True
+
+            # Thread
+            if opts.thread is False:
+                needs_thread = False
+            elif isinstance(opts.thread, ThreadInfo):
+                needs_thread = opts.thread
+            elif opts.thread is True:
+                needs_thread = True
+
+            # Process
+            if opts.process is False:
+                needs_process = False
+            elif isinstance(opts.process, ProcessInfo):
+                needs_process = opts.process
+            elif opts.process is True:
+                needs_process = True
+
+        return needs_caller, needs_thread, needs_process
 
     def _log_with_level(
         self,
@@ -155,9 +257,42 @@ class Logger:
     ) -> None:
         if level_value < self._inner.min_level:
             return
-        name, function, line, file = _get_caller_info(depth + 1)
-        thread_name, thread_id = _get_thread_info()
-        process_name, process_id = _get_process_info()
+
+        # Compute effective requirements considering CollectOptions
+        needs_caller, needs_thread, needs_process = self._compute_effective_requirements()
+
+        # Handle caller info
+        if isinstance(needs_caller, CallerInfo):
+            # Use fixed values
+            name, function, line, file = (
+                needs_caller.name,
+                needs_caller.function,
+                needs_caller.line,
+                needs_caller.file,
+            )
+        elif needs_caller:
+            name, function, line, file = _get_caller_info(depth + 1)
+        else:
+            name, function, line, file = None, None, None, None
+
+        # Handle thread info
+        if isinstance(needs_thread, ThreadInfo):
+            # Use fixed values
+            thread_name, thread_id = needs_thread.name, needs_thread.id
+        elif needs_thread:
+            thread_name, thread_id = _get_thread_info()
+        else:
+            thread_name, thread_id = None, None
+
+        # Handle process info
+        if isinstance(needs_process, ProcessInfo):
+            # Use fixed values
+            process_name, process_id = needs_process.name, needs_process.id
+        elif needs_process:
+            process_name, process_id = _get_process_info()
+        else:
+            process_name, process_id = None, None
+
         getattr(self._inner, level_name)(
             str(message),
             exception=exception,
@@ -300,9 +435,38 @@ class Logger:
             self._log_with_level(level, _LEVEL_VALUE_MAP[level], message, exception, _depth + 1)
             return
 
-        name, function, line, file = _get_caller_info(_depth + 1)
-        thread_name, thread_id = _get_thread_info()
-        process_name, process_id = _get_process_info()
+        # Compute effective requirements considering CollectOptions
+        needs_caller, needs_thread, needs_process = self._compute_effective_requirements()
+
+        # Handle caller info
+        if isinstance(needs_caller, CallerInfo):
+            name, function, line, file = (
+                needs_caller.name,
+                needs_caller.function,
+                needs_caller.line,
+                needs_caller.file,
+            )
+        elif needs_caller:
+            name, function, line, file = _get_caller_info(_depth + 1)
+        else:
+            name, function, line, file = None, None, None, None
+
+        # Handle thread info
+        if isinstance(needs_thread, ThreadInfo):
+            thread_name, thread_id = needs_thread.name, needs_thread.id
+        elif needs_thread:
+            thread_name, thread_id = _get_thread_info()
+        else:
+            thread_name, thread_id = None, None
+
+        # Handle process info
+        if isinstance(needs_process, ProcessInfo):
+            process_name, process_id = needs_process.name, needs_process.id
+        elif needs_process:
+            process_name, process_id = _get_process_info()
+        else:
+            process_name, process_id = None, None
+
         self._inner.log(
             level,
             str(message),
@@ -372,6 +536,7 @@ class Logger:
         filter: Callable[[dict[str, Any]], bool] | None = None,
         enqueue: bool = False,
         colorize: bool | None = None,
+        collect: CollectOptions | None = None,
     ) -> int:
         """Add a handler (file, console, or callable sink).
 
@@ -396,6 +561,8 @@ class Logger:
             colorize: Enable ANSI color codes (for console sinks).
                       If None, auto-detect based on whether sink is a TTY.
                       Only valid for console sinks.
+            collect: Options for controlling information collection.
+                     Can override auto-detection from format string.
 
         Returns:
             Handler ID for later removal.
@@ -409,18 +576,22 @@ class Logger:
             >>> logger.add(sys.stdout, colorize=True)  # Colored console output
             >>> logger.add(sys.stderr, serialize=True)  # JSON to stderr
             >>> logger.add(lambda msg: print(msg))  # Callable sink
+            >>> logger.add("app.log", collect=CollectOptions(caller=False))
         """
         import sys
 
         # Check for callable sink first (before checking stdout/stderr)
         if callable(sink) and sink not in (sys.stdout, sys.stderr):
-            return self._add_callable_sink(
+            handler_id = self._add_callable_sink(
                 sink,
                 level=level,
                 format=format,
                 serialize=serialize,
                 filter=filter,
             )
+            if collect is not None:
+                self._collect_options[handler_id] = collect
+            return handler_id
 
         if sink is sys.stdout or sink is sys.stderr:
             stream_name = "stdout" if sink is sys.stdout else "stderr"
@@ -429,7 +600,7 @@ class Logger:
             if resolved_colorize is None:
                 resolved_colorize = sink.isatty() if hasattr(sink, "isatty") else False
 
-            return self._inner.add_console(
+            handler_id = self._inner.add_console(
                 stream=stream_name,
                 level=resolved_level,
                 format=format,
@@ -437,6 +608,9 @@ class Logger:
                 filter=filter,
                 colorize=resolved_colorize,
             )
+            if collect is not None:
+                self._collect_options[handler_id] = collect
+            return handler_id
 
         # At this point sink must be a path (str or PathLike), not TextIO
         sink_str = os.fspath(sink)  # type: ignore[arg-type]
@@ -447,7 +621,7 @@ class Logger:
         if retention is not None:
             retention_str = str(retention) if isinstance(retention, int) else retention
 
-        return self._inner.add(
+        handler_id = self._inner.add(
             sink_str,
             level=resolved_level,
             format=format,
@@ -458,6 +632,9 @@ class Logger:
             filter=filter,
             enqueue=enqueue,
         )
+        if collect is not None:
+            self._collect_options[handler_id] = collect
+        return handler_id
 
     def _add_callable_sink(
         self,
@@ -487,7 +664,10 @@ class Logger:
 
         resolved_level = _to_log_level(level) if level is not None else None
         default_format = "{time} | {level:<8} | {name}:{function}:{line} - {message}"
-        template = format or default_format
+        template_str = format or default_format
+
+        # Pre-parse template for efficient single-pass formatting
+        parsed_template = ParsedCallableTemplate(template_str)
 
         def callback_wrapper(record: dict[str, Any]) -> None:
             # Apply filter if provided
@@ -518,8 +698,8 @@ class Logger:
                         json_record["exception"] = record["exception"]
                     formatted = json.dumps(json_record)
                 else:
-                    # Format using template
-                    formatted = self._format_record(record, template)
+                    # Format using pre-parsed template (single-pass, ~1-2us faster)
+                    formatted = parsed_template.format(record)
 
                 sink(formatted)
             except Exception:
@@ -527,83 +707,6 @@ class Logger:
                 pass
 
         return self._inner.add_callback(callback_wrapper, resolved_level)
-
-    def _format_record(self, record: dict[str, Any], template: str) -> str:
-        """Format a record dict into a string using a template.
-
-        Args:
-            record: Log record dictionary.
-            template: Format template string.
-
-        Returns:
-            Formatted log message string.
-        """
-        # Build format kwargs from record
-        format_kwargs: dict[str, Any] = {
-            "time": record.get("timestamp", ""),
-            "level": record.get("level", ""),
-            "name": record.get("name", ""),
-            "function": record.get("function", ""),
-            "line": record.get("line", 0),
-            "file": record.get("file", ""),
-            "thread": f"{record.get('thread_name', '')}:{record.get('thread_id', 0)}",
-            "process": f"{record.get('process_name', '')}:{record.get('process_id', 0)}",
-            "elapsed": record.get("elapsed", "00:00:00.000"),
-            "module": record.get("name", ""),
-        }
-
-        # Handle extra fields
-        extra = record.get("extra", {})
-        if isinstance(extra, dict):
-            for key, value in extra.items():
-                format_kwargs[f"extra[{key}]"] = value
-
-        # Get message separately (will be replaced last)
-        message = record.get("message", "")
-
-        try:
-            result = template
-
-            # Escape markers for braces in message content
-            _LBRACE = "\x00LBRACE\x00"
-            _RBRACE = "\x00RBRACE\x00"
-
-            # Step 1: Handle format specifiers (e.g., {level:<8}, {message:<50})
-            # Process ALL tokens including message to avoid double-replacement issues
-            def replace_with_spec(match: re.Match[str]) -> str:
-                key = match.group(1)
-                spec = match.group(2)
-                if key == "message":
-                    try:
-                        formatted = f"{{:{spec}}}".format(message)
-                        # Escape braces to prevent token replacement in Step 2
-                        return formatted.replace("{", _LBRACE).replace("}", _RBRACE)
-                    except (ValueError, KeyError):
-                        escaped = str(message)
-                        return escaped.replace("{", _LBRACE).replace("}", _RBRACE)
-                value = format_kwargs.get(key, "")
-                try:
-                    return f"{{:{spec}}}".format(value)
-                except (ValueError, KeyError):
-                    return str(value)
-
-            result = _FORMAT_SPEC_PATTERN.sub(replace_with_spec, result)
-
-            # Step 2: Replace simple tokens (except message)
-            for key, value in format_kwargs.items():
-                result = result.replace(f"{{{key}}}", str(value))
-
-            # Step 3: Replace {message} LAST (simple replacement only)
-            # This prevents {level} etc in message content from being replaced
-            result = result.replace("{message}", str(message))
-
-            # Step 4: Restore escaped braces from {message:spec}
-            result = result.replace(_LBRACE, "{").replace(_RBRACE, "}")
-
-            return result
-        except Exception:
-            # Fallback to basic format
-            return f"{record.get('level', '')} | {message}"
 
     def remove(self, handler_id: int | None = None) -> bool:
         """Remove a handler by ID, or all handlers if None.
@@ -619,7 +722,13 @@ class Logger:
             >>> logger.remove(handler_id)  # Remove specific handler
             >>> logger.remove()  # Remove ALL handlers (including console)
         """
-        return self._inner.remove(handler_id)
+        result = self._inner.remove(handler_id)
+        # Clean up CollectOptions
+        if handler_id is not None:
+            self._collect_options.pop(handler_id, None)
+        else:
+            self._collect_options.clear()
+        return result
 
     def bind(self, **kwargs: Any) -> Logger:
         """Create a new logger with bound context values.
@@ -636,7 +745,7 @@ class Logger:
             # Output includes extra context in JSON mode
         """
         new_inner = self._inner.bind(kwargs)
-        return Logger(new_inner, patchers=self._patchers.copy())
+        return Logger(new_inner, patchers=self._patchers.copy(), collect_options=self._collect_options)
 
     @contextmanager
     def contextualize(self, **kwargs: Any) -> Generator[Logger, None, None]:

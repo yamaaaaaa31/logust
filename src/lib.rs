@@ -9,10 +9,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use parking_lot::RwLock;
+use pyo3::intern;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
-pub use format::{FormatConfig, LOGGER_START_TIME, format_elapsed};
+pub use format::{FormatConfig, LOGGER_START_TIME, TokenRequirements, format_elapsed};
 pub use handler::{
     CallerInfo, ConsoleHandler, FileHandler, HandlerEntry, HandlerType, LogRecord, ProcessInfo,
     ThreadInfo, empty_context,
@@ -37,6 +38,8 @@ pub struct PyLogger {
     callbacks: Arc<RwLock<Vec<CallbackEntry>>>,
     /// Cached minimum log level across all handlers and callbacks (shared via Arc)
     cached_min_level: Arc<AtomicU32>,
+    /// Cached token requirements across all handlers and callbacks (shared via Arc)
+    cached_requirements: Arc<RwLock<TokenRequirements>>,
 }
 
 #[pymethods]
@@ -49,6 +52,7 @@ impl PyLogger {
             context: empty_context(),
             callbacks: Arc::new(RwLock::new(Vec::new())),
             cached_min_level: Arc::new(AtomicU32::new(u32::MAX)),
+            cached_requirements: Arc::new(RwLock::new(TokenRequirements::default())),
         };
 
         let console_level = level.unwrap_or_default();
@@ -60,6 +64,7 @@ impl PyLogger {
         };
         logger.handlers.write().push(entry);
         logger.update_min_level_cache();
+        logger.update_requirements_cache();
 
         logger
     }
@@ -116,6 +121,7 @@ impl PyLogger {
 
         self.handlers.write().push(entry);
         self.update_min_level_cache();
+        self.update_requirements_cache();
         Ok(id)
     }
 
@@ -152,6 +158,7 @@ impl PyLogger {
 
         self.handlers.write().push(entry);
         self.update_min_level_cache();
+        self.update_requirements_cache();
         Ok(id)
     }
 
@@ -173,6 +180,7 @@ impl PyLogger {
         };
         drop(handlers); // Release lock before updating cache
         self.update_min_level_cache();
+        self.update_requirements_cache();
         result
     }
 
@@ -197,6 +205,7 @@ impl PyLogger {
             context: new_context,
             callbacks: Arc::clone(&self.callbacks),
             cached_min_level: Arc::clone(&self.cached_min_level),
+            cached_requirements: Arc::clone(&self.cached_requirements),
         };
         Py::new(py, new_logger)
     }
@@ -248,6 +257,24 @@ impl PyLogger {
         self.cached_min_level.load(Ordering::Relaxed)
     }
 
+    /// Check if any handler/callback needs caller info (name, function, line, file)
+    #[getter]
+    fn needs_caller_info(&self) -> bool {
+        self.cached_requirements.read().needs_caller
+    }
+
+    /// Check if any handler/callback needs thread info
+    #[getter]
+    fn needs_thread_info(&self) -> bool {
+        self.cached_requirements.read().needs_thread
+    }
+
+    /// Check if any handler/callback needs process info
+    #[getter]
+    fn needs_process_info(&self) -> bool {
+        self.cached_requirements.read().needs_process
+    }
+
     /// Disable console output
     fn disable(&self) {
         {
@@ -255,6 +282,7 @@ impl PyLogger {
             handlers.retain(|entry| !matches!(entry.handler, HandlerType::Console(_)));
         }
         self.update_min_level_cache();
+        self.update_requirements_cache();
     }
 
     /// Enable console output with given level
@@ -279,6 +307,7 @@ impl PyLogger {
             }
         }
         self.update_min_level_cache();
+        self.update_requirements_cache();
     }
 
     /// Check if console output is enabled
@@ -313,6 +342,7 @@ impl PyLogger {
         };
         self.callbacks.write().push(entry);
         self.update_min_level_cache();
+        self.update_requirements_cache();
         id
     }
 
@@ -328,6 +358,7 @@ impl PyLogger {
             }
         };
         self.update_min_level_cache();
+        self.update_requirements_cache();
         result
     }
 
@@ -652,6 +683,33 @@ impl PyLogger {
             .store(min_handler.min(min_callback), Ordering::Relaxed);
     }
 
+    /// Update the cached token requirements across all handlers and callbacks
+    fn update_requirements_cache(&self) {
+        let handlers = self.handlers.read();
+        let callbacks = self.callbacks.read();
+
+        let mut combined = TokenRequirements::default();
+
+        // Merge requirements from all handlers
+        for entry in handlers.iter() {
+            let req = entry.handler.requirements();
+            combined = combined.merge(&req);
+        }
+
+        // If we have any callbacks, we need all info (callbacks receive full record dict)
+        if !callbacks.is_empty() {
+            combined = TokenRequirements::all();
+        }
+
+        // If we have any filters, we also need all info
+        let has_filters = handlers.iter().any(|e| e.filter.is_some());
+        if has_filters {
+            combined = TokenRequirements::all();
+        }
+
+        *self.cached_requirements.write() = combined;
+    }
+
     /// Internal log method - optimized for performance
     #[inline]
     #[allow(clippy::too_many_arguments)]
@@ -752,34 +810,35 @@ impl PyLogger {
         }
 
         // Basic fields (override any extra with same name)
-        let _ = dict.set_item("level", level.as_str());
-        let _ = dict.set_item("message", &record.message);
-        let _ = dict.set_item("timestamp", record.timestamp.to_rfc3339());
+        // Using intern!() to cache key strings for better performance
+        let _ = dict.set_item(intern!(py, "level"), level.as_str());
+        let _ = dict.set_item(intern!(py, "message"), &record.message);
+        let _ = dict.set_item(intern!(py, "timestamp"), record.timestamp.to_rfc3339());
 
         // Caller info
-        let _ = dict.set_item("name", &record.caller.name);
-        let _ = dict.set_item("function", &record.caller.function);
-        let _ = dict.set_item("line", record.caller.line);
-        let _ = dict.set_item("file", &record.caller.file);
+        let _ = dict.set_item(intern!(py, "name"), &record.caller.name);
+        let _ = dict.set_item(intern!(py, "function"), &record.caller.function);
+        let _ = dict.set_item(intern!(py, "line"), record.caller.line);
+        let _ = dict.set_item(intern!(py, "file"), &record.caller.file);
 
         // Thread/process info
-        let _ = dict.set_item("thread_name", &record.thread.name);
-        let _ = dict.set_item("thread_id", record.thread.id);
-        let _ = dict.set_item("process_name", &record.process.name);
-        let _ = dict.set_item("process_id", record.process.id);
+        let _ = dict.set_item(intern!(py, "thread_name"), &record.thread.name);
+        let _ = dict.set_item(intern!(py, "thread_id"), record.thread.id);
+        let _ = dict.set_item(intern!(py, "process_name"), &record.process.name);
+        let _ = dict.set_item(intern!(py, "process_id"), record.process.id);
 
         // Elapsed time
         let _ = dict.set_item(
-            "elapsed",
+            intern!(py, "elapsed"),
             format_elapsed(&LOGGER_START_TIME, &record.timestamp),
         );
 
         // Extra as nested dict (for {extra[key]} access)
-        let _ = dict.set_item("extra", extra_dict);
+        let _ = dict.set_item(intern!(py, "extra"), extra_dict);
 
         // Exception
         if let Some(ref exc) = record.exception {
-            let _ = dict.set_item("exception", exc.as_str());
+            let _ = dict.set_item(intern!(py, "exception"), exc.as_str());
         }
 
         dict
@@ -882,17 +941,18 @@ impl PyLogger {
     #[inline]
     fn build_custom_record_dict<'py>(py: Python<'py>, record: &LogRecord) -> Bound<'py, PyDict> {
         let dict = PyDict::new(py);
+        // Using intern!() to cache key strings for better performance
         if let Some(ref info) = record.level_info {
-            let _ = dict.set_item("level", &info.name);
-            let _ = dict.set_item("level_no", info.no);
+            let _ = dict.set_item(intern!(py, "level"), &info.name);
+            let _ = dict.set_item(intern!(py, "level_no"), info.no);
         }
-        let _ = dict.set_item("message", &record.message);
-        let _ = dict.set_item("timestamp", record.timestamp.to_rfc3339());
+        let _ = dict.set_item(intern!(py, "message"), &record.message);
+        let _ = dict.set_item(intern!(py, "timestamp"), record.timestamp.to_rfc3339());
         for (key, value) in record.extra.iter() {
             let _ = dict.set_item(key.as_str(), value.as_str());
         }
         if let Some(ref exc) = record.exception {
-            let _ = dict.set_item("exception", exc.as_str());
+            let _ = dict.set_item(intern!(py, "exception"), exc.as_str());
         }
         dict
     }
