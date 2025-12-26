@@ -196,13 +196,22 @@ class Logger:
         patchers: list[Callable[[dict[str, Any]], None]] | None = None,
         collect_options: dict[int, CollectOptions] | None = None,
         callback_ids: set[int] | None = None,
+        filter_ids: set[int] | None = None,
+        raw_callback_ids: set[int] | None = None,
     ) -> None:
         self._inner = inner
-        self._patchers = patchers or []
+        self._patchers = patchers if patchers is not None else []
         # Handler ID -> CollectOptions mapping (shared between bound loggers)
-        self._collect_options: dict[int, CollectOptions] = collect_options or {}
-        # Track callback IDs for proper removal via remove()
-        self._callback_ids: set[int] = callback_ids or set()
+        # Use explicit None check to preserve empty containers (empty dict/set are falsy)
+        self._collect_options: dict[int, CollectOptions] = (
+            collect_options if collect_options is not None else {}
+        )
+        # Track callable sink IDs for proper removal via remove()
+        self._callback_ids: set[int] = callback_ids if callback_ids is not None else set()
+        # Track handlers with Rust-side filters to force full record collection
+        self._filter_ids: set[int] = filter_ids if filter_ids is not None else set()
+        # Track raw callbacks (via add_callback) that need full records
+        self._raw_callback_ids: set[int] = raw_callback_ids if raw_callback_ids is not None else set()
 
     def _compute_effective_requirements(
         self,
@@ -281,23 +290,27 @@ class Logger:
 
         # Priority:
         # 1. True - explicit dynamic collection request
-        # 2. Rust needs + any handler has None (auto-detect) - collect dynamically
-        #    This handles callbacks (which add auto-detect entries) and format auto-detection
-        # 3. Fixed value - use when no auto-detect handler requires dynamic collection
-        # 4. False - explicit disable, respected when no other handler needs it
+        # 2. Rust needs + auto-detect/callback/filter - dynamic collection
+        # 3. Fixed value - use when no dynamic requirement exists
+        # 4. False - explicit disable, respected when nothing else needs it
         # 5. else - don't collect
+
+        # Raw callbacks/filters need full records (TokenRequirements::all() in Rust)
+        # Note: _raw_callback_ids are callbacks via add_callback() that receive raw records
+        # _callback_ids are callable sinks via add() that receive formatted strings
+        needs_full_records = len(self._raw_callback_ids) > 0 or len(self._filter_ids) > 0
+        needs_dynamic_caller = (self._inner.needs_caller_info and caller_none) or needs_full_records
+        needs_dynamic_thread = (self._inner.needs_thread_info and thread_none) or needs_full_records
+        needs_dynamic_process = (self._inner.needs_process_info and process_none) or needs_full_records
 
         # Caller
         if caller_true:
             needs_caller: bool | CallerInfo = True
-        elif self._inner.needs_caller_info and caller_none:
-            # At least one handler uses auto-detect and Rust says it's needed
+        elif needs_dynamic_caller:
             needs_caller = True
         elif caller_fixed is not None:
-            # No auto-detect handler needs it, use fixed value
             needs_caller = caller_fixed
         elif caller_false:
-            # Explicit False, no auto-detect or True to override
             needs_caller = False
         else:
             needs_caller = False
@@ -305,7 +318,7 @@ class Logger:
         # Thread
         if thread_true:
             needs_thread: bool | ThreadInfo = True
-        elif self._inner.needs_thread_info and thread_none:
+        elif needs_dynamic_thread:
             needs_thread = True
         elif thread_fixed is not None:
             needs_thread = thread_fixed
@@ -317,7 +330,7 @@ class Logger:
         # Process
         if process_true:
             needs_process: bool | ProcessInfo = True
-        elif self._inner.needs_process_info and process_none:
+        elif needs_dynamic_process:
             needs_process = True
         elif process_fixed is not None:
             needs_process = process_fixed
@@ -660,8 +673,7 @@ class Logger:
             >>> logger.add("app.log", collect=CollectOptions(caller=False))
 
         Note:
-            For callable sinks, use remove_callback() instead of remove() to
-            remove the handler.
+            Callable sinks can be removed with remove() or remove_callback().
         """
         import sys
 
@@ -678,6 +690,9 @@ class Logger:
             self._collect_options[handler_id] = collect if collect is not None else CollectOptions()
             # Track as callback for proper removal via remove()
             self._callback_ids.add(handler_id)
+            # Track handlers with filters (they need full records)
+            if filter is not None:
+                self._filter_ids.add(handler_id)
             return handler_id
 
         if sink is sys.stdout or sink is sys.stderr:
@@ -697,6 +712,8 @@ class Logger:
             )
             # Always track handler with CollectOptions (default to auto-detect if not specified)
             self._collect_options[handler_id] = collect if collect is not None else CollectOptions()
+            if filter is not None:
+                self._filter_ids.add(handler_id)
             return handler_id
 
         # At this point sink must be a path (str or PathLike), not TextIO
@@ -721,6 +738,8 @@ class Logger:
         )
         # Always track handler with CollectOptions (default to auto-detect if not specified)
         self._collect_options[handler_id] = collect if collect is not None else CollectOptions()
+        if filter is not None:
+            self._filter_ids.add(handler_id)
         return handler_id
 
     def _add_callable_sink(
@@ -814,12 +833,20 @@ class Logger:
             return self.remove_callback(handler_id)
 
         result = self._inner.remove(handler_id)
-        # Clean up CollectOptions and callback_ids
+        # Clean up CollectOptions and tracking sets
         if handler_id is not None:
             self._collect_options.pop(handler_id, None)
+            self._filter_ids.discard(handler_id)
         else:
+            # Remove all handlers: also remove all callable sinks and raw callbacks
+            for cb_id in list(self._callback_ids):
+                self._inner.remove_callback(cb_id)
+            for cb_id in list(self._raw_callback_ids):
+                self._inner.remove_callback(cb_id)
             self._collect_options.clear()
             self._callback_ids.clear()
+            self._filter_ids.clear()
+            self._raw_callback_ids.clear()
         return result
 
     def bind(self, **kwargs: Any) -> Logger:
@@ -842,6 +869,8 @@ class Logger:
             patchers=self._patchers.copy(),
             collect_options=self._collect_options,
             callback_ids=self._callback_ids,
+            filter_ids=self._filter_ids,
+            raw_callback_ids=self._raw_callback_ids,
         )
 
     @contextmanager
@@ -938,7 +967,8 @@ class Logger:
         callback_id = self._inner.add_callback(callback, resolved_level)
         # Track with default CollectOptions (auto-detect) so callbacks get full records
         self._collect_options[callback_id] = CollectOptions()
-        self._callback_ids.add(callback_id)
+        # Track as raw callback (receives raw records, needs full records)
+        self._raw_callback_ids.add(callback_id)
         return callback_id
 
     def remove_callback(self, callback_id: int) -> bool:
@@ -951,9 +981,11 @@ class Logger:
             True if callback was removed, False otherwise.
         """
         result = self._inner.remove_callback(callback_id)
-        # Clean up CollectOptions and callback_ids tracking
+        # Clean up CollectOptions and tracking sets
         self._collect_options.pop(callback_id, None)
         self._callback_ids.discard(callback_id)
+        self._filter_ids.discard(callback_id)
+        self._raw_callback_ids.discard(callback_id)
         return result
 
     def patch(self, patcher: Callable[[dict[str, Any]], None]) -> Logger:
@@ -987,6 +1019,8 @@ class Logger:
             patchers=new_patchers,
             collect_options=self._collect_options,
             callback_ids=self._callback_ids,
+            filter_ids=self._filter_ids,
+            raw_callback_ids=self._raw_callback_ids,
         )
 
     def configure(

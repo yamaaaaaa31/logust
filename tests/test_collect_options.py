@@ -378,6 +378,29 @@ class TestCallbackWithCollectOptions:
         assert "function" in record
         assert record["function"] == "test_callback_with_caller_false_still_collects"
 
+    def test_callable_sink_with_caller_false_respects_option(self) -> None:
+        """Callable sink with caller=False should respect the option.
+
+        Unlike raw callbacks (via add_callback), callable sinks receive
+        formatted strings and should respect CollectOptions.
+        """
+        inner = PyLogger(LogLevel.Trace)
+        logger = Logger(inner)
+        logger.remove()
+
+        messages: list[str] = []
+        logger.add(
+            lambda msg: messages.append(msg),
+            format="{function} | {message}",
+            collect=CollectOptions(caller=False),
+        )
+
+        logger.info("Test message")
+
+        assert len(messages) == 1
+        # With caller=False, function should be empty
+        assert " | Test message" in messages[0]
+
 
 class TestFixedValueVsAutoDectect:
     """Test that auto-detect wins over fixed value when another handler needs dynamic info."""
@@ -416,3 +439,154 @@ class TestFixedValueVsAutoDectect:
         # Should have actual function name, not "fixed_func"
         assert "test_fixed_value_does_not_block_auto_detect" in content2
         assert "fixed_func" not in content2
+
+
+class TestRustNeedsOverridesCallerFalse:
+    """Test that Rust's needs_* overrides caller_false from CollectOptions."""
+
+    def test_callback_needs_overrides_caller_false(self) -> None:
+        """Callback needs full records, so caller=False should be ignored.
+
+        When callbacks are registered, Rust sets TokenRequirements::all(),
+        meaning it needs caller info. CollectOptions(caller=False) should
+        not prevent collection.
+        """
+        inner = PyLogger(LogLevel.Trace)
+        logger = Logger(inner)
+        logger.remove()
+
+        records: list[dict] = []
+
+        def capture(record: dict) -> None:
+            records.append(record.copy())
+
+        # Register callback - Rust now needs full records
+        logger.add_callback(capture)
+
+        # Add callable sink with caller=False - should NOT prevent collection
+        messages: list[str] = []
+        logger.add(
+            lambda msg: messages.append(msg),
+            format="{message}",
+            collect=CollectOptions(caller=False),
+        )
+
+        logger.info("Test message")
+
+        # Callback should still receive caller info despite caller=False on callable sink
+        assert len(records) == 1
+        assert records[0]["function"] == "test_callback_needs_overrides_caller_false"
+
+
+class TestFilterWithCollectOptions:
+    """Test that filters always receive full records regardless of CollectOptions."""
+
+    def test_filter_with_caller_false_still_collects(self, tmp_path: Path) -> None:
+        """Filter with caller=False should still get caller info."""
+        inner = PyLogger(LogLevel.Trace)
+        logger = Logger(inner)
+        logger.remove()
+
+        log_file = tmp_path / "filtered.log"
+
+        def requires_function(record: dict[str, Any]) -> bool:
+            return bool(record.get("function"))
+
+        logger.add(
+            str(log_file),
+            format="{function} | {message}",
+            filter=requires_function,
+            collect=CollectOptions(caller=False),
+        )
+
+        logger.info("Test message")
+        logger.complete()
+
+        content = log_file.read_text()
+        assert "test_filter_with_caller_false_still_collects" in content
+
+
+class TestRemoveAllClearsCallbacks:
+    """Test that remove(None) also removes callbacks."""
+
+    def test_remove_all_removes_callbacks(self) -> None:
+        """remove(None) should remove all handlers AND all callbacks."""
+        inner = PyLogger(LogLevel.Trace)
+        logger = Logger(inner)
+
+        messages: list[str] = []
+
+        # Add a callable sink
+        logger.add(lambda msg: messages.append(msg), format="{message}")
+
+        logger.info("Before remove")
+        assert len(messages) == 1
+
+        # Remove ALL handlers (including callable sinks)
+        logger.remove()
+
+        # After remove(None), callable sink should be removed
+        logger.info("After remove")
+        assert len(messages) == 1  # Still 1, not 2
+
+    def test_remove_all_clears_tracking(self) -> None:
+        """remove(None) should clear both _collect_options and _callback_ids."""
+        inner = PyLogger(LogLevel.Trace)
+        logger = Logger(inner)
+        logger.disable()  # Suppress output
+
+        # Add multiple callable sinks
+        logger.add(lambda msg: None, format="{message}")
+        logger.add(lambda msg: None, format="{message}")
+
+        assert len(logger._callback_ids) == 2
+        assert len(logger._collect_options) == 2
+
+        # Remove all
+        logger.remove()
+
+        # All tracking should be cleared
+        assert len(logger._callback_ids) == 0
+        assert len(logger._collect_options) == 0
+
+
+class TestEmptyContainerPreservation:
+    """Test that empty containers are preserved in bind/patch."""
+
+    def test_bind_preserves_empty_containers(self) -> None:
+        """bind() should preserve empty _callback_ids and _collect_options."""
+        inner = PyLogger(LogLevel.Trace)
+        logger = Logger(inner)
+        logger.disable()
+
+        # Logger starts with empty containers
+        assert logger._callback_ids == set()
+        assert logger._collect_options == {}
+        assert logger._filter_ids == set()
+
+        # bind() should pass the SAME empty containers, not new ones
+        bound = logger.bind(user="alice")
+
+        # Containers should be the exact same objects (identity check)
+        assert bound._callback_ids is logger._callback_ids
+        assert bound._collect_options is logger._collect_options
+        assert bound._filter_ids is logger._filter_ids
+
+    def test_patch_preserves_empty_containers(self) -> None:
+        """patch() should preserve empty _callback_ids and _collect_options."""
+        inner = PyLogger(LogLevel.Trace)
+        logger = Logger(inner)
+        logger.disable()
+
+        # Logger starts with empty containers
+        assert logger._callback_ids == set()
+        assert logger._collect_options == {}
+        assert logger._filter_ids == set()
+
+        # patch() should pass the SAME empty containers, not new ones
+        patched = logger.patch(lambda r: None)
+
+        # Containers should be the exact same objects (identity check)
+        assert patched._callback_ids is logger._callback_ids
+        assert patched._collect_options is logger._collect_options
+        assert patched._filter_ids is logger._filter_ids
