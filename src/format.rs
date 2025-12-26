@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::LazyLock;
 
 use chrono::{DateTime, Local};
 use colored::Color;
@@ -6,6 +7,21 @@ use serde::Serialize;
 
 use crate::handler::LogRecord;
 use crate::level::LogLevel;
+
+/// Logger initialization time for elapsed calculation
+static LOGGER_START_TIME: LazyLock<DateTime<Local>> = LazyLock::new(Local::now);
+
+/// Format elapsed time as HH:MM:SS.mmm
+fn format_elapsed(start: &DateTime<Local>, now: &DateTime<Local>) -> String {
+    let duration = *now - *start;
+    let total_millis = duration.num_milliseconds();
+    let millis = (total_millis % 1000) as u32;
+    let total_secs = (total_millis / 1000) as u64;
+    let hours = total_secs / 3600;
+    let minutes = (total_secs % 3600) / 60;
+    let seconds = total_secs % 60;
+    format!("{:02}:{:02}:{:02}.{:03}", hours, minutes, seconds, millis)
+}
 
 /// Apply ANSI color code to text (thread-safe, no global state)
 #[inline]
@@ -79,6 +95,16 @@ pub enum FormatToken {
     Function,
     /// {line} placeholder - line number
     Line,
+    /// {elapsed} placeholder - time since logger start
+    Elapsed,
+    /// {thread} placeholder - thread name:id
+    Thread,
+    /// {process} placeholder - process name:id
+    Process,
+    /// {file} placeholder - source file basename
+    File,
+    /// {module} placeholder - module name (alias for Name)
+    Module,
 }
 
 /// Parse a template string into tokens
@@ -114,6 +140,16 @@ fn parse_template(template: &str) -> Vec<FormatToken> {
                 tokens.push(FormatToken::Function);
             } else if placeholder == "line" {
                 tokens.push(FormatToken::Line);
+            } else if placeholder == "elapsed" {
+                tokens.push(FormatToken::Elapsed);
+            } else if placeholder == "thread" {
+                tokens.push(FormatToken::Thread);
+            } else if placeholder == "process" {
+                tokens.push(FormatToken::Process);
+            } else if placeholder == "file" {
+                tokens.push(FormatToken::File);
+            } else if placeholder == "module" {
+                tokens.push(FormatToken::Module);
             } else if let Some(width_str) = placeholder.strip_prefix("level:<") {
                 if let Ok(width) = width_str.parse::<usize>() {
                     tokens.push(FormatToken::LevelWidth(width));
@@ -378,6 +414,45 @@ impl FormatConfig {
                         result.push_str(&line_str);
                     }
                 }
+                FormatToken::Elapsed => {
+                    let elapsed = format_elapsed(&LOGGER_START_TIME, &record.timestamp);
+                    if colorize {
+                        result.push_str(&dim_text(&elapsed));
+                    } else {
+                        result.push_str(&elapsed);
+                    }
+                }
+                FormatToken::Thread => {
+                    let thread_str = format!("{}:{}", record.thread.name, record.thread.id);
+                    if colorize {
+                        result.push_str(&cyan_text(&thread_str));
+                    } else {
+                        result.push_str(&thread_str);
+                    }
+                }
+                FormatToken::Process => {
+                    let process_str = format!("{}:{}", record.process.name, record.process.id);
+                    if colorize {
+                        result.push_str(&cyan_text(&process_str));
+                    } else {
+                        result.push_str(&process_str);
+                    }
+                }
+                FormatToken::File => {
+                    if colorize {
+                        result.push_str(&cyan_text(&record.caller.file));
+                    } else {
+                        result.push_str(&record.caller.file);
+                    }
+                }
+                FormatToken::Module => {
+                    // Alias for Name
+                    if colorize {
+                        result.push_str(&cyan_text(&record.caller.name));
+                    } else {
+                        result.push_str(&record.caller.name);
+                    }
+                }
             }
         }
 
@@ -479,8 +554,15 @@ impl FormatConfig {
                         result.push_str(value);
                     }
                 }
-                // These tokens are not available in this context (no caller info)
-                FormatToken::Name | FormatToken::Function | FormatToken::Line => {}
+                // These tokens are not available in this context (no caller/thread/process info)
+                FormatToken::Name
+                | FormatToken::Function
+                | FormatToken::Line
+                | FormatToken::Elapsed
+                | FormatToken::Thread
+                | FormatToken::Process
+                | FormatToken::File
+                | FormatToken::Module => {}
             }
         }
 

@@ -16,23 +16,52 @@ if TYPE_CHECKING:
     from ._opt import OptLogger
 
 
-def _get_caller_info(depth: int = 1) -> tuple[str, str, int]:
-    """Get caller information (module name, function name, line number).
+def _get_caller_info(depth: int = 1) -> tuple[str, str, int, str]:
+    """Get caller information (module name, function name, line number, file basename).
 
     Args:
         depth: Number of frames to go back from the caller of this function
 
     Returns:
-        Tuple of (module_name, function_name, line_number)
+        Tuple of (module_name, function_name, line_number, file_basename)
     """
     try:
         frame = sys._getframe(depth + 1)  # +1 to skip this function itself
         code = frame.f_code
         # Get module name from globals, or use filename as fallback
         module_name = frame.f_globals.get("__name__", code.co_filename)
-        return (module_name, code.co_name, frame.f_lineno)
+        # Get file basename (not full path)
+        file_basename = os.path.basename(code.co_filename)
+        return (module_name, code.co_name, frame.f_lineno, file_basename)
     except (ValueError, AttributeError):
-        return ("", "", 0)
+        return ("", "", 0, "")
+
+
+def _get_thread_info() -> tuple[str, int]:
+    """Get current thread name and ID.
+
+    Returns:
+        Tuple of (thread_name, thread_id)
+    """
+    import threading
+
+    thread = threading.current_thread()
+    return (thread.name, thread.ident or 0)
+
+
+def _get_process_info() -> tuple[str, int]:
+    """Get current process name and ID.
+
+    Returns:
+        Tuple of (process_name, process_id)
+    """
+    try:
+        import multiprocessing
+
+        name = multiprocessing.current_process().name
+    except Exception:
+        name = "MainProcess"
+    return (name, os.getpid())
 
 
 def _to_log_level(level: LogLevel | str) -> LogLevel:
@@ -108,9 +137,20 @@ class Logger:
     ) -> None:
         if level_value < self._inner.min_level:
             return
-        name, function, line = _get_caller_info(depth + 1)
+        name, function, line, file = _get_caller_info(depth + 1)
+        thread_name, thread_id = _get_thread_info()
+        process_name, process_id = _get_process_info()
         getattr(self._inner, level_name)(
-            str(message), exception=exception, name=name, function=function, line=line
+            str(message),
+            exception=exception,
+            name=name,
+            function=function,
+            line=line,
+            file=file,
+            thread_name=thread_name,
+            thread_id=thread_id,
+            process_name=process_name,
+            process_id=process_id,
         )
 
     def trace(
@@ -242,9 +282,21 @@ class Logger:
             self._log_with_level(level, _LEVEL_VALUE_MAP[level], message, exception, _depth + 1)
             return
 
-        name, function, line = _get_caller_info(_depth + 1)
+        name, function, line, file = _get_caller_info(_depth + 1)
+        thread_name, thread_id = _get_thread_info()
+        process_name, process_id = _get_process_info()
         self._inner.log(
-            level, str(message), exception=exception, name=name, function=function, line=line
+            level,
+            str(message),
+            exception=exception,
+            name=name,
+            function=function,
+            line=line,
+            file=file,
+            thread_name=thread_name,
+            thread_id=thread_id,
+            process_name=process_name,
+            process_id=process_id,
         )
 
     def set_level(self, level: LogLevel | str) -> None:
@@ -291,7 +343,7 @@ class Logger:
 
     def add(
         self,
-        sink: str | os.PathLike[str] | TextIO,
+        sink: str | os.PathLike[str] | TextIO | Callable[[str], Any],
         *,
         level: LogLevel | str | None = None,
         format: str | None = None,
@@ -303,10 +355,11 @@ class Logger:
         enqueue: bool = False,
         colorize: bool | None = None,
     ) -> int:
-        """Add a handler (file or console sink).
+        """Add a handler (file, console, or callable sink).
 
         Args:
-            sink: Path to the log file (str or Path object), or sys.stdout/sys.stderr.
+            sink: Path to the log file (str or Path object), sys.stdout/sys.stderr,
+                  or a callable that receives formatted log messages.
             level: Minimum log level for this handler.
             format: Custom format string (e.g., "{time} | {level} | {message}").
             rotation: Rotation strategy ("daily", "hourly", "500 MB", etc.)
@@ -337,8 +390,19 @@ class Logger:
             >>> logger.add("async.log", enqueue=True)  # Async writes
             >>> logger.add(sys.stdout, colorize=True)  # Colored console output
             >>> logger.add(sys.stderr, serialize=True)  # JSON to stderr
+            >>> logger.add(lambda msg: print(msg))  # Callable sink
         """
         import sys
+
+        # Check for callable sink first (before checking stdout/stderr)
+        if callable(sink) and sink not in (sys.stdout, sys.stderr):
+            return self._add_callable_sink(
+                sink,
+                level=level,
+                format=format,
+                serialize=serialize,
+                filter=filter,
+            )
 
         if sink is sys.stdout or sink is sys.stderr:
             stream_name = "stdout" if sink is sys.stdout else "stderr"
@@ -376,6 +440,128 @@ class Logger:
             filter=filter,
             enqueue=enqueue,
         )
+
+    def _add_callable_sink(
+        self,
+        sink: Callable[[str], Any],
+        *,
+        level: LogLevel | str | None = None,
+        format: str | None = None,
+        serialize: bool = False,
+        filter: Callable[[dict[str, Any]], bool] | None = None,
+    ) -> int:
+        """Add a callable as a sink (internal method).
+
+        The callable will receive formatted log messages as strings.
+
+        Args:
+            sink: Callable that receives formatted log messages.
+            level: Minimum log level for this handler.
+            format: Custom format string.
+            serialize: Output as JSON instead of text format.
+            filter: Optional callable that receives a record dict and returns
+                    True if the record should be logged, False to skip.
+
+        Returns:
+            Handler ID for later removal.
+        """
+        import json
+
+        resolved_level = _to_log_level(level) if level is not None else None
+        default_format = "{time} | {level:<8} | {name}:{function}:{line} - {message}"
+        template = format or default_format
+
+        def callback_wrapper(record: dict[str, Any]) -> None:
+            # Apply filter if provided
+            if filter is not None and not filter(record):
+                return
+
+            try:
+                if serialize:
+                    # Output as JSON matching Rust's format_record_json
+                    json_record: dict[str, Any] = {
+                        "time": record.get("timestamp", ""),
+                        "level": record.get("level", ""),
+                        "message": record.get("message", ""),
+                    }
+                    # Only include non-empty caller info
+                    if record.get("name"):
+                        json_record["name"] = record["name"]
+                    if record.get("function"):
+                        json_record["function"] = record["function"]
+                    if record.get("line"):
+                        json_record["line"] = record["line"]
+                    # Include extra if non-empty
+                    extra = record.get("extra", {})
+                    if extra:
+                        json_record["extra"] = extra
+                    # Include exception if present
+                    if record.get("exception"):
+                        json_record["exception"] = record["exception"]
+                    formatted = json.dumps(json_record)
+                else:
+                    # Format using template
+                    formatted = self._format_record(record, template)
+
+                sink(formatted)
+            except Exception:
+                # Silently ignore sink errors (like loguru behavior)
+                pass
+
+        return self._inner.add_callback(callback_wrapper, resolved_level)
+
+    def _format_record(self, record: dict[str, Any], template: str) -> str:
+        """Format a record dict into a string using a template.
+
+        Args:
+            record: Log record dictionary.
+            template: Format template string.
+
+        Returns:
+            Formatted log message string.
+        """
+        # Build format kwargs from record
+        format_kwargs = {
+            "time": record.get("timestamp", ""),
+            "level": record.get("level", ""),
+            "message": record.get("message", ""),
+            "name": record.get("name", ""),
+            "function": record.get("function", ""),
+            "line": record.get("line", 0),
+            "file": record.get("file", ""),
+            "thread": f"{record.get('thread_name', '')}:{record.get('thread_id', 0)}",
+            "process": f"{record.get('process_name', '')}:{record.get('process_id', 0)}",
+            "elapsed": record.get("elapsed", "00:00:00.000"),
+            "module": record.get("name", ""),
+        }
+
+        # Handle extra fields
+        extra = record.get("extra", {})
+        if isinstance(extra, dict):
+            for key, value in extra.items():
+                format_kwargs[f"extra[{key}]"] = value
+
+        # Format with width specifiers support (e.g., {level:<8})
+        try:
+            # Simple template substitution
+            result = template
+            for key, value in format_kwargs.items():
+                # Handle {key} and {key:<N} patterns
+                result = result.replace(f"{{{key}}}", str(value))
+
+                # Handle width specifiers like {level:<8}
+                import re
+
+                pattern = re.compile(rf"\{{{key}:([^}}]+)\}}")
+                for match in pattern.finditer(result):
+                    format_spec = match.group(1)
+                    formatted_value = f"{{:{format_spec}}}".format(value)
+                    result = result.replace(match.group(0), formatted_value)
+
+            return result
+        except Exception:
+            # Fallback to basic format
+            return f"{record.get('level', '')} | {record.get('message', '')}"
 
     def remove(self, handler_id: int | None = None) -> bool:
         """Remove a handler by ID, or all handlers if None.

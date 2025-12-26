@@ -14,7 +14,8 @@ use pyo3::types::PyDict;
 
 pub use format::FormatConfig;
 pub use handler::{
-    CallerInfo, ConsoleHandler, FileHandler, HandlerEntry, HandlerType, LogRecord, empty_context,
+    CallerInfo, ConsoleHandler, FileHandler, HandlerEntry, HandlerType, LogRecord, ProcessInfo,
+    ThreadInfo, empty_context,
 };
 pub use level::{LevelInfo, LogLevel, get_level_by_no, get_level_info, register_level};
 pub use sink::{FileSink, FileSinkConfig, Rotation};
@@ -330,7 +331,8 @@ impl PyLogger {
         result
     }
 
-    #[pyo3(signature = (message, exception=None, name=None, function=None, line=None))]
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (message, exception=None, name=None, function=None, line=None, file=None, thread_name=None, thread_id=None, process_name=None, process_id=None))]
     fn trace(
         &self,
         message: String,
@@ -338,11 +340,29 @@ impl PyLogger {
         name: Option<String>,
         function: Option<String>,
         line: Option<u32>,
+        file: Option<String>,
+        thread_name: Option<String>,
+        thread_id: Option<u64>,
+        process_name: Option<String>,
+        process_id: Option<u32>,
     ) {
-        self._log(LogLevel::Trace, message, exception, name, function, line);
+        self._log(
+            LogLevel::Trace,
+            message,
+            exception,
+            name,
+            function,
+            line,
+            file,
+            thread_name,
+            thread_id,
+            process_name,
+            process_id,
+        );
     }
 
-    #[pyo3(signature = (message, exception=None, name=None, function=None, line=None))]
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (message, exception=None, name=None, function=None, line=None, file=None, thread_name=None, thread_id=None, process_name=None, process_id=None))]
     fn debug(
         &self,
         message: String,
@@ -350,11 +370,29 @@ impl PyLogger {
         name: Option<String>,
         function: Option<String>,
         line: Option<u32>,
+        file: Option<String>,
+        thread_name: Option<String>,
+        thread_id: Option<u64>,
+        process_name: Option<String>,
+        process_id: Option<u32>,
     ) {
-        self._log(LogLevel::Debug, message, exception, name, function, line);
+        self._log(
+            LogLevel::Debug,
+            message,
+            exception,
+            name,
+            function,
+            line,
+            file,
+            thread_name,
+            thread_id,
+            process_name,
+            process_id,
+        );
     }
 
-    #[pyo3(signature = (message, exception=None, name=None, function=None, line=None))]
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (message, exception=None, name=None, function=None, line=None, file=None, thread_name=None, thread_id=None, process_name=None, process_id=None))]
     fn info(
         &self,
         message: String,
@@ -362,11 +400,29 @@ impl PyLogger {
         name: Option<String>,
         function: Option<String>,
         line: Option<u32>,
+        file: Option<String>,
+        thread_name: Option<String>,
+        thread_id: Option<u64>,
+        process_name: Option<String>,
+        process_id: Option<u32>,
     ) {
-        self._log(LogLevel::Info, message, exception, name, function, line);
+        self._log(
+            LogLevel::Info,
+            message,
+            exception,
+            name,
+            function,
+            line,
+            file,
+            thread_name,
+            thread_id,
+            process_name,
+            process_id,
+        );
     }
 
-    #[pyo3(signature = (message, exception=None, name=None, function=None, line=None))]
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (message, exception=None, name=None, function=None, line=None, file=None, thread_name=None, thread_id=None, process_name=None, process_id=None))]
     fn success(
         &self,
         message: String,
@@ -374,11 +430,29 @@ impl PyLogger {
         name: Option<String>,
         function: Option<String>,
         line: Option<u32>,
+        file: Option<String>,
+        thread_name: Option<String>,
+        thread_id: Option<u64>,
+        process_name: Option<String>,
+        process_id: Option<u32>,
     ) {
-        self._log(LogLevel::Success, message, exception, name, function, line);
+        self._log(
+            LogLevel::Success,
+            message,
+            exception,
+            name,
+            function,
+            line,
+            file,
+            thread_name,
+            thread_id,
+            process_name,
+            process_id,
+        );
     }
 
-    #[pyo3(signature = (message, exception=None, name=None, function=None, line=None))]
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (message, exception=None, name=None, function=None, line=None, file=None, thread_name=None, thread_id=None, process_name=None, process_id=None))]
     fn warning(
         &self,
         message: String,
@@ -386,11 +460,29 @@ impl PyLogger {
         name: Option<String>,
         function: Option<String>,
         line: Option<u32>,
+        file: Option<String>,
+        thread_name: Option<String>,
+        thread_id: Option<u64>,
+        process_name: Option<String>,
+        process_id: Option<u32>,
     ) {
-        self._log(LogLevel::Warning, message, exception, name, function, line);
+        self._log(
+            LogLevel::Warning,
+            message,
+            exception,
+            name,
+            function,
+            line,
+            file,
+            thread_name,
+            thread_id,
+            process_name,
+            process_id,
+        );
     }
 
-    #[pyo3(signature = (message, exception=None, name=None, function=None, line=None))]
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (message, exception=None, name=None, function=None, line=None, file=None, thread_name=None, thread_id=None, process_name=None, process_id=None))]
     fn error(
         &self,
         message: String,
@@ -398,11 +490,29 @@ impl PyLogger {
         name: Option<String>,
         function: Option<String>,
         line: Option<u32>,
+        file: Option<String>,
+        thread_name: Option<String>,
+        thread_id: Option<u64>,
+        process_name: Option<String>,
+        process_id: Option<u32>,
     ) {
-        self._log(LogLevel::Error, message, exception, name, function, line);
+        self._log(
+            LogLevel::Error,
+            message,
+            exception,
+            name,
+            function,
+            line,
+            file,
+            thread_name,
+            thread_id,
+            process_name,
+            process_id,
+        );
     }
 
-    #[pyo3(signature = (message, exception=None, name=None, function=None, line=None))]
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (message, exception=None, name=None, function=None, line=None, file=None, thread_name=None, thread_id=None, process_name=None, process_id=None))]
     fn fail(
         &self,
         message: String,
@@ -410,11 +520,29 @@ impl PyLogger {
         name: Option<String>,
         function: Option<String>,
         line: Option<u32>,
+        file: Option<String>,
+        thread_name: Option<String>,
+        thread_id: Option<u64>,
+        process_name: Option<String>,
+        process_id: Option<u32>,
     ) {
-        self._log(LogLevel::Fail, message, exception, name, function, line);
+        self._log(
+            LogLevel::Fail,
+            message,
+            exception,
+            name,
+            function,
+            line,
+            file,
+            thread_name,
+            thread_id,
+            process_name,
+            process_id,
+        );
     }
 
-    #[pyo3(signature = (message, exception=None, name=None, function=None, line=None))]
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (message, exception=None, name=None, function=None, line=None, file=None, thread_name=None, thread_id=None, process_name=None, process_id=None))]
     fn critical(
         &self,
         message: String,
@@ -422,8 +550,25 @@ impl PyLogger {
         name: Option<String>,
         function: Option<String>,
         line: Option<u32>,
+        file: Option<String>,
+        thread_name: Option<String>,
+        thread_id: Option<u64>,
+        process_name: Option<String>,
+        process_id: Option<u32>,
     ) {
-        self._log(LogLevel::Critical, message, exception, name, function, line);
+        self._log(
+            LogLevel::Critical,
+            message,
+            exception,
+            name,
+            function,
+            line,
+            file,
+            thread_name,
+            thread_id,
+            process_name,
+            process_id,
+        );
     }
 
     /// Register a custom log level
@@ -441,7 +586,8 @@ impl PyLogger {
     }
 
     /// Log at any level (built-in or custom)
-    #[pyo3(signature = (level_arg, message, exception=None, name=None, function=None, line=None))]
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (level_arg, message, exception=None, name=None, function=None, line=None, file=None, thread_name=None, thread_id=None, process_name=None, process_id=None))]
     fn log(
         &self,
         level_arg: &Bound<'_, PyAny>,
@@ -450,6 +596,11 @@ impl PyLogger {
         name: Option<String>,
         function: Option<String>,
         line: Option<u32>,
+        file: Option<String>,
+        thread_name: Option<String>,
+        thread_id: Option<u64>,
+        process_name: Option<String>,
+        process_id: Option<u32>,
     ) -> PyResult<()> {
         let level_info = if let Ok(lvl_name) = level_arg.extract::<String>() {
             get_level_info(&lvl_name)
@@ -462,7 +613,19 @@ impl PyLogger {
         let info = level_info
             .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("Invalid log level"))?;
 
-        self._log_custom(info, message, exception, name, function, line);
+        self._log_custom(
+            info,
+            message,
+            exception,
+            name,
+            function,
+            line,
+            file,
+            thread_name,
+            thread_id,
+            process_name,
+            process_id,
+        );
         Ok(())
     }
 }
@@ -491,6 +654,7 @@ impl PyLogger {
 
     /// Internal log method - optimized for performance
     #[inline]
+    #[allow(clippy::too_many_arguments)]
     fn _log(
         &self,
         level: LogLevel,
@@ -499,6 +663,11 @@ impl PyLogger {
         name: Option<String>,
         function: Option<String>,
         line: Option<u32>,
+        file: Option<String>,
+        thread_name: Option<String>,
+        thread_id: Option<u64>,
+        process_name: Option<String>,
+        process_id: Option<u32>,
     ) {
         let handlers = self.handlers.read();
         let callbacks = self.callbacks.read();
@@ -516,13 +685,24 @@ impl PyLogger {
 
         let extra = Arc::clone(&self.context);
 
-        let caller = CallerInfo::new(
+        let caller = CallerInfo::with_file(
             name.unwrap_or_default(),
             function.unwrap_or_default(),
             line.unwrap_or(0),
+            file.unwrap_or_default(),
         );
 
-        let record = LogRecord::with_caller(level, message, extra, exception, caller);
+        let thread = ThreadInfo {
+            name: thread_name.unwrap_or_default(),
+            id: thread_id.unwrap_or(0),
+        };
+
+        let process = ProcessInfo {
+            name: process_name.unwrap_or_default(),
+            id: process_id.unwrap_or(0),
+        };
+
+        let record = LogRecord::with_all(level, message, extra, exception, caller, thread, process);
 
         if needs_gil {
             Python::attach(|py| {
@@ -576,6 +756,7 @@ impl PyLogger {
 
     /// Internal log method for custom levels - optimized
     #[inline]
+    #[allow(clippy::too_many_arguments)]
     fn _log_custom(
         &self,
         level_info: LevelInfo,
@@ -584,6 +765,11 @@ impl PyLogger {
         name: Option<String>,
         function: Option<String>,
         line: Option<u32>,
+        file: Option<String>,
+        thread_name: Option<String>,
+        thread_id: Option<u64>,
+        process_name: Option<String>,
+        process_id: Option<u32>,
     ) {
         let handlers = self.handlers.read();
         let callbacks = self.callbacks.read();
@@ -604,18 +790,31 @@ impl PyLogger {
 
         let extra = Arc::clone(&self.context);
 
-        let caller = CallerInfo::new(
+        let caller = CallerInfo::with_file(
             name.unwrap_or_default(),
             function.unwrap_or_default(),
             line.unwrap_or(0),
+            file.unwrap_or_default(),
         );
 
-        let record = LogRecord::with_custom_level_and_caller(
+        let thread = ThreadInfo {
+            name: thread_name.unwrap_or_default(),
+            id: thread_id.unwrap_or(0),
+        };
+
+        let process = ProcessInfo {
+            name: process_name.unwrap_or_default(),
+            id: process_id.unwrap_or(0),
+        };
+
+        let record = LogRecord::with_custom_level_full(
             level_info.clone(),
             message,
             extra,
             exception,
             caller,
+            thread,
+            process,
         );
 
         if needs_gil {
