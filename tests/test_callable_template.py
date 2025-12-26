@@ -309,3 +309,67 @@ class TestParsedCallableTemplateEdgeCases:
         }
         result = template.format(record)
         assert result == "test.py:100"
+
+
+class TestExtraKeyPatterns:
+    """Test that extra keys with special characters work."""
+
+    def test_extra_key_with_hyphen(self) -> None:
+        """Extra key with hyphen should work."""
+        template = ParsedCallableTemplate("{extra[user-id]} | {message}")
+        record = {
+            "message": "Test",
+            "extra": {"user-id": "abc-123"},
+        }
+        result = template.format(record)
+        assert result == "abc-123 | Test"
+
+    def test_extra_key_with_dot(self) -> None:
+        """Extra key with dot should work."""
+        template = ParsedCallableTemplate("{extra[user.name]} | {message}")
+        record = {
+            "message": "Test",
+            "extra": {"user.name": "Alice"},
+        }
+        result = template.format(record)
+        assert result == "Alice | Test"
+
+    def test_extra_key_unicode(self) -> None:
+        """Extra key with unicode should work."""
+        template = ParsedCallableTemplate("{extra[ユーザー]} | {message}")
+        record = {
+            "message": "Test",
+            "extra": {"ユーザー": "太郎"},
+        }
+        result = template.format(record)
+        assert result == "太郎 | Test"
+
+    def test_extra_key_with_underscore(self) -> None:
+        """Extra key with underscore should work (baseline)."""
+        template = ParsedCallableTemplate("{extra[user_id]} | {message}")
+        record = {
+            "message": "Test",
+            "extra": {"user_id": "123"},
+        }
+        result = template.format(record)
+        assert result == "123 | Test"
+
+    def test_extra_key_with_numbers(self) -> None:
+        """Extra key with numbers should work."""
+        template = ParsedCallableTemplate("{extra[field123]} | {message}")
+        record = {
+            "message": "Test",
+            "extra": {"field123": "value"},
+        }
+        result = template.format(record)
+        assert result == "value | Test"
+
+    def test_extra_key_complex(self) -> None:
+        """Extra key with complex pattern should work."""
+        template = ParsedCallableTemplate("{extra[x-request.id_v2]} | {message}")
+        record = {
+            "message": "Test",
+            "extra": {"x-request.id_v2": "req-123"},
+        }
+        result = template.format(record)
+        assert result == "req-123 | Test"

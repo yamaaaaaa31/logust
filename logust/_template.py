@@ -49,9 +49,10 @@ class ParsedCallableTemplate:
 
     # Token pattern: {token} or {token:spec} or {extra[key]} or {extra[key]:spec}
     # Only matches known tokens to preserve unknown patterns as literals
+    # extra[...] allows any characters except ] (supports hyphens, dots, unicode, etc.)
     _TOKEN_PATTERN = re.compile(
         r"\{(time|level|name|module|function|line|file|"
-        r"elapsed|thread|process|message|extra\[\w+\])(?::([^}]+))?\}"
+        r"elapsed|thread|process|message|extra\[[^\]]+\])(?::([^}]+))?\}"
     )
 
     def __init__(self, template: str) -> None:
