@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, TextIO
 
 from ._logust import LogLevel, PyLogger
-from ._template import ParsedCallableTemplate
+from ._template import CALLER_TOKENS, KNOWN_TOKENS, ParsedCallableTemplate
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,13 +72,10 @@ class CollectOptions:
 
 
 # Token pattern for format analysis (matches known tokens only)
+# Built from KNOWN_TOKENS to ensure consistency with ParsedCallableTemplate
 _FORMAT_TOKEN_PATTERN = re.compile(
-    r"\{(time|level|name|module|function|line|file|"
-    r"elapsed|thread|process|message|extra\[[^\]]+\])(?::[^}]+)?\}"
+    r"\{(" + "|".join(re.escape(t) for t in KNOWN_TOKENS) + r"|extra\[[^\]]+\])(?::[^}]+)?\}"
 )
-
-# Tokens that require caller info collection
-_CALLER_TOKENS = frozenset({"name", "module", "function", "line", "file"})
 
 
 def _collect_options_from_format(format_str: str) -> CollectOptions:
@@ -102,7 +99,7 @@ def _collect_options_from_format(format_str: str) -> CollectOptions:
             key = "extra"
         used_tokens.add(key)
 
-    needs_caller = bool(used_tokens & _CALLER_TOKENS)
+    needs_caller = bool(used_tokens & CALLER_TOKENS)
     needs_thread = "thread" in used_tokens
     needs_process = "process" in used_tokens
 

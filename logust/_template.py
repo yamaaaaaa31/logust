@@ -13,6 +13,25 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     pass
 
+# Known format tokens (shared with _logger.py for auto-detect)
+# Order doesn't matter; used to build regex pattern
+KNOWN_TOKENS: tuple[str, ...] = (
+    "time",
+    "level",
+    "name",
+    "module",
+    "function",
+    "line",
+    "file",
+    "elapsed",
+    "thread",
+    "process",
+    "message",
+)
+
+# Tokens that require caller info collection
+CALLER_TOKENS: frozenset[str] = frozenset({"name", "module", "function", "line", "file"})
+
 
 @dataclass(frozen=True, slots=True)
 class LiteralSegment:
@@ -50,9 +69,9 @@ class ParsedCallableTemplate:
     # Token pattern: {token} or {token:spec} or {extra[key]} or {extra[key]:spec}
     # Only matches known tokens to preserve unknown patterns as literals
     # extra[...] allows any characters except ] (supports hyphens, dots, unicode, etc.)
+    # Built from KNOWN_TOKENS to ensure consistency with auto-detect
     _TOKEN_PATTERN = re.compile(
-        r"\{(time|level|name|module|function|line|file|"
-        r"elapsed|thread|process|message|extra\[[^\]]+\])(?::([^}]+))?\}"
+        r"\{(" + "|".join(re.escape(t) for t in KNOWN_TOKENS) + r"|extra\[[^\]]+\])(?::([^}]+))?\}"
     )
 
     def __init__(self, template: str) -> None:
