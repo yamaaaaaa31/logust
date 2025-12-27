@@ -6,7 +6,7 @@ mod sink;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use parking_lot::RwLock;
 use pyo3::intern;
@@ -42,6 +42,8 @@ pub struct PyLogger {
     cached_requirements: Arc<RwLock<TokenRequirements>>,
     /// Cached token requirements for handlers only (excludes callbacks)
     cached_handler_requirements: Arc<RwLock<TokenRequirements>>,
+    /// Cached flag: whether any handler has a filter (shared via Arc)
+    cached_has_filters: Arc<AtomicBool>,
 }
 
 #[pymethods]
@@ -56,6 +58,7 @@ impl PyLogger {
             cached_min_level: Arc::new(AtomicU32::new(u32::MAX)),
             cached_requirements: Arc::new(RwLock::new(TokenRequirements::default())),
             cached_handler_requirements: Arc::new(RwLock::new(TokenRequirements::default())),
+            cached_has_filters: Arc::new(AtomicBool::new(false)),
         };
 
         let console_level = level.unwrap_or_default();
@@ -210,6 +213,7 @@ impl PyLogger {
             cached_min_level: Arc::clone(&self.cached_min_level),
             cached_requirements: Arc::clone(&self.cached_requirements),
             cached_handler_requirements: Arc::clone(&self.cached_handler_requirements),
+            cached_has_filters: Arc::clone(&self.cached_has_filters),
         };
         Py::new(py, new_logger)
     }
@@ -757,6 +761,7 @@ impl PyLogger {
 
         // If we have any filters, we also need all info
         let has_filters = handlers.iter().any(|e| e.filter.is_some());
+        self.cached_has_filters.store(has_filters, Ordering::Relaxed);
         if has_filters {
             combined = TokenRequirements::all();
         }
@@ -792,7 +797,7 @@ impl PyLogger {
         }
 
         let has_callbacks = !callbacks.is_empty() && has_eligible_callback;
-        let has_filters = handlers.iter().any(|e| e.filter.is_some());
+        let has_filters = self.cached_has_filters.load(Ordering::Relaxed);
         let needs_gil = has_callbacks || has_filters;
 
         let extra = Arc::clone(&self.context);
@@ -929,7 +934,7 @@ impl PyLogger {
         }
 
         let has_callbacks = !callbacks.is_empty() && has_eligible_callback;
-        let has_filters = handlers.iter().any(|e| e.filter.is_some());
+        let has_filters = self.cached_has_filters.load(Ordering::Relaxed);
         let needs_gil = has_callbacks || has_filters;
 
         let extra = Arc::clone(&self.context);

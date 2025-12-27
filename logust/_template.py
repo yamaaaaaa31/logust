@@ -64,7 +64,7 @@ class ParsedCallableTemplate:
     Performance improvement: ~1-2us/log for callable sinks.
     """
 
-    __slots__ = ("_segments",)
+    __slots__ = ("_segments", "_needed_tokens", "_needs_extra", "_needs_thread", "_needs_process")
 
     # Token pattern: {token} or {token:spec} or {extra[key]} or {extra[key]:spec}
     # Only matches known tokens to preserve unknown patterns as literals
@@ -81,6 +81,13 @@ class ParsedCallableTemplate:
             template: Format template string.
         """
         self._segments: tuple[Segment, ...] = self._parse(template)
+        # Pre-compute which tokens are needed for lazy evaluation
+        self._needed_tokens: frozenset[str] = frozenset(
+            seg.key for seg in self._segments if isinstance(seg, TokenSegment)
+        )
+        self._needs_extra = "extra" in self._needed_tokens
+        self._needs_thread = "thread" in self._needed_tokens
+        self._needs_process = "process" in self._needed_tokens
 
     def _parse(self, template: str) -> tuple[Segment, ...]:
         """Parse template into literal and token segments.
@@ -130,35 +137,58 @@ class ParsedCallableTemplate:
             Formatted log message string.
         """
         parts: list[str] = []
-        extra = record.get("extra", {})
-        if not isinstance(extra, dict):
+
+        # Only fetch extra if needed
+        if self._needs_extra:
+            extra = record.get("extra", {})
+            if not isinstance(extra, dict):
+                extra = {}
+        else:
             extra = {}
 
-        # Build token values lazily from record
-        # Note: thread and process are formatted as "name:id"
-        token_values: dict[str, Any] = {
-            "time": record.get("timestamp", ""),
-            "level": record.get("level", ""),
-            "name": record.get("name", ""),
-            "module": record.get("name", ""),  # module is alias for name
-            "function": record.get("function", ""),
-            "line": record.get("line", 0),
-            "file": record.get("file", ""),
-            "elapsed": record.get("elapsed", "00:00:00.000"),
-            "thread": f"{record.get('thread_name', '')}:{record.get('thread_id', 0)}",
-            "process": f"{record.get('process_name', '')}:{record.get('process_id', 0)}",
-            "message": record.get("message", ""),
-        }
+        # Pre-format thread/process only if needed (avoid string formatting overhead)
+        thread_str = (
+            f"{record.get('thread_name', '')}:{record.get('thread_id', 0)}"
+            if self._needs_thread
+            else ""
+        )
+        process_str = (
+            f"{record.get('process_name', '')}:{record.get('process_id', 0)}"
+            if self._needs_process
+            else ""
+        )
 
         for seg in self._segments:
             if isinstance(seg, LiteralSegment):
                 parts.append(seg.text)
             else:
-                # TokenSegment
+                # TokenSegment - get value lazily
                 if seg.is_extra:
                     value = extra.get(seg.extra_key, "")
                 else:
-                    value = token_values.get(seg.key, "")
+                    key = seg.key
+                    if key == "time":
+                        value = record.get("timestamp", "")
+                    elif key == "level":
+                        value = record.get("level", "")
+                    elif key == "name" or key == "module":
+                        value = record.get("name", "")
+                    elif key == "function":
+                        value = record.get("function", "")
+                    elif key == "line":
+                        value = record.get("line", 0)
+                    elif key == "file":
+                        value = record.get("file", "")
+                    elif key == "elapsed":
+                        value = record.get("elapsed", "00:00:00.000")
+                    elif key == "thread":
+                        value = thread_str
+                    elif key == "process":
+                        value = process_str
+                    elif key == "message":
+                        value = record.get("message", "")
+                    else:
+                        value = ""
 
                 if seg.spec:
                     try:

@@ -10,7 +10,7 @@ A fast, Rust-powered Python logging library inspired by [loguru](https://github.
 
 ## Features
 
-- **Blazing Fast** - Rust-powered core delivers 4-21x faster performance than loguru
+- **Blazing Fast** - Rust-powered core delivers 5-23x faster performance than loguru
 - **Beautiful by Default** - Colored output with zero configuration needed
 - **Caller Information** - Automatic module, function, and line number in every log
 - **Flexible Sinks** - Output to console, files, or any callable (lambda, function)
@@ -30,21 +30,21 @@ Comparison with Python logging and loguru (10,000 log messages, all with caller 
 
 | Scenario | logging | loguru | logust | vs loguru |
 |----------|---------|--------|--------|-----------|
-| File write (sync) | 57 ms | 65 ms | **14 ms** | 5x faster |
-| Formatted messages | 56 ms | 66 ms | **15 ms** | 4x faster |
-| JSON serialize | N/A | 134 ms | **14 ms** | 9x faster |
-| Context binding | N/A | 64 ms | **14 ms** | 5x faster |
+| File write (sync) | 63 ms | 67 ms | **14 ms** | 5x faster |
+| Formatted messages | 58 ms | 66 ms | **15 ms** | 4x faster |
+| JSON serialize | N/A | 134 ms | **14 ms** | 10x faster |
+| Context binding | N/A | 65 ms | **13 ms** | 5x faster |
 
 ### Async writes
 
 | Scenario | loguru | logust | vs loguru |
 |----------|--------|--------|-----------|
-| File write (async) | 300 ms | **14 ms** | 21x faster |
+| File write (async) | 300 ms | **13 ms** | 23x faster |
 | Sync vs Async overhead | **4x slower** | **No overhead** | - |
 
 loguru's `enqueue=True` adds significant overhead due to Python's Queue. Logust uses Rust's lock-free channels, maintaining speed while offloading I/O.
 
-**Summary:** logust is **4-21x faster** than loguru with rich caller information included in every log message (sync: 4-9x, async: 21x).
+**Summary:** logust is **5-23x faster** than loguru with rich caller information included in every log message (sync: 5-10x, async: 23x).
 
 ## Installation
 

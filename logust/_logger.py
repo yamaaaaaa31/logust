@@ -238,6 +238,14 @@ class Logger:
         callback_ids: set[int] | None = None,
         filter_ids: set[int] | None = None,
         raw_callback_ids: set[int] | None = None,
+        requirements_cache_box: (
+            list[tuple[bool | CallerInfo, bool | ThreadInfo, bool | ProcessInfo] | None]
+            | None
+        ) = None,
+        aggregated_options_box: (
+            list[tuple[bool, CallerInfo | None, bool, bool, bool, ThreadInfo | None, bool, bool, bool, ProcessInfo | None, bool, bool, bool, int] | None]
+            | None
+        ) = None,
     ) -> None:
         self._inner = inner
         self._patchers = patchers if patchers is not None else []
@@ -252,40 +260,41 @@ class Logger:
         self._filter_ids: set[int] = filter_ids if filter_ids is not None else set()
         # Track raw callbacks (via add_callback) that need full records
         self._raw_callback_ids: set[int] = raw_callback_ids if raw_callback_ids is not None else set()
+        # Cached requirements in a box (list) for sharing between bound loggers
+        # Box[0] is the cached value or None if invalid
+        self._requirements_cache_box: list[
+            tuple[bool | CallerInfo, bool | ThreadInfo, bool | ProcessInfo] | None
+        ] = requirements_cache_box if requirements_cache_box is not None else [None]
+        # Cached aggregated options in a box for O(1) access during log
+        # Format: (caller_true, caller_fixed, caller_none, caller_false,
+        #          thread_true, thread_fixed, thread_none, thread_false,
+        #          process_true, process_fixed, process_none, process_false,
+        #          needs_full_records, tracked_handler_count)
+        self._aggregated_options_box: list[
+            tuple[bool, CallerInfo | None, bool, bool, bool, ThreadInfo | None, bool, bool, bool, ProcessInfo | None, bool, bool, bool, int] | None
+        ] = aggregated_options_box if aggregated_options_box is not None else [None]
 
-    def _compute_effective_requirements(
+    def _invalidate_requirements_cache(self) -> None:
+        """Invalidate all caches (call when handlers change)."""
+        self._requirements_cache_box[0] = None
+        self._aggregated_options_box[0] = None
+
+    def _get_aggregated_options(
         self,
-    ) -> tuple[bool | CallerInfo, bool | ThreadInfo, bool | ProcessInfo]:
-        """Compute effective requirements considering CollectOptions.
+    ) -> tuple[bool, CallerInfo | None, bool, bool, bool, ThreadInfo | None, bool, bool, bool, ProcessInfo | None, bool, bool, bool, int]:
+        """Get aggregated CollectOptions, computing and caching if needed.
 
-        Priority order (highest to lowest):
-        1. True - explicit request to collect dynamically
-        2. Rust needs - callbacks/filters/format require the data
-        3. Fixed value - use fixed value when no dynamic need
-        4. False/else - don't collect
-
-        Key principle: If Rust needs the data (callbacks always need full records,
-        or format requires it), we MUST collect regardless of caller=False.
-        The caller=False setting means "I don't need it for my output", not
-        "prevent collection for the entire system".
-
-        Returns:
-            Tuple of (caller_requirement, thread_requirement, process_requirement)
-            where each is True (collect), False (skip), or a fixed value instance.
+        Returns cached result or computes from _collect_options.
+        This is O(n) on first call after invalidation, O(1) thereafter.
         """
-        if not self._collect_options:
-            # No CollectOptions, use Rust-detected requirements
-            return (
-                self._inner.needs_caller_info,
-                self._inner.needs_thread_info,
-                self._inner.needs_process_info,
-            )
+        cached = self._aggregated_options_box[0]
+        if cached is not None:
+            return cached
 
-        # Track explicit settings from CollectOptions
         caller_true = False
         caller_fixed: CallerInfo | None = None
-        caller_none = False  # At least one handler uses auto-detect
-        caller_false = False  # At least one handler explicitly disabled
+        caller_none = False
+        caller_false = False
 
         thread_true = False
         thread_fixed: ThreadInfo | None = None
@@ -297,7 +306,13 @@ class Logger:
         process_none = False
         process_false = False
 
-        for opts in self._collect_options.values():
+        tracked_handler_count = 0
+
+        for handler_id, opts in self._collect_options.items():
+            # Count tracked file handlers (not callbacks)
+            if handler_id not in self._callback_ids:
+                tracked_handler_count += 1
+
             if opts.caller is True:
                 caller_true = True
             elif isinstance(opts.caller, CallerInfo):
@@ -328,27 +343,67 @@ class Logger:
             elif opts.process is False:
                 process_false = True
 
-        # Priority:
-        # 1. True - explicit dynamic collection request
-        # 2. Rust needs + auto-detect/callback/filter - dynamic collection
-        # 3. Fixed value - use when no dynamic requirement exists
-        # 4. False - explicit disable, respected when nothing else needs it
-        # 5. else - don't collect
-
-        # Raw callbacks/filters need full records (TokenRequirements::all() in Rust)
-        # Note: _raw_callback_ids are callbacks via add_callback() that receive raw records
-        # _callback_ids are callable sinks via add() that receive formatted strings
         needs_full_records = len(self._raw_callback_ids) > 0 or len(self._filter_ids) > 0
 
-        # Check if there are untracked handlers (handlers not in _collect_options).
-        # _collect_options contains file handlers and callable sinks (which are callbacks).
-        # tracked_file_handlers = handlers in _collect_options that are not callbacks
-        tracked_file_handlers = set(self._collect_options.keys()) - self._callback_ids
-        has_untracked_handlers = self._inner.handler_count > len(tracked_file_handlers)
+        result = (
+            caller_true, caller_fixed, caller_none, caller_false,
+            thread_true, thread_fixed, thread_none, thread_false,
+            process_true, process_fixed, process_none, process_false,
+            needs_full_records, tracked_handler_count,
+        )
+        self._aggregated_options_box[0] = result
+        return result
+
+    def _compute_effective_requirements(
+        self,
+    ) -> tuple[bool | CallerInfo, bool | ThreadInfo, bool | ProcessInfo]:
+        """Compute effective requirements considering CollectOptions.
+
+        Results are cached and returned on subsequent calls until invalidated.
+        Uses pre-aggregated options for O(1) computation after first call.
+
+        Priority order (highest to lowest):
+        1. True - explicit request to collect dynamically
+        2. Rust needs - callbacks/filters/format require the data
+        3. Fixed value - use fixed value when no dynamic need
+        4. False/else - don't collect
+
+        Key principle: If Rust needs the data (callbacks always need full records,
+        or format requires it), we MUST collect regardless of caller=False.
+        The caller=False setting means "I don't need it for my output", not
+        "prevent collection for the entire system".
+
+        Returns:
+            Tuple of (caller_requirement, thread_requirement, process_requirement)
+            where each is True (collect), False (skip), or a fixed value instance.
+        """
+        # Return cached result if available (O(1) hot path)
+        cached = self._requirements_cache_box[0]
+        if cached is not None:
+            return cached
+
+        if not self._collect_options:
+            # No CollectOptions, use Rust-detected requirements
+            result = (
+                self._inner.needs_caller_info,
+                self._inner.needs_thread_info,
+                self._inner.needs_process_info,
+            )
+            self._requirements_cache_box[0] = result
+            return result
+
+        # Get pre-aggregated options (O(1) if already cached)
+        (
+            caller_true, caller_fixed, caller_none, caller_false,
+            thread_true, thread_fixed, thread_none, thread_false,
+            process_true, process_fixed, process_none, process_false,
+            needs_full_records, tracked_handler_count,
+        ) = self._get_aggregated_options()
+
+        # Check if there are untracked handlers (O(1) - uses cached tracked_handler_count)
+        has_untracked_handlers = self._inner.handler_count > tracked_handler_count
 
         # If there are untracked handlers (like default console) and they need info, collect.
-        # We can't know which specific untracked handler needs what, so if any handler needs
-        # info and there are untracked handlers, we must collect to be safe.
         has_untracked_caller_need = (
             has_untracked_handlers and self._inner.needs_caller_info_for_handlers
         )
@@ -415,7 +470,10 @@ class Logger:
         else:
             needs_process = False
 
-        return needs_caller, needs_thread, needs_process
+        # Cache and return the result
+        result = (needs_caller, needs_thread, needs_process)
+        self._requirements_cache_box[0] = result
+        return result
 
     def _log_with_level(
         self,
@@ -775,6 +833,7 @@ class Logger:
             # Track handlers with filters (they need full records)
             if filter is not None:
                 self._filter_ids.add(handler_id)
+            self._invalidate_requirements_cache()
             return handler_id
 
         if sink is sys.stdout or sink is sys.stderr:
@@ -796,6 +855,7 @@ class Logger:
             self._collect_options[handler_id] = collect if collect is not None else CollectOptions()
             if filter is not None:
                 self._filter_ids.add(handler_id)
+            self._invalidate_requirements_cache()
             return handler_id
 
         # At this point sink must be a path (str or PathLike), not TextIO
@@ -822,6 +882,7 @@ class Logger:
         self._collect_options[handler_id] = collect if collect is not None else CollectOptions()
         if filter is not None:
             self._filter_ids.add(handler_id)
+        self._invalidate_requirements_cache()
         return handler_id
 
     def _add_callable_sink(
@@ -919,6 +980,7 @@ class Logger:
         if handler_id is not None:
             self._collect_options.pop(handler_id, None)
             self._filter_ids.discard(handler_id)
+            self._invalidate_requirements_cache()
         else:
             # Remove all handlers: also remove all callable sinks and raw callbacks
             # Use batch removal to avoid O(n²) cache updates
@@ -928,6 +990,7 @@ class Logger:
             self._callback_ids.clear()
             self._filter_ids.clear()
             self._raw_callback_ids.clear()
+            self._invalidate_requirements_cache()
             # Return True if handlers OR callbacks were removed
             return result or callbacks_removed > 0
         return result
@@ -954,6 +1017,8 @@ class Logger:
             callback_ids=self._callback_ids,
             filter_ids=self._filter_ids,
             raw_callback_ids=self._raw_callback_ids,
+            requirements_cache_box=self._requirements_cache_box,
+            aggregated_options_box=self._aggregated_options_box,
         )
 
     @contextmanager
@@ -1052,6 +1117,7 @@ class Logger:
         self._collect_options[callback_id] = CollectOptions()
         # Track as raw callback (receives raw records, needs full records)
         self._raw_callback_ids.add(callback_id)
+        self._invalidate_requirements_cache()
         return callback_id
 
     def remove_callback(self, callback_id: int) -> bool:
@@ -1069,6 +1135,7 @@ class Logger:
         self._callback_ids.discard(callback_id)
         self._filter_ids.discard(callback_id)
         self._raw_callback_ids.discard(callback_id)
+        self._invalidate_requirements_cache()
         return result
 
     def patch(self, patcher: Callable[[dict[str, Any]], None]) -> Logger:
@@ -1104,6 +1171,8 @@ class Logger:
             callback_ids=self._callback_ids,
             filter_ids=self._filter_ids,
             raw_callback_ids=self._raw_callback_ids,
+            requirements_cache_box=self._requirements_cache_box,
+            aggregated_options_box=self._aggregated_options_box,
         )
 
     def configure(

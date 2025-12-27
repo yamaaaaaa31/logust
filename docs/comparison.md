@@ -27,8 +27,8 @@ Results are from the included benchmark suite (`benchmarks/bench_throughput.py`)
 ### Summary
 
 ```
-logust vs loguru:  17x faster on average
-logust vs logging:  5x faster on average
+logust vs loguru:  13x faster on average
+logust vs logging: 4x faster on average
 ```
 
 Logust includes rich caller information (module, function, line) in every log message while maintaining excellent performance.
@@ -37,16 +37,16 @@ Logust includes rich caller information (module, function, line) in every log me
 
 | Scenario | logging | loguru | logust | vs loguru |
 |----------|---------|--------|--------|-----------|
-| File write (sync) | 57 ms | 67 ms | **11 ms** | 6x faster |
-| Formatted messages | 56 ms | 67 ms | **11 ms** | 6x faster |
-| JSON serialize | N/A | 137 ms | **10 ms** | 14x faster |
-| Context binding | N/A | 66 ms | **10 ms** | 7x faster |
+| File write (sync) | 63 ms | 67 ms | **14 ms** | 5x faster |
+| Formatted messages | 58 ms | 66 ms | **15 ms** | 5x faster |
+| JSON serialize | N/A | 134 ms | **14 ms** | 10x faster |
+| Context binding | N/A | 65 ms | **13 ms** | 5x faster |
 
 ### Async writes
 
 | Scenario | loguru | logust | vs loguru |
 |----------|--------|--------|-----------|
-| File write (async) | 313 ms | **10 ms** | 31x faster |
+| File write (async) | 300 ms | **13 ms** | 23x faster |
 
 ### Sync vs Async latency
 
@@ -54,8 +54,8 @@ This measures main thread time only - the true benefit of async is not blocking 
 
 | Library | Sync | Async | Effect |
 |---------|------|-------|--------|
-| loguru | 66 ms | 319 ms | **4x slower** |
-| logust | 11 ms | 11 ms | **No overhead** |
+| loguru | 65 ms | 290 ms | **4x slower** |
+| logust | 14 ms | 15 ms | **No overhead** |
 
 **Key finding**: loguru's `enqueue=True` adds significant overhead due to Python's `queue.Queue`. Logust uses Rust's lock-free crossbeam channels, maintaining speed while offloading I/O.
 
@@ -73,9 +73,9 @@ This measures main thread time only - the true benefit of async is not blocking 
 | Exception catching | Yes | Yes |
 | Lazy evaluation | Yes | Yes |
 | Async writes | Yes | Yes |
-| Callable sinks | No | Yes |
+| Callable sinks | Yes | Yes |
 | Stack info (module, function, line) | Yes | Yes |
-| Process/thread info | No | Yes |
+| Process/thread info | Yes | Yes |
 
 ## API differences
 
@@ -97,12 +97,12 @@ logger.info("Hello")
 
 - Performance and throughput are critical
 - You want a loguru-style API with fewer dependencies
-- You need rotation, retention, JSON, and async writes
+- You need rotation, retention, JSON, callable sinks, and async writes
 
 ## When to choose loguru
 
-- You need callable sinks or richer built-in record fields
 - You need full loguru compatibility for advanced features
+- You need richer built-in record fields or sink options
 
 ## Logust vs standard logging
 
