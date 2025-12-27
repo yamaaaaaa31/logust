@@ -362,6 +362,28 @@ impl PyLogger {
         result
     }
 
+    /// Remove multiple callbacks by IDs (batch operation)
+    /// More efficient than calling remove_callback multiple times
+    /// as it only updates caches once at the end.
+    fn remove_callbacks(&self, callback_ids: Vec<u64>) -> usize {
+        let removed = {
+            let mut callbacks = self.callbacks.write();
+            let mut count = 0;
+            for id in callback_ids {
+                if let Some(pos) = callbacks.iter().position(|c| c.id == id) {
+                    callbacks.remove(pos);
+                    count += 1;
+                }
+            }
+            count
+        };
+        if removed > 0 {
+            self.update_min_level_cache();
+            self.update_requirements_cache();
+        }
+        removed
+    }
+
     #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (message, exception=None, name=None, function=None, line=None, file=None, thread_name=None, thread_id=None, process_name=None, process_id=None))]
     fn trace(

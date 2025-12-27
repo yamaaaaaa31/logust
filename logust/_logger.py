@@ -70,6 +70,49 @@ class CollectOptions:
     thread: bool | ThreadInfo | None = None
     process: bool | ProcessInfo | None = None
 
+
+# Token pattern for format analysis (matches known tokens only)
+_FORMAT_TOKEN_PATTERN = re.compile(
+    r"\{(time|level|name|module|function|line|file|"
+    r"elapsed|thread|process|message|extra\[[^\]]+\])(?::[^}]+)?\}"
+)
+
+# Tokens that require caller info collection
+_CALLER_TOKENS = frozenset({"name", "module", "function", "line", "file"})
+
+
+def _collect_options_from_format(format_str: str) -> CollectOptions:
+    """Compute CollectOptions from a format string.
+
+    Analyzes which tokens are used in the format to determine
+    what information needs to be collected. This is used for
+    callable sinks to avoid relying on Rust's needs_* which
+    is polluted by callback registration.
+
+    Args:
+        format_str: Format template string.
+
+    Returns:
+        CollectOptions with explicit True/False values based on format needs.
+    """
+    used_tokens: set[str] = set()
+    for match in _FORMAT_TOKEN_PATTERN.finditer(format_str):
+        key = match.group(1)
+        if key.startswith("extra["):
+            key = "extra"
+        used_tokens.add(key)
+
+    needs_caller = bool(used_tokens & _CALLER_TOKENS)
+    needs_thread = "thread" in used_tokens
+    needs_process = "process" in used_tokens
+
+    return CollectOptions(
+        caller=needs_caller,
+        thread=needs_thread,
+        process=needs_process,
+    )
+
+
 if TYPE_CHECKING:
     from ._opt import OptLogger
 
@@ -686,8 +729,14 @@ class Logger:
                 serialize=serialize,
                 filter=filter,
             )
-            # Always track handler with CollectOptions (default to auto-detect if not specified)
-            self._collect_options[handler_id] = collect if collect is not None else CollectOptions()
+            # For callable sinks, compute CollectOptions from format if not specified
+            # This avoids relying on Rust's needs_* which is polluted by callback registration
+            if collect is not None:
+                resolved_collect = collect
+            else:
+                default_format = "{time} | {level:<8} | {name}:{function}:{line} - {message}"
+                resolved_collect = _collect_options_from_format(format or default_format)
+            self._collect_options[handler_id] = resolved_collect
             # Track as callback for proper removal via remove()
             self._callback_ids.add(handler_id)
             # Track handlers with filters (they need full records)
@@ -839,14 +888,15 @@ class Logger:
             self._filter_ids.discard(handler_id)
         else:
             # Remove all handlers: also remove all callable sinks and raw callbacks
-            for cb_id in list(self._callback_ids):
-                self._inner.remove_callback(cb_id)
-            for cb_id in list(self._raw_callback_ids):
-                self._inner.remove_callback(cb_id)
+            # Use batch removal to avoid O(n²) cache updates
+            all_callback_ids = list(self._callback_ids) + list(self._raw_callback_ids)
+            callbacks_removed = self._inner.remove_callbacks(all_callback_ids) if all_callback_ids else 0
             self._collect_options.clear()
             self._callback_ids.clear()
             self._filter_ids.clear()
             self._raw_callback_ids.clear()
+            # Return True if handlers OR callbacks were removed
+            return result or callbacks_removed > 0
         return result
 
     def bind(self, **kwargs: Any) -> Logger:

@@ -590,3 +590,167 @@ class TestEmptyContainerPreservation:
         assert patched._callback_ids is logger._callback_ids
         assert patched._collect_options is logger._collect_options
         assert patched._filter_ids is logger._filter_ids
+
+    def test_bind_preserves_raw_callback_ids(self) -> None:
+        """bind() should preserve _raw_callback_ids."""
+        inner = PyLogger(LogLevel.Trace)
+        logger = Logger(inner)
+        logger.disable()
+
+        # Add a raw callback
+        logger.add_callback(lambda r: None)
+        assert len(logger._raw_callback_ids) == 1
+
+        # bind() should share _raw_callback_ids
+        bound = logger.bind(user="alice")
+        assert bound._raw_callback_ids is logger._raw_callback_ids
+
+    def test_patch_preserves_raw_callback_ids(self) -> None:
+        """patch() should preserve _raw_callback_ids."""
+        inner = PyLogger(LogLevel.Trace)
+        logger = Logger(inner)
+        logger.disable()
+
+        # Add a raw callback
+        logger.add_callback(lambda r: None)
+        assert len(logger._raw_callback_ids) == 1
+
+        # patch() should share _raw_callback_ids
+        patched = logger.patch(lambda r: None)
+        assert patched._raw_callback_ids is logger._raw_callback_ids
+
+
+class TestCallableSinkAutoDetect:
+    """Test that callable sinks auto-detect requirements from format."""
+
+    def test_callable_sink_message_only_skips_caller(self) -> None:
+        """Callable sink with format={message} should not collect caller info.
+
+        This tests that callable sinks compute requirements from format string
+        rather than relying on Rust's needs_* which is polluted by callback
+        registration.
+        """
+        from unittest.mock import patch
+
+        inner = PyLogger(LogLevel.Trace)
+        logger = Logger(inner)
+        logger.remove()
+
+        messages: list[str] = []
+        # Format only uses {message}, no caller tokens
+        logger.add(lambda msg: messages.append(msg), format="{message}")
+
+        with patch("logust._logger._get_caller_info") as mock_caller:
+            logger.info("Test message")
+            # _get_caller_info should NOT be called because format doesn't need it
+            mock_caller.assert_not_called()
+
+        assert len(messages) == 1
+        assert messages[0] == "Test message"
+
+    def test_callable_sink_with_function_collects_caller(self) -> None:
+        """Callable sink with format containing {function} should collect caller info."""
+        from unittest.mock import patch
+
+        inner = PyLogger(LogLevel.Trace)
+        logger = Logger(inner)
+        logger.remove()
+
+        messages: list[str] = []
+        # Format uses {function}, needs caller info
+        logger.add(lambda msg: messages.append(msg), format="{function} | {message}")
+
+        with patch("logust._logger._get_caller_info") as mock_caller:
+            mock_caller.return_value = ("test_mod", "test_func", 42, "test.py")
+            logger.info("Test message")
+            # _get_caller_info SHOULD be called
+            mock_caller.assert_called_once()
+
+        assert len(messages) == 1
+        assert "test_func" in messages[0]
+
+    def test_callable_sink_collect_options_computed_from_format(self) -> None:
+        """Callable sink with collect=None should have CollectOptions computed from format."""
+        inner = PyLogger(LogLevel.Trace)
+        logger = Logger(inner)
+        logger.remove()
+
+        # Format only uses {message}
+        handler_id = logger.add(lambda msg: None, format="{message}")
+
+        # CollectOptions should be computed from format (not default auto-detect)
+        opts = logger._collect_options[handler_id]
+        assert opts.caller is False  # Not needed by format
+        assert opts.thread is False  # Not needed by format
+        assert opts.process is False  # Not needed by format
+
+    def test_callable_sink_with_thread_collects_thread(self) -> None:
+        """Callable sink with format containing {thread} should collect thread info."""
+        inner = PyLogger(LogLevel.Trace)
+        logger = Logger(inner)
+        logger.remove()
+
+        # Format uses {thread}
+        handler_id = logger.add(lambda msg: None, format="{thread} | {message}")
+
+        opts = logger._collect_options[handler_id]
+        assert opts.thread is True
+        assert opts.caller is False
+        assert opts.process is False
+
+    def test_callable_sink_explicit_collect_overrides_format(self) -> None:
+        """Explicit CollectOptions should override format-based auto-detect."""
+        inner = PyLogger(LogLevel.Trace)
+        logger = Logger(inner)
+        logger.remove()
+
+        # Format only uses {message}, but explicitly request caller info
+        handler_id = logger.add(
+            lambda msg: None,
+            format="{message}",
+            collect=CollectOptions(caller=True),
+        )
+
+        opts = logger._collect_options[handler_id]
+        # Explicit CollectOptions should be used, not computed from format
+        assert opts.caller is True
+
+
+class TestRemoveAllReturnValue:
+    """Test that remove(None) returns correct value."""
+
+    def test_remove_all_returns_true_when_callbacks_removed(self) -> None:
+        """remove(None) should return True if callbacks were removed."""
+        inner = PyLogger(LogLevel.Trace)
+        logger = Logger(inner)
+        logger.remove()  # Remove default handlers
+
+        # Add only callable sink (no file handlers)
+        logger.add(lambda msg: None, format="{message}")
+
+        # remove(None) should return True because callback was removed
+        result = logger.remove()
+        assert result is True
+
+    def test_remove_all_returns_true_when_handlers_removed(self) -> None:
+        """remove(None) should return True if handlers were removed."""
+        inner = PyLogger(LogLevel.Trace)
+        logger = Logger(inner)
+
+        # Has default console handler
+        result = logger.remove()
+        assert result is True
+
+    def test_remove_all_on_empty_logger(self) -> None:
+        """remove(None) on empty logger returns Rust's result (may be True)."""
+        inner = PyLogger(LogLevel.Trace)
+        logger = Logger(inner)
+        logger.remove()  # Remove everything first
+
+        # Verify tracking is empty
+        assert len(logger._callback_ids) == 0
+        assert len(logger._raw_callback_ids) == 0
+
+        # Second remove - Rust may return True even when empty
+        # The important thing is no error is raised
+        logger.remove()
