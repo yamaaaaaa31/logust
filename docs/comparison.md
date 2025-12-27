@@ -27,7 +27,7 @@ Results are from the included benchmark suite (`benchmarks/bench_throughput.py`)
 ### Summary
 
 ```
-logust vs loguru:  13x faster on average
+logust vs loguru:  14x faster on average
 logust vs logging: 4x faster on average
 ```
 
@@ -37,16 +37,16 @@ Logust includes rich caller information (module, function, line) in every log me
 
 | Scenario | logging | loguru | logust | vs loguru |
 |----------|---------|--------|--------|-----------|
-| File write (sync) | 63 ms | 67 ms | **14 ms** | 5x faster |
-| Formatted messages | 58 ms | 66 ms | **15 ms** | 5x faster |
-| JSON serialize | N/A | 134 ms | **14 ms** | 10x faster |
+| File write (sync) | 59 ms | 64 ms | **13 ms** | 5x faster |
+| Formatted messages | 58 ms | 67 ms | **14 ms** | 5x faster |
+| JSON serialize | N/A | 137 ms | **13 ms** | 11x faster |
 | Context binding | N/A | 65 ms | **13 ms** | 5x faster |
 
 ### Async writes
 
 | Scenario | loguru | logust | vs loguru |
 |----------|--------|--------|-----------|
-| File write (async) | 300 ms | **13 ms** | 23x faster |
+| File write (async) | 307 ms | **13 ms** | 24x faster |
 
 ### Sync vs Async latency
 
@@ -54,8 +54,8 @@ This measures main thread time only - the true benefit of async is not blocking 
 
 | Library | Sync | Async | Effect |
 |---------|------|-------|--------|
-| loguru | 65 ms | 290 ms | **4x slower** |
-| logust | 14 ms | 15 ms | **No overhead** |
+| loguru | 68 ms | 354 ms | **5x slower** |
+| logust | 14 ms | 16 ms | **No overhead** |
 
 **Key finding**: loguru's `enqueue=True` adds significant overhead due to Python's `queue.Queue`. Logust uses Rust's lock-free crossbeam channels, maintaining speed while offloading I/O.
 

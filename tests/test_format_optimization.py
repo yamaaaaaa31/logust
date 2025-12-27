@@ -6,11 +6,8 @@ Part 2: Lazy computation - Test format token-based lazy evaluation
 
 from pathlib import Path
 
-import pytest
-
 from logust._logger import Logger
 from logust._logust import LogLevel, PyLogger
-
 
 # ============================================================================
 # Part 1: intern! optimization tests (callback/filter dict)
@@ -300,10 +297,11 @@ class TestLazyTokenComputation:
         logger.remove()
 
         log_file = tmp_path / "full_format.log"
-        logger.add(
-            str(log_file),
-            format="{time} | {level:<8} | {elapsed} | {name}:{function}:{line} | {thread} | {process} | {message}",
+        full_format = (
+            "{time} | {level:<8} | {elapsed} | "
+            "{name}:{function}:{line} | {thread} | {process} | {message}"
         )
+        logger.add(str(log_file), format=full_format)
         logger.info("Full format test")
         logger.complete()
 

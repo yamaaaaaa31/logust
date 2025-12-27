@@ -9,8 +9,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-import pytest
-
 from logust import Logger
 from logust._logger import CallerInfo, CollectOptions, ProcessInfo, ThreadInfo
 from logust._logust import LogLevel, PyLogger
@@ -71,11 +69,17 @@ class TestCollectOptionsUnionLogic:
         logger = Logger(inner)
         logger.remove()
 
-        fixed_caller = CallerInfo(name="fixed_module", function="fixed_func", line=999, file="fixed.py")
+        fixed_caller = CallerInfo(
+            name="fixed_module", function="fixed_func", line=999, file="fixed.py"
+        )
 
         # Handler 1: fixed caller info
         log1 = tmp_path / "log1.log"
-        logger.add(str(log1), format="{function}:{line} | {message}", collect=CollectOptions(caller=fixed_caller))
+        logger.add(
+            str(log1),
+            format="{function}:{line} | {message}",
+            collect=CollectOptions(caller=fixed_caller),
+        )
 
         # Handler 2: explicit caller=False (not auto-detect)
         log2 = tmp_path / "log2.log"
@@ -94,15 +98,23 @@ class TestCollectOptionsUnionLogic:
         logger = Logger(inner)
         logger.remove()
 
-        fixed_caller = CallerInfo(name="fixed_module", function="fixed_func", line=999, file="fixed.py")
+        fixed_caller = CallerInfo(
+            name="fixed_module", function="fixed_func", line=999, file="fixed.py"
+        )
 
         # Handler 1: fixed caller info
         log1 = tmp_path / "log1.log"
-        logger.add(str(log1), format="{function}:{line} | {message}", collect=CollectOptions(caller=fixed_caller))
+        logger.add(
+            str(log1),
+            format="{function}:{line} | {message}",
+            collect=CollectOptions(caller=fixed_caller),
+        )
 
         # Handler 2: True (force collection)
         log2 = tmp_path / "log2.log"
-        logger.add(str(log2), format="{function}:{line} | {message}", collect=CollectOptions(caller=True))
+        logger.add(
+            str(log2), format="{function}:{line} | {message}", collect=CollectOptions(caller=True)
+        )
 
         logger.info("Test message")
         logger.complete()
@@ -149,7 +161,11 @@ class TestPatchInheritance:
 
         fixed_caller = CallerInfo(name="fixed", function="fixed_func", line=42, file="fixed.py")
         log_file = tmp_path / "test.log"
-        logger.add(str(log_file), format="{function}:{line} | {message}", collect=CollectOptions(caller=fixed_caller))
+        logger.add(
+            str(log_file),
+            format="{function}:{line} | {message}",
+            collect=CollectOptions(caller=fixed_caller),
+        )
 
         # Patch the logger
         def add_context(record: dict[str, Any]) -> None:
@@ -239,7 +255,11 @@ class TestThreadProcessCollectOptions:
 
         fixed_thread = ThreadInfo(name="FixedThread", id=12345)
         log_file = tmp_path / "test.log"
-        logger.add(str(log_file), format="{thread} | {message}", collect=CollectOptions(thread=fixed_thread))
+        logger.add(
+            str(log_file),
+            format="{thread} | {message}",
+            collect=CollectOptions(thread=fixed_thread),
+        )
 
         logger.info("Test message")
         logger.complete()
@@ -255,7 +275,11 @@ class TestThreadProcessCollectOptions:
 
         fixed_process = ProcessInfo(name="FixedProcess", id=99999)
         log_file = tmp_path / "test.log"
-        logger.add(str(log_file), format="{process} | {message}", collect=CollectOptions(process=fixed_process))
+        logger.add(
+            str(log_file),
+            format="{process} | {message}",
+            collect=CollectOptions(process=fixed_process),
+        )
 
         logger.info("Test message")
         logger.complete()
@@ -759,9 +783,7 @@ class TestRemoveAllReturnValue:
 class TestDefaultHandlerWithCallableSink:
     """Test that default console handler works correctly with callable sinks."""
 
-    def test_file_handler_keeps_caller_with_callable_sink(
-        self, tmp_path: Path
-    ) -> None:
+    def test_file_handler_keeps_caller_with_callable_sink(self, tmp_path: Path) -> None:
         """File handler with caller format should keep caller info when callable sink is added.
 
         Regression test: Callable sinks with format="{message}" have caller=False
@@ -815,9 +837,7 @@ class TestDefaultHandlerWithCallableSink:
         # needs_caller_info_for_handlers should be False since no handler needs it
         assert inner.needs_caller_info_for_handlers is False
 
-    def test_callable_sink_does_not_block_other_handler_caller(
-        self, tmp_path: Path
-    ) -> None:
+    def test_callable_sink_does_not_block_other_handler_caller(self, tmp_path: Path) -> None:
         """Adding a callable sink should not block caller info for existing file handlers.
 
         This tests the actual regression scenario: a file handler with caller tokens
@@ -876,9 +896,7 @@ class TestNeedsInfoForHandlers:
 
         logger.remove_callback(callback_id)
 
-    def test_handler_with_caller_tokens_sets_needs_for_handlers(
-        self, tmp_path: Path
-    ) -> None:
+    def test_handler_with_caller_tokens_sets_needs_for_handlers(self, tmp_path: Path) -> None:
         """Handler format with caller tokens should set needs_caller_info_for_handlers."""
         inner = PyLogger(LogLevel.Trace)
         logger = Logger(inner)

@@ -6,8 +6,6 @@ efficient single-pass formatting instead of multiple .replace() calls.
 
 from __future__ import annotations
 
-import pytest
-
 from logust._template import LiteralSegment, ParsedCallableTemplate, TokenSegment
 
 

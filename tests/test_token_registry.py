@@ -2,16 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
-import pytest
-
 from logust import Logger, LogLevel
 from logust._logust import PyLogger
-
 
 # ============================================================================
 # Test CollectOptions and related data classes
@@ -116,7 +112,7 @@ class TestTokenRequirements:
     def test_default_console_needs_caller(self) -> None:
         """Default console handler uses caller info in format."""
         inner = PyLogger(LogLevel.Trace)
-        logger = Logger(inner)
+        _logger = Logger(inner)
 
         # Default format: "{time} | {level:<8} | {name}:{function}:{line} - {message}"
         assert inner.needs_caller_info is True
@@ -582,7 +578,9 @@ class TestCollectOptionsWithAdd:
             str(log_file),
             format="{name}:{function}:{line} | {message}",
             collect=CollectOptions(
-                caller=CallerInfo(name="custom_mod", function="custom_fn", line=999, file="custom.py")
+                caller=CallerInfo(
+                    name="custom_mod", function="custom_fn", line=999, file="custom.py"
+                )
             ),
         )
 

@@ -19,7 +19,7 @@ description: Fast, Rust-powered Python logging library with loguru-style API, JS
 
 ---
 
-!!! success "13x faster than loguru, 4x faster than logging"
+!!! success "14x faster than loguru, 4x faster than logging"
 
 ## Installation
 
@@ -47,7 +47,7 @@ logust.error("Error message")
 
 ## Key Features
 
-- **Blazing Fast** - Rust-powered core delivers 5-23x faster performance
+- **Blazing Fast** - Rust-powered core delivers 5-24x faster performance
 - **Beautiful by Default** - Colored output with zero configuration
 - **Simple API** - loguru-compatible interface for easy migration
 - **File Management** - Size/time-based rotation, retention policies, gzip compression

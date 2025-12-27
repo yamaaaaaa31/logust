@@ -290,10 +290,10 @@ impl FileSink {
     #[inline]
     fn check_rotation_needed(&self) -> bool {
         // Size-based rotation check (AtomicU64)
-        if let Some(max_size) = self.config.max_size {
-            if self.current_size.load(Ordering::Relaxed) >= max_size {
-                return true;
-            }
+        if let Some(max_size) = self.config.max_size
+            && self.current_size.load(Ordering::Relaxed) >= max_size
+        {
+            return true;
         }
 
         // Time-based rotation check (AtomicI64 as epoch millis, 0 = None)

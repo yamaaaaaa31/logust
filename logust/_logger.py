@@ -239,11 +239,28 @@ class Logger:
         filter_ids: set[int] | None = None,
         raw_callback_ids: set[int] | None = None,
         requirements_cache_box: (
-            list[tuple[bool | CallerInfo, bool | ThreadInfo, bool | ProcessInfo] | None]
-            | None
+            list[tuple[bool | CallerInfo, bool | ThreadInfo, bool | ProcessInfo] | None] | None
         ) = None,
         aggregated_options_box: (
-            list[tuple[bool, CallerInfo | None, bool, bool, bool, ThreadInfo | None, bool, bool, bool, ProcessInfo | None, bool, bool, bool, int] | None]
+            list[
+                tuple[
+                    bool,
+                    CallerInfo | None,
+                    bool,
+                    bool,
+                    bool,
+                    ThreadInfo | None,
+                    bool,
+                    bool,
+                    bool,
+                    ProcessInfo | None,
+                    bool,
+                    bool,
+                    bool,
+                    int,
+                ]
+                | None
+            ]
             | None
         ) = None,
     ) -> None:
@@ -259,7 +276,9 @@ class Logger:
         # Track handlers with Rust-side filters to force full record collection
         self._filter_ids: set[int] = filter_ids if filter_ids is not None else set()
         # Track raw callbacks (via add_callback) that need full records
-        self._raw_callback_ids: set[int] = raw_callback_ids if raw_callback_ids is not None else set()
+        self._raw_callback_ids: set[int] = (
+            raw_callback_ids if raw_callback_ids is not None else set()
+        )
         # Cached requirements in a box (list) for sharing between bound loggers
         # Box[0] is the cached value or None if invalid
         self._requirements_cache_box: list[
@@ -271,7 +290,23 @@ class Logger:
         #          process_true, process_fixed, process_none, process_false,
         #          needs_full_records, tracked_handler_count)
         self._aggregated_options_box: list[
-            tuple[bool, CallerInfo | None, bool, bool, bool, ThreadInfo | None, bool, bool, bool, ProcessInfo | None, bool, bool, bool, int] | None
+            tuple[
+                bool,
+                CallerInfo | None,
+                bool,
+                bool,
+                bool,
+                ThreadInfo | None,
+                bool,
+                bool,
+                bool,
+                ProcessInfo | None,
+                bool,
+                bool,
+                bool,
+                int,
+            ]
+            | None
         ] = aggregated_options_box if aggregated_options_box is not None else [None]
 
     def _invalidate_requirements_cache(self) -> None:
@@ -281,7 +316,22 @@ class Logger:
 
     def _get_aggregated_options(
         self,
-    ) -> tuple[bool, CallerInfo | None, bool, bool, bool, ThreadInfo | None, bool, bool, bool, ProcessInfo | None, bool, bool, bool, int]:
+    ) -> tuple[
+        bool,
+        CallerInfo | None,
+        bool,
+        bool,
+        bool,
+        ThreadInfo | None,
+        bool,
+        bool,
+        bool,
+        ProcessInfo | None,
+        bool,
+        bool,
+        bool,
+        int,
+    ]:
         """Get aggregated CollectOptions, computing and caching if needed.
 
         Returns cached result or computes from _collect_options.
@@ -346,10 +396,20 @@ class Logger:
         needs_full_records = len(self._raw_callback_ids) > 0 or len(self._filter_ids) > 0
 
         result = (
-            caller_true, caller_fixed, caller_none, caller_false,
-            thread_true, thread_fixed, thread_none, thread_false,
-            process_true, process_fixed, process_none, process_false,
-            needs_full_records, tracked_handler_count,
+            caller_true,
+            caller_fixed,
+            caller_none,
+            caller_false,
+            thread_true,
+            thread_fixed,
+            thread_none,
+            thread_false,
+            process_true,
+            process_fixed,
+            process_none,
+            process_false,
+            needs_full_records,
+            tracked_handler_count,
         )
         self._aggregated_options_box[0] = result
         return result
@@ -384,7 +444,7 @@ class Logger:
 
         if not self._collect_options:
             # No CollectOptions, use Rust-detected requirements
-            result = (
+            result: tuple[bool | CallerInfo, bool | ThreadInfo, bool | ProcessInfo] = (
                 self._inner.needs_caller_info,
                 self._inner.needs_thread_info,
                 self._inner.needs_process_info,
@@ -394,10 +454,20 @@ class Logger:
 
         # Get pre-aggregated options (O(1) if already cached)
         (
-            caller_true, caller_fixed, caller_none, caller_false,
-            thread_true, thread_fixed, thread_none, thread_false,
-            process_true, process_fixed, process_none, process_false,
-            needs_full_records, tracked_handler_count,
+            caller_true,
+            caller_fixed,
+            caller_none,
+            caller_false,
+            thread_true,
+            thread_fixed,
+            thread_none,
+            thread_false,
+            process_true,
+            process_fixed,
+            process_none,
+            process_false,
+            needs_full_records,
+            tracked_handler_count,
         ) = self._get_aggregated_options()
 
         # Check if there are untracked handlers (O(1) - uses cached tracked_handler_count)
@@ -489,50 +559,103 @@ class Logger:
         # Compute effective requirements considering CollectOptions
         needs_caller, needs_thread, needs_process = self._compute_effective_requirements()
 
+        if needs_caller is False and needs_thread is False and needs_process is False:
+            if exception is None:
+                getattr(self._inner, level_name)(str(message))
+            else:
+                getattr(self._inner, level_name)(str(message), exception=exception)
+            return
+
+        if needs_thread is False and needs_process is False:
+            if needs_caller is True:
+                name, function, line, file = _get_caller_info(depth + 1)
+            else:
+                # needs_caller is CallerInfo (False case already returned above)
+                name, function, line, file = (
+                    needs_caller.name,  # type: ignore[union-attr]
+                    needs_caller.function,  # type: ignore[union-attr]
+                    needs_caller.line,  # type: ignore[union-attr]
+                    needs_caller.file,  # type: ignore[union-attr]
+                )
+            if exception is None:
+                getattr(self._inner, level_name)(
+                    str(message), name=name, function=function, line=line, file=file
+                )
+            else:
+                getattr(self._inner, level_name)(
+                    str(message),
+                    exception=exception,
+                    name=name,
+                    function=function,
+                    line=line,
+                    file=file,
+                )
+            return
+
         # Handle caller info
-        if isinstance(needs_caller, CallerInfo):
-            # Use fixed values
-            name, function, line, file = (
+        c_name: str | None
+        c_function: str | None
+        c_line: int | None
+        c_file: str | None
+        if needs_caller is True:
+            c_name, c_function, c_line, c_file = _get_caller_info(depth + 1)
+        elif needs_caller is not False:
+            c_name, c_function, c_line, c_file = (
                 needs_caller.name,
                 needs_caller.function,
                 needs_caller.line,
                 needs_caller.file,
             )
-        elif needs_caller:
-            name, function, line, file = _get_caller_info(depth + 1)
         else:
-            name, function, line, file = None, None, None, None
+            c_name, c_function, c_line, c_file = None, None, None, None
 
         # Handle thread info
-        if isinstance(needs_thread, ThreadInfo):
-            # Use fixed values
-            thread_name, thread_id = needs_thread.name, needs_thread.id
-        elif needs_thread:
-            thread_name, thread_id = _get_thread_info()
+        t_name: str | None
+        t_id: int | None
+        if needs_thread is True:
+            t_name, t_id = _get_thread_info()
+        elif needs_thread is not False:
+            t_name = needs_thread.name
+            t_id = needs_thread.id
         else:
-            thread_name, thread_id = None, None
+            t_name, t_id = None, None
 
         # Handle process info
-        if isinstance(needs_process, ProcessInfo):
-            # Use fixed values
-            process_name, process_id = needs_process.name, needs_process.id
-        elif needs_process:
-            process_name, process_id = _get_process_info()
+        p_name: str | None
+        p_id: int | None
+        if needs_process is True:
+            p_name, p_id = _get_process_info()
+        elif needs_process is not False:
+            p_name = needs_process.name
+            p_id = needs_process.id
         else:
-            process_name, process_id = None, None
+            p_name, p_id = None, None
 
-        getattr(self._inner, level_name)(
-            str(message),
-            exception=exception,
-            name=name,
-            function=function,
-            line=line,
-            file=file,
-            thread_name=thread_name,
-            thread_id=thread_id,
-            process_name=process_name,
-            process_id=process_id,
-        )
+        if exception is None:
+            getattr(self._inner, level_name)(
+                str(message),
+                name=c_name,
+                function=c_function,
+                line=c_line,
+                file=c_file,
+                thread_name=t_name,
+                thread_id=t_id,
+                process_name=p_name,
+                process_id=p_id,
+            )
+        else:
+            getattr(self._inner, level_name)(
+                str(message),
+                exception=exception,
+                name=c_name,
+                function=c_function,
+                line=c_line,
+                file=c_file,
+                thread_name=t_name,
+                thread_id=t_id,
+                process_name=p_name,
+                process_id=p_id,
+            )
 
     def trace(
         self, message: str, *, exception: str | None = None, _depth: int = 0, **kwargs: Any
@@ -666,48 +789,103 @@ class Logger:
         # Compute effective requirements considering CollectOptions
         needs_caller, needs_thread, needs_process = self._compute_effective_requirements()
 
-        # Handle caller info
-        if isinstance(needs_caller, CallerInfo):
-            name, function, line, file = (
+        if needs_caller is False and needs_thread is False and needs_process is False:
+            if exception is None:
+                self._inner.log(level, str(message))
+            else:
+                self._inner.log(level, str(message), exception=exception)
+            return
+
+        if needs_thread is False and needs_process is False:
+            if needs_caller is True:
+                name, function, line, file = _get_caller_info(_depth + 1)
+            else:
+                # needs_caller is CallerInfo (False case already returned above)
+                name, function, line, file = (
+                    needs_caller.name,  # type: ignore[union-attr]
+                    needs_caller.function,  # type: ignore[union-attr]
+                    needs_caller.line,  # type: ignore[union-attr]
+                    needs_caller.file,  # type: ignore[union-attr]
+                )
+            if exception is None:
+                self._inner.log(
+                    level, str(message), name=name, function=function, line=line, file=file
+                )
+            else:
+                self._inner.log(
+                    level,
+                    str(message),
+                    exception=exception,
+                    name=name,
+                    function=function,
+                    line=line,
+                    file=file,
+                )
+            return
+
+        name_: str | None
+        function_: str | None
+        line_: int | None
+        file_: str | None
+        if needs_caller is True:
+            name_, function_, line_, file_ = _get_caller_info(_depth + 1)
+        elif needs_caller is not False:
+            name_, function_, line_, file_ = (
                 needs_caller.name,
                 needs_caller.function,
                 needs_caller.line,
                 needs_caller.file,
             )
-        elif needs_caller:
-            name, function, line, file = _get_caller_info(_depth + 1)
         else:
-            name, function, line, file = None, None, None, None
+            name_, function_, line_, file_ = None, None, None, None
 
-        # Handle thread info
-        if isinstance(needs_thread, ThreadInfo):
-            thread_name, thread_id = needs_thread.name, needs_thread.id
-        elif needs_thread:
+        thread_name: str | None
+        thread_id: int | None
+        if needs_thread is True:
             thread_name, thread_id = _get_thread_info()
+        elif needs_thread is not False:
+            thread_name = needs_thread.name
+            thread_id = needs_thread.id
         else:
             thread_name, thread_id = None, None
 
-        # Handle process info
-        if isinstance(needs_process, ProcessInfo):
-            process_name, process_id = needs_process.name, needs_process.id
-        elif needs_process:
+        process_name: str | None
+        process_id: int | None
+        if needs_process is True:
             process_name, process_id = _get_process_info()
+        elif needs_process is not False:
+            process_name = needs_process.name
+            process_id = needs_process.id
         else:
             process_name, process_id = None, None
 
-        self._inner.log(
-            level,
-            str(message),
-            exception=exception,
-            name=name,
-            function=function,
-            line=line,
-            file=file,
-            thread_name=thread_name,
-            thread_id=thread_id,
-            process_name=process_name,
-            process_id=process_id,
-        )
+        if exception is None:
+            self._inner.log(
+                level,
+                str(message),
+                name=name_,
+                function=function_,
+                line=line_,
+                file=file_,
+                thread_name=thread_name,
+                thread_id=thread_id,
+                process_name=process_name,
+                process_id=process_id,
+            )
+        else:
+            self._inner.log(
+                level,
+                str(message),
+                exception=exception,
+                name=name_,
+                function=function_,
+                line=line_,
+                file=file_,
+                thread_name=thread_name,
+                thread_id=thread_id,
+                process_name=process_name,
+                process_id=process_id,
+            )
 
     def set_level(self, level: LogLevel | str) -> None:
         """Set minimum log level for console output."""
@@ -985,7 +1163,9 @@ class Logger:
             # Remove all handlers: also remove all callable sinks and raw callbacks
             # Use batch removal to avoid O(n²) cache updates
             all_callback_ids = list(self._callback_ids) + list(self._raw_callback_ids)
-            callbacks_removed = self._inner.remove_callbacks(all_callback_ids) if all_callback_ids else 0
+            callbacks_removed = (
+                self._inner.remove_callbacks(all_callback_ids) if all_callback_ids else 0
+            )
             self._collect_options.clear()
             self._callback_ids.clear()
             self._filter_ids.clear()

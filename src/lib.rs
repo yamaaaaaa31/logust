@@ -761,7 +761,8 @@ impl PyLogger {
 
         // If we have any filters, we also need all info
         let has_filters = handlers.iter().any(|e| e.filter.is_some());
-        self.cached_has_filters.store(has_filters, Ordering::Relaxed);
+        self.cached_has_filters
+            .store(has_filters, Ordering::Relaxed);
         if has_filters {
             combined = TokenRequirements::all();
         }

@@ -64,7 +64,7 @@ class ParsedCallableTemplate:
     Performance improvement: ~1-2us/log for callable sinks.
     """
 
-    __slots__ = ("_segments", "_needed_tokens", "_needs_extra", "_needs_thread", "_needs_process")
+    __slots__ = ("_needed_tokens", "_needs_extra", "_needs_process", "_needs_thread", "_segments")
 
     # Token pattern: {token} or {token:spec} or {extra[key]} or {extra[key]:spec}
     # Only matches known tokens to preserve unknown patterns as literals

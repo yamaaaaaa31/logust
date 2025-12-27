@@ -32,7 +32,7 @@ logger.log(level, message, **kwargs)  # Any level
 ```python
 # File sink
 handler_id = logger.add(
-    sink,                    # File path (str or Path) or sys.stdout/sys.stderr
+    sink,                    # File path (str or Path), sys.stdout/stderr, or callable
     level=None,              # Minimum level (LogLevel or str)
     format=None,             # Format string
     rotation=None,           # "500 MB", "daily", "hourly" (files only)
@@ -42,12 +42,18 @@ handler_id = logger.add(
     filter=None,             # Filter function
     enqueue=False,           # Async writes (files only)
     colorize=None,           # ANSI colors (console only, auto-detect if None)
+    collect=None,            # CollectOptions for info collection control
 )
 
 # Console sink
 import sys
 logger.add(sys.stdout, colorize=True)   # stdout with colors
 logger.add(sys.stderr, serialize=True)  # stderr with JSON
+
+# Callable sink (function, lambda, method)
+logger.add(lambda msg: print(msg))
+logger.add(my_function, format="{level} | {message}")
+logger.add(send_to_slack, level="ERROR", serialize=True)
 
 logger.remove(handler_id)    # Remove specific
 logger.remove()              # Remove all
@@ -185,9 +191,87 @@ record: LogRecord = {
     "name": "__main__",           # Module name
     "function": "my_function",    # Function name
     "line": 42,                   # Line number
+    "file": "main.py",            # Source file name
+    "thread_name": "MainThread",  # Thread name
+    "thread_id": 12345,           # Thread ID
+    "process_name": "MainProcess", # Process name
+    "process_id": 1234,           # Process ID
+    "elapsed": "00:01:23.456",    # Time since logger start
     "exception": None,
     "extra": {"user_id": "123"},
 }
+```
+
+### CollectOptions
+
+Control what information is collected per handler. Useful for performance optimization.
+
+```python
+from logust import CollectOptions, CallerInfo, ThreadInfo, ProcessInfo
+
+# Auto-detect from format (default)
+logger.add("app.log", collect=CollectOptions())
+
+# Disable caller collection for performance
+logger.add("fast.log", collect=CollectOptions(caller=False))
+
+# Use fixed values (avoid stack inspection)
+logger.add("fixed.log", collect=CollectOptions(
+    caller=CallerInfo(name="myapp", function="main", line=1, file="app.py"),
+    thread=ThreadInfo(name="Worker", id=1),
+    process=ProcessInfo(name="App", id=1000),
+))
+
+# Force collection even if format doesn't need it
+logger.add("full.log", collect=CollectOptions(caller=True, thread=True, process=True))
+```
+
+Each field can be:
+
+- `None` - Auto-detect from format string (default)
+- `False` - Never collect (use empty defaults)
+- `True` - Always collect dynamically
+- `CallerInfo`/`ThreadInfo`/`ProcessInfo` - Use fixed values
+
+### CallerInfo
+
+Fixed caller information for log records.
+
+```python
+from logust import CallerInfo
+
+caller = CallerInfo(
+    name="mymodule",      # Module name
+    function="handler",   # Function name
+    line=42,              # Line number
+    file="handler.py",    # Source file name
+)
+```
+
+### ThreadInfo
+
+Fixed thread information for log records.
+
+```python
+from logust import ThreadInfo
+
+thread = ThreadInfo(
+    name="WorkerThread",  # Thread name
+    id=12345,             # Thread ID
+)
+```
+
+### ProcessInfo
+
+Fixed process information for log records.
+
+```python
+from logust import ProcessInfo
+
+process = ProcessInfo(
+    name="MainProcess",   # Process name
+    id=1234,              # Process ID
+)
 ```
 
 ### RecordLevel
@@ -235,3 +319,54 @@ from logust import parse_json
 for record in parse_json("app.json"):
     print(record["level"], record["message"])
 ```
+
+---
+
+## Performance
+
+### Automatic optimization
+
+Logust automatically optimizes based on your format string:
+
+```python
+# Fast: no caller info collected (~0.7 µs/log)
+logger.add("fast.log", format="{time} | {level} - {message}")
+
+# Slower: caller info collected (~1.2 µs/log)
+logger.add("full.log", format="{time} | {level} | {name}:{function}:{line} - {message}")
+```
+
+The format is analyzed at handler creation time, and only required information is collected.
+
+### Manual optimization with CollectOptions
+
+For maximum performance, explicitly disable unused collection:
+
+```python
+from logust import CollectOptions
+
+# Skip all extra info collection
+logger.add("minimal.log",
+    format="{time} | {level} - {message}",
+    collect=CollectOptions(caller=False, thread=False, process=False)
+)
+```
+
+### Callable sinks
+
+Callable sinks automatically analyze their format string:
+
+```python
+# Format analyzed - caller info NOT collected
+logger.add(my_func, format="{time} | {level} - {message}")
+
+# Format analyzed - caller info IS collected
+logger.add(my_func, format="{name}:{line} - {message}")
+```
+
+### Performance tips
+
+1. **Use simple formats** - Avoid `{name}`, `{function}`, `{line}` if not needed
+2. **Use `enqueue=True`** - For high-throughput file writes (no async overhead in Logust)
+3. **Use `CollectOptions`** - Explicitly disable unused fields for critical paths
+4. **Use fixed info** - Provide `CallerInfo`/`ThreadInfo`/`ProcessInfo` to avoid dynamic lookup
