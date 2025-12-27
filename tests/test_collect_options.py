@@ -754,3 +754,154 @@ class TestRemoveAllReturnValue:
         # Second remove - Rust may return True even when empty
         # The important thing is no error is raised
         logger.remove()
+
+
+class TestDefaultHandlerWithCallableSink:
+    """Test that default console handler works correctly with callable sinks."""
+
+    def test_file_handler_keeps_caller_with_callable_sink(
+        self, tmp_path: Path
+    ) -> None:
+        """File handler with caller format should keep caller info when callable sink is added.
+
+        Regression test: Callable sinks with format="{message}" have caller=False
+        (auto-detect from format), which should not prevent caller collection
+        for other handlers that need it.
+        """
+        inner = PyLogger(LogLevel.Trace)
+        logger = Logger(inner)
+        logger.remove()  # Remove default console handler
+
+        # Add file handler with caller info in format
+        log_file = tmp_path / "test.log"
+        logger.add(str(log_file), format="{function}:{line} | {message}")
+
+        # Add callable sink that only uses {message}
+        collected: list[str] = []
+        logger.add(lambda msg: collected.append(msg), format="{message}")
+
+        # Both property check and actual output verification
+        assert inner.needs_caller_info_for_handlers is True
+
+        # Log a message and verify caller info is present in output
+        logger.info("Test message")
+        logger.complete()
+
+        content = log_file.read_text()
+        # Should contain function name and line number
+        assert "test_file_handler_keeps_caller_with_callable_sink" in content
+        assert "Test message" in content
+        # Line number should be present (not empty)
+        assert ": |" not in content  # This would indicate empty function/line
+
+    def test_callable_sink_message_only_no_caller(self) -> None:
+        """Callable sink with {message} format should not force caller collection.
+
+        When there's no default handler, a callable sink with format="{message}"
+        should correctly auto-detect that caller info is not needed.
+        """
+        inner = PyLogger(LogLevel.Trace)
+        logger = Logger(inner)
+        logger.remove()  # Remove default console handler
+
+        collected: list[str] = []
+        handler_id = logger.add(lambda msg: collected.append(msg), format="{message}")
+
+        # Verify CollectOptions was computed from format (caller=False)
+        opts = logger._collect_options.get(handler_id)
+        assert opts is not None
+        assert opts.caller is False
+
+        # needs_caller_info_for_handlers should be False since no handler needs it
+        assert inner.needs_caller_info_for_handlers is False
+
+    def test_callable_sink_does_not_block_other_handler_caller(
+        self, tmp_path: Path
+    ) -> None:
+        """Adding a callable sink should not block caller info for existing file handlers.
+
+        This tests the actual regression scenario: a file handler with caller tokens
+        should still receive caller info even when a callable sink with message-only
+        format is added.
+        """
+        inner = PyLogger(LogLevel.Trace)
+        logger = Logger(inner)
+        logger.remove()
+
+        # Add file handler first
+        log_file = tmp_path / "test.log"
+        logger.add(str(log_file), format="{name}:{function}:{line} | {message}")
+
+        # Then add callable sink with message-only format
+        messages: list[str] = []
+        logger.add(lambda msg: messages.append(msg), format="{message}")
+
+        # Log and verify
+        logger.info("Hello")
+        logger.complete()
+
+        # File should have caller info
+        content = log_file.read_text()
+        assert "test_callable_sink_does_not_block_other_handler_caller" in content
+        assert "Hello" in content
+
+        # Callable sink should just have message
+        assert len(messages) == 1
+        assert messages[0] == "Hello"
+
+
+class TestNeedsInfoForHandlers:
+    """Test that needs_*_for_handlers excludes callbacks."""
+
+    def test_callback_does_not_affect_needs_caller_for_handlers(self) -> None:
+        """Raw callbacks should not affect needs_caller_info_for_handlers."""
+        inner = PyLogger(LogLevel.Trace)
+        logger = Logger(inner)
+        logger.remove()  # Remove console handler
+
+        # Add raw callback (which internally sets TokenRequirements::all())
+        callback_id = logger.add_callback(lambda record: None)
+
+        # needs_caller_info includes callbacks (True due to TokenRequirements::all())
+        assert inner.needs_caller_info is True
+
+        # But needs_caller_info_for_handlers excludes callbacks
+        assert inner.needs_caller_info_for_handlers is False
+
+        # Same for thread and process
+        assert inner.needs_thread_info is True
+        assert inner.needs_thread_info_for_handlers is False
+        assert inner.needs_process_info is True
+        assert inner.needs_process_info_for_handlers is False
+
+        logger.remove_callback(callback_id)
+
+    def test_handler_with_caller_tokens_sets_needs_for_handlers(
+        self, tmp_path: Path
+    ) -> None:
+        """Handler format with caller tokens should set needs_caller_info_for_handlers."""
+        inner = PyLogger(LogLevel.Trace)
+        logger = Logger(inner)
+        logger.remove()
+
+        # Add handler with {function} in format
+        log_file = tmp_path / "test.log"
+        logger.add(str(log_file), format="{function} | {message}")
+
+        # Both should be True since handler format needs caller info
+        assert inner.needs_caller_info is True
+        assert inner.needs_caller_info_for_handlers is True
+
+    def test_handler_without_caller_tokens(self, tmp_path: Path) -> None:
+        """Handler format without caller tokens should not need caller info."""
+        inner = PyLogger(LogLevel.Trace)
+        logger = Logger(inner)
+        logger.remove()
+
+        # Add handler with only {level} and {message}
+        log_file = tmp_path / "test.log"
+        logger.add(str(log_file), format="{level} | {message}")
+
+        # Neither should need caller info
+        assert inner.needs_caller_info is False
+        assert inner.needs_caller_info_for_handlers is False

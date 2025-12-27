@@ -342,9 +342,45 @@ class Logger:
         # Note: _raw_callback_ids are callbacks via add_callback() that receive raw records
         # _callback_ids are callable sinks via add() that receive formatted strings
         needs_full_records = len(self._raw_callback_ids) > 0 or len(self._filter_ids) > 0
-        needs_dynamic_caller = (self._inner.needs_caller_info and caller_none) or needs_full_records
-        needs_dynamic_thread = (self._inner.needs_thread_info and thread_none) or needs_full_records
-        needs_dynamic_process = (self._inner.needs_process_info and process_none) or needs_full_records
+
+        # Check if there are untracked handlers (handlers not in _collect_options).
+        # _collect_options contains file handlers and callable sinks (which are callbacks).
+        # tracked_file_handlers = handlers in _collect_options that are not callbacks
+        tracked_file_handlers = set(self._collect_options.keys()) - self._callback_ids
+        has_untracked_handlers = self._inner.handler_count > len(tracked_file_handlers)
+
+        # If there are untracked handlers (like default console) and they need info, collect.
+        # We can't know which specific untracked handler needs what, so if any handler needs
+        # info and there are untracked handlers, we must collect to be safe.
+        has_untracked_caller_need = (
+            has_untracked_handlers and self._inner.needs_caller_info_for_handlers
+        )
+        has_untracked_thread_need = (
+            has_untracked_handlers and self._inner.needs_thread_info_for_handlers
+        )
+        has_untracked_process_need = (
+            has_untracked_handlers and self._inner.needs_process_info_for_handlers
+        )
+
+        # Dynamic collection is needed when:
+        # 1. Auto-detect (xxx_none) and handler format needs it
+        # 2. Raw callbacks/filters need full records
+        # 3. Untracked handlers may need it
+        needs_dynamic_caller = (
+            (self._inner.needs_caller_info_for_handlers and caller_none)
+            or needs_full_records
+            or has_untracked_caller_need
+        )
+        needs_dynamic_thread = (
+            (self._inner.needs_thread_info_for_handlers and thread_none)
+            or needs_full_records
+            or has_untracked_thread_need
+        )
+        needs_dynamic_process = (
+            (self._inner.needs_process_info_for_handlers and process_none)
+            or needs_full_records
+            or has_untracked_process_need
+        )
 
         # Caller
         if caller_true:

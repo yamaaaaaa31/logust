@@ -40,6 +40,8 @@ pub struct PyLogger {
     cached_min_level: Arc<AtomicU32>,
     /// Cached token requirements across all handlers and callbacks (shared via Arc)
     cached_requirements: Arc<RwLock<TokenRequirements>>,
+    /// Cached token requirements for handlers only (excludes callbacks)
+    cached_handler_requirements: Arc<RwLock<TokenRequirements>>,
 }
 
 #[pymethods]
@@ -53,6 +55,7 @@ impl PyLogger {
             callbacks: Arc::new(RwLock::new(Vec::new())),
             cached_min_level: Arc::new(AtomicU32::new(u32::MAX)),
             cached_requirements: Arc::new(RwLock::new(TokenRequirements::default())),
+            cached_handler_requirements: Arc::new(RwLock::new(TokenRequirements::default())),
         };
 
         let console_level = level.unwrap_or_default();
@@ -206,6 +209,7 @@ impl PyLogger {
             callbacks: Arc::clone(&self.callbacks),
             cached_min_level: Arc::clone(&self.cached_min_level),
             cached_requirements: Arc::clone(&self.cached_requirements),
+            cached_handler_requirements: Arc::clone(&self.cached_handler_requirements),
         };
         Py::new(py, new_logger)
     }
@@ -273,6 +277,31 @@ impl PyLogger {
     #[getter]
     fn needs_process_info(&self) -> bool {
         self.cached_requirements.read().needs_process
+    }
+
+    /// Check if any handler format needs caller info (excludes callbacks)
+    /// Used for auto-detect when there might be untracked handlers
+    #[getter]
+    fn needs_caller_info_for_handlers(&self) -> bool {
+        self.cached_handler_requirements.read().needs_caller
+    }
+
+    /// Check if any handler format needs thread info (excludes callbacks)
+    #[getter]
+    fn needs_thread_info_for_handlers(&self) -> bool {
+        self.cached_handler_requirements.read().needs_thread
+    }
+
+    /// Check if any handler format needs process info (excludes callbacks)
+    #[getter]
+    fn needs_process_info_for_handlers(&self) -> bool {
+        self.cached_handler_requirements.read().needs_process
+    }
+
+    /// Get the current number of handlers (excludes callbacks)
+    #[getter]
+    fn handler_count(&self) -> usize {
+        self.handlers.read().len()
     }
 
     /// Disable console output
@@ -365,17 +394,14 @@ impl PyLogger {
     /// Remove multiple callbacks by IDs (batch operation)
     /// More efficient than calling remove_callback multiple times
     /// as it only updates caches once at the end.
+    /// Uses O(n+m) HashSet + retain instead of O(n*m) position + remove.
     fn remove_callbacks(&self, callback_ids: Vec<u64>) -> usize {
+        let id_set: std::collections::HashSet<u64> = callback_ids.into_iter().collect();
         let removed = {
             let mut callbacks = self.callbacks.write();
-            let mut count = 0;
-            for id in callback_ids {
-                if let Some(pos) = callbacks.iter().position(|c| c.id == id) {
-                    callbacks.remove(pos);
-                    count += 1;
-                }
-            }
-            count
+            let before = callbacks.len();
+            callbacks.retain(|c| !id_set.contains(&c.id));
+            before - callbacks.len()
         };
         if removed > 0 {
             self.update_min_level_cache();
@@ -710,13 +736,19 @@ impl PyLogger {
         let handlers = self.handlers.read();
         let callbacks = self.callbacks.read();
 
-        let mut combined = TokenRequirements::default();
+        let mut handler_only = TokenRequirements::default();
 
-        // Merge requirements from all handlers
+        // Merge requirements from all handlers (this is the handler-only requirements)
         for entry in handlers.iter() {
             let req = entry.handler.requirements();
-            combined = combined.merge(&req);
+            handler_only = handler_only.merge(&req);
         }
+
+        // Cache handler-only requirements (excludes callbacks)
+        *self.cached_handler_requirements.write() = handler_only;
+
+        // Now compute combined requirements including callbacks/filters
+        let mut combined = handler_only;
 
         // If we have any callbacks, we need all info (callbacks receive full record dict)
         if !callbacks.is_empty() {

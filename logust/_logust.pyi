@@ -139,6 +139,52 @@ class PyLogger:
         """Remove a callback by ID."""
         ...
 
+    def remove_callbacks(self, callback_ids: list[int]) -> int:
+        """Remove multiple callbacks by IDs (batch operation).
+
+        More efficient than calling remove_callback multiple times
+        as it only updates caches once at the end.
+
+        Returns:
+            Number of callbacks actually removed.
+        """
+        ...
+
+    @property
+    def needs_caller_info(self) -> bool:
+        """Check if any handler/callback needs caller info."""
+        ...
+
+    @property
+    def needs_thread_info(self) -> bool:
+        """Check if any handler/callback needs thread info."""
+        ...
+
+    @property
+    def needs_process_info(self) -> bool:
+        """Check if any handler/callback needs process info."""
+        ...
+
+    @property
+    def needs_caller_info_for_handlers(self) -> bool:
+        """Check if any handler format needs caller info (excludes callbacks)."""
+        ...
+
+    @property
+    def needs_thread_info_for_handlers(self) -> bool:
+        """Check if any handler format needs thread info (excludes callbacks)."""
+        ...
+
+    @property
+    def needs_process_info_for_handlers(self) -> bool:
+        """Check if any handler format needs process info (excludes callbacks)."""
+        ...
+
+    @property
+    def handler_count(self) -> int:
+        """Get the current number of handlers (excludes callbacks)."""
+        ...
+
     def level(
         self,
         name: str,
