@@ -7,18 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2025-12-27
+
 ### Added
 - `CollectOptions` for per-handler information collection control
 - Callable sinks with custom format templates
 - `{thread}`, `{process}`, `{file}`, `{elapsed}` format tokens
 
 ### Performance
-- **13x faster than loguru on average** (up from 1.9x in 0.1.0)
+- **14x faster than loguru on average** (up from 1.9x in 0.1.0)
 - **4x faster than Python logging on average**
 - Cached requirements computation (O(1) hot path)
 - Cached `has_filters` flag in Rust (eliminates per-log iteration)
 - Lazy token value generation for callable sinks
 - Pre-aggregated CollectOptions to avoid per-log dictionary traversal
+- Optimized kwargs passing in hot path
 
 ## [0.2.0] - 2025-12-25
 
