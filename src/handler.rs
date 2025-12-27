@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use chrono::{DateTime, Local};
 use pyo3::prelude::*;
 
-use crate::format::FormatConfig;
+use crate::format::{FormatConfig, TokenRequirements};
 use crate::level::{LevelInfo, LogLevel};
 use crate::sink::FileSink;
 
@@ -35,6 +35,7 @@ pub struct CallerInfo {
     pub name: String,
     pub function: String,
     pub line: u32,
+    pub file: String,
 }
 
 impl CallerInfo {
@@ -43,8 +44,32 @@ impl CallerInfo {
             name,
             function,
             line,
+            file: String::new(),
         }
     }
+
+    pub fn with_file(name: String, function: String, line: u32, file: String) -> Self {
+        CallerInfo {
+            name,
+            function,
+            line,
+            file,
+        }
+    }
+}
+
+/// Thread information for log records
+#[derive(Clone, Debug, Default)]
+pub struct ThreadInfo {
+    pub name: String,
+    pub id: u64,
+}
+
+/// Process information for log records
+#[derive(Clone, Debug, Default)]
+pub struct ProcessInfo {
+    pub name: String,
+    pub id: u32,
 }
 
 /// Log record containing all information about a log message
@@ -57,6 +82,8 @@ pub struct LogRecord {
     pub extra: Arc<HashMap<String, String>>,
     pub exception: Option<String>,
     pub caller: CallerInfo,
+    pub thread: ThreadInfo,
+    pub process: ProcessInfo,
 }
 
 impl LogRecord {
@@ -70,6 +97,8 @@ impl LogRecord {
             extra: empty_context(),
             exception: None,
             caller: CallerInfo::default(),
+            thread: ThreadInfo::default(),
+            process: ProcessInfo::default(),
         }
     }
 
@@ -87,6 +116,8 @@ impl LogRecord {
             extra,
             exception: None,
             caller: CallerInfo::default(),
+            thread: ThreadInfo::default(),
+            process: ProcessInfo::default(),
         }
     }
 
@@ -106,6 +137,31 @@ impl LogRecord {
             extra,
             exception,
             caller,
+            thread: ThreadInfo::default(),
+            process: ProcessInfo::default(),
+        }
+    }
+
+    /// Create a new log record with all fields
+    pub fn with_all(
+        level: LogLevel,
+        message: String,
+        extra: Arc<HashMap<String, String>>,
+        exception: Option<String>,
+        caller: CallerInfo,
+        thread: ThreadInfo,
+        process: ProcessInfo,
+    ) -> Self {
+        LogRecord {
+            timestamp: Local::now(),
+            level,
+            level_info: None,
+            message,
+            extra,
+            exception,
+            caller,
+            thread,
+            process,
         }
     }
 
@@ -124,6 +180,8 @@ impl LogRecord {
             extra,
             exception,
             caller: CallerInfo::default(),
+            thread: ThreadInfo::default(),
+            process: ProcessInfo::default(),
         }
     }
 
@@ -142,6 +200,8 @@ impl LogRecord {
             extra,
             exception,
             caller: CallerInfo::default(),
+            thread: ThreadInfo::default(),
+            process: ProcessInfo::default(),
         }
     }
 
@@ -161,6 +221,31 @@ impl LogRecord {
             extra,
             exception,
             caller,
+            thread: ThreadInfo::default(),
+            process: ProcessInfo::default(),
+        }
+    }
+
+    /// Create a log record with custom level info, caller, thread and process
+    pub fn with_custom_level_full(
+        level_info: LevelInfo,
+        message: String,
+        extra: Arc<HashMap<String, String>>,
+        exception: Option<String>,
+        caller: CallerInfo,
+        thread: ThreadInfo,
+        process: ProcessInfo,
+    ) -> Self {
+        LogRecord {
+            timestamp: Local::now(),
+            level: LogLevel::Debug,
+            level_info: Some(level_info),
+            message,
+            extra,
+            exception,
+            caller,
+            thread,
+            process,
         }
     }
 
@@ -208,6 +293,14 @@ impl HandlerType {
         match self {
             HandlerType::Console(h) => h.level,
             HandlerType::File(h) => h.level,
+        }
+    }
+
+    /// Get token requirements for this handler
+    pub fn requirements(&self) -> TokenRequirements {
+        match self {
+            HandlerType::Console(h) => h.format.requirements(),
+            HandlerType::File(h) => h.format.requirements(),
         }
     }
 }

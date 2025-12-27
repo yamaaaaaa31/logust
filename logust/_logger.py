@@ -4,35 +4,175 @@ from __future__ import annotations
 
 import functools
 import os
+import re
 import sys
+import threading
 import traceback
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, TextIO
 
 from ._logust import LogLevel, PyLogger
+from ._template import CALLER_TOKENS, KNOWN_TOKENS, ParsedCallableTemplate
+
+
+@dataclass(frozen=True, slots=True)
+class CallerInfo:
+    """Fixed caller information for log records.
+
+    Used with CollectOptions to provide static caller info instead of
+    dynamically collecting it from the call stack.
+    """
+
+    name: str = ""
+    function: str = ""
+    line: int = 0
+    file: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class ThreadInfo:
+    """Fixed thread information for log records.
+
+    Used with CollectOptions to provide static thread info instead of
+    dynamically collecting it.
+    """
+
+    name: str = ""
+    id: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class ProcessInfo:
+    """Fixed process information for log records.
+
+    Used with CollectOptions to provide static process info instead of
+    dynamically collecting it.
+    """
+
+    name: str = ""
+    id: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class CollectOptions:
+    """Options for controlling information collection per handler.
+
+    Each field can be:
+    - None: Auto-detect from format string (default)
+    - False: Never collect this info (use empty defaults)
+    - True: Always collect this info
+    - CallerInfo/ThreadInfo/ProcessInfo: Use fixed values
+    """
+
+    caller: bool | CallerInfo | None = None
+    thread: bool | ThreadInfo | None = None
+    process: bool | ProcessInfo | None = None
+
+
+# Token pattern for format analysis (matches known tokens only)
+# Built from KNOWN_TOKENS to ensure consistency with ParsedCallableTemplate
+_FORMAT_TOKEN_PATTERN = re.compile(
+    r"\{(" + "|".join(re.escape(t) for t in KNOWN_TOKENS) + r"|extra\[[^\]]+\])(?::[^}]+)?\}"
+)
+
+
+def _collect_options_from_format(format_str: str) -> CollectOptions:
+    """Compute CollectOptions from a format string.
+
+    Analyzes which tokens are used in the format to determine
+    what information needs to be collected. This is used for
+    callable sinks to avoid relying on Rust's needs_* which
+    is polluted by callback registration.
+
+    Args:
+        format_str: Format template string.
+
+    Returns:
+        CollectOptions with explicit True/False values based on format needs.
+    """
+    used_tokens: set[str] = set()
+    for match in _FORMAT_TOKEN_PATTERN.finditer(format_str):
+        key = match.group(1)
+        if key.startswith("extra["):
+            key = "extra"
+        used_tokens.add(key)
+
+    needs_caller = bool(used_tokens & CALLER_TOKENS)
+    needs_thread = "thread" in used_tokens
+    needs_process = "process" in used_tokens
+
+    return CollectOptions(
+        caller=needs_caller,
+        thread=needs_thread,
+        process=needs_process,
+    )
+
 
 if TYPE_CHECKING:
     from ._opt import OptLogger
 
+# Cached process info (invalidated on fork by checking PID)
+_CACHED_PROCESS_INFO: tuple[str, int] | None = None
+_CACHED_PROCESS_PID: int | None = None
 
-def _get_caller_info(depth: int = 1) -> tuple[str, str, int]:
-    """Get caller information (module name, function name, line number).
+
+def _get_caller_info(depth: int = 1) -> tuple[str, str, int, str]:
+    """Get caller information (module name, function name, line number, file basename).
 
     Args:
         depth: Number of frames to go back from the caller of this function
 
     Returns:
-        Tuple of (module_name, function_name, line_number)
+        Tuple of (module_name, function_name, line_number, file_basename)
     """
     try:
         frame = sys._getframe(depth + 1)  # +1 to skip this function itself
         code = frame.f_code
         # Get module name from globals, or use filename as fallback
         module_name = frame.f_globals.get("__name__", code.co_filename)
-        return (module_name, code.co_name, frame.f_lineno)
+        # Get file basename (not full path)
+        file_basename = os.path.basename(code.co_filename)
+        return (module_name, code.co_name, frame.f_lineno, file_basename)
     except (ValueError, AttributeError):
-        return ("", "", 0)
+        return ("", "", 0, "")
+
+
+def _get_thread_info() -> tuple[str, int]:
+    """Get current thread name and ID.
+
+    Returns:
+        Tuple of (thread_name, thread_id)
+    """
+    thread = threading.current_thread()
+    return (thread.name, thread.ident or 0)
+
+
+def _get_process_info() -> tuple[str, int]:
+    """Get current process name and ID.
+
+    Caches the result, but invalidates cache after fork (detected by PID change).
+
+    Returns:
+        Tuple of (process_name, process_id)
+    """
+    global _CACHED_PROCESS_INFO, _CACHED_PROCESS_PID
+    current_pid = os.getpid()
+
+    # Invalidate cache if PID changed (fork occurred)
+    if _CACHED_PROCESS_INFO is not None and _CACHED_PROCESS_PID == current_pid:
+        return _CACHED_PROCESS_INFO
+
+    try:
+        import multiprocessing
+
+        name = multiprocessing.current_process().name
+    except Exception:
+        name = "MainProcess"
+    _CACHED_PROCESS_INFO = (name, current_pid)
+    _CACHED_PROCESS_PID = current_pid
+    return _CACHED_PROCESS_INFO
 
 
 def _to_log_level(level: LogLevel | str) -> LogLevel:
@@ -94,9 +234,316 @@ class Logger:
         self,
         inner: PyLogger,
         patchers: list[Callable[[dict[str, Any]], None]] | None = None,
+        collect_options: dict[int, CollectOptions] | None = None,
+        callback_ids: set[int] | None = None,
+        filter_ids: set[int] | None = None,
+        raw_callback_ids: set[int] | None = None,
+        requirements_cache_box: (
+            list[tuple[bool | CallerInfo, bool | ThreadInfo, bool | ProcessInfo] | None] | None
+        ) = None,
+        aggregated_options_box: (
+            list[
+                tuple[
+                    bool,
+                    CallerInfo | None,
+                    bool,
+                    bool,
+                    bool,
+                    ThreadInfo | None,
+                    bool,
+                    bool,
+                    bool,
+                    ProcessInfo | None,
+                    bool,
+                    bool,
+                    bool,
+                    int,
+                ]
+                | None
+            ]
+            | None
+        ) = None,
     ) -> None:
         self._inner = inner
-        self._patchers = patchers or []
+        self._patchers = patchers if patchers is not None else []
+        # Handler ID -> CollectOptions mapping (shared between bound loggers)
+        # Use explicit None check to preserve empty containers (empty dict/set are falsy)
+        self._collect_options: dict[int, CollectOptions] = (
+            collect_options if collect_options is not None else {}
+        )
+        # Track callable sink IDs for proper removal via remove()
+        self._callback_ids: set[int] = callback_ids if callback_ids is not None else set()
+        # Track handlers with Rust-side filters to force full record collection
+        self._filter_ids: set[int] = filter_ids if filter_ids is not None else set()
+        # Track raw callbacks (via add_callback) that need full records
+        self._raw_callback_ids: set[int] = (
+            raw_callback_ids if raw_callback_ids is not None else set()
+        )
+        # Cached requirements in a box (list) for sharing between bound loggers
+        # Box[0] is the cached value or None if invalid
+        self._requirements_cache_box: list[
+            tuple[bool | CallerInfo, bool | ThreadInfo, bool | ProcessInfo] | None
+        ] = requirements_cache_box if requirements_cache_box is not None else [None]
+        # Cached aggregated options in a box for O(1) access during log
+        # Format: (caller_true, caller_fixed, caller_none, caller_false,
+        #          thread_true, thread_fixed, thread_none, thread_false,
+        #          process_true, process_fixed, process_none, process_false,
+        #          needs_full_records, tracked_handler_count)
+        self._aggregated_options_box: list[
+            tuple[
+                bool,
+                CallerInfo | None,
+                bool,
+                bool,
+                bool,
+                ThreadInfo | None,
+                bool,
+                bool,
+                bool,
+                ProcessInfo | None,
+                bool,
+                bool,
+                bool,
+                int,
+            ]
+            | None
+        ] = aggregated_options_box if aggregated_options_box is not None else [None]
+
+    def _invalidate_requirements_cache(self) -> None:
+        """Invalidate all caches (call when handlers change)."""
+        self._requirements_cache_box[0] = None
+        self._aggregated_options_box[0] = None
+
+    def _get_aggregated_options(
+        self,
+    ) -> tuple[
+        bool,
+        CallerInfo | None,
+        bool,
+        bool,
+        bool,
+        ThreadInfo | None,
+        bool,
+        bool,
+        bool,
+        ProcessInfo | None,
+        bool,
+        bool,
+        bool,
+        int,
+    ]:
+        """Get aggregated CollectOptions, computing and caching if needed.
+
+        Returns cached result or computes from _collect_options.
+        This is O(n) on first call after invalidation, O(1) thereafter.
+        """
+        cached = self._aggregated_options_box[0]
+        if cached is not None:
+            return cached
+
+        caller_true = False
+        caller_fixed: CallerInfo | None = None
+        caller_none = False
+        caller_false = False
+
+        thread_true = False
+        thread_fixed: ThreadInfo | None = None
+        thread_none = False
+        thread_false = False
+
+        process_true = False
+        process_fixed: ProcessInfo | None = None
+        process_none = False
+        process_false = False
+
+        tracked_handler_count = 0
+
+        for handler_id, opts in self._collect_options.items():
+            # Count tracked file handlers (not callbacks)
+            if handler_id not in self._callback_ids:
+                tracked_handler_count += 1
+
+            if opts.caller is True:
+                caller_true = True
+            elif isinstance(opts.caller, CallerInfo):
+                if caller_fixed is None:
+                    caller_fixed = opts.caller
+            elif opts.caller is None:
+                caller_none = True
+            elif opts.caller is False:
+                caller_false = True
+
+            if opts.thread is True:
+                thread_true = True
+            elif isinstance(opts.thread, ThreadInfo):
+                if thread_fixed is None:
+                    thread_fixed = opts.thread
+            elif opts.thread is None:
+                thread_none = True
+            elif opts.thread is False:
+                thread_false = True
+
+            if opts.process is True:
+                process_true = True
+            elif isinstance(opts.process, ProcessInfo):
+                if process_fixed is None:
+                    process_fixed = opts.process
+            elif opts.process is None:
+                process_none = True
+            elif opts.process is False:
+                process_false = True
+
+        needs_full_records = len(self._raw_callback_ids) > 0 or len(self._filter_ids) > 0
+
+        result = (
+            caller_true,
+            caller_fixed,
+            caller_none,
+            caller_false,
+            thread_true,
+            thread_fixed,
+            thread_none,
+            thread_false,
+            process_true,
+            process_fixed,
+            process_none,
+            process_false,
+            needs_full_records,
+            tracked_handler_count,
+        )
+        self._aggregated_options_box[0] = result
+        return result
+
+    def _compute_effective_requirements(
+        self,
+    ) -> tuple[bool | CallerInfo, bool | ThreadInfo, bool | ProcessInfo]:
+        """Compute effective requirements considering CollectOptions.
+
+        Results are cached and returned on subsequent calls until invalidated.
+        Uses pre-aggregated options for O(1) computation after first call.
+
+        Priority order (highest to lowest):
+        1. True - explicit request to collect dynamically
+        2. Rust needs - callbacks/filters/format require the data
+        3. Fixed value - use fixed value when no dynamic need
+        4. False/else - don't collect
+
+        Key principle: If Rust needs the data (callbacks always need full records,
+        or format requires it), we MUST collect regardless of caller=False.
+        The caller=False setting means "I don't need it for my output", not
+        "prevent collection for the entire system".
+
+        Returns:
+            Tuple of (caller_requirement, thread_requirement, process_requirement)
+            where each is True (collect), False (skip), or a fixed value instance.
+        """
+        # Return cached result if available (O(1) hot path)
+        cached = self._requirements_cache_box[0]
+        if cached is not None:
+            return cached
+
+        if not self._collect_options:
+            # No CollectOptions, use Rust-detected requirements
+            result: tuple[bool | CallerInfo, bool | ThreadInfo, bool | ProcessInfo] = (
+                self._inner.needs_caller_info,
+                self._inner.needs_thread_info,
+                self._inner.needs_process_info,
+            )
+            self._requirements_cache_box[0] = result
+            return result
+
+        # Get pre-aggregated options (O(1) if already cached)
+        (
+            caller_true,
+            caller_fixed,
+            caller_none,
+            caller_false,
+            thread_true,
+            thread_fixed,
+            thread_none,
+            thread_false,
+            process_true,
+            process_fixed,
+            process_none,
+            process_false,
+            needs_full_records,
+            tracked_handler_count,
+        ) = self._get_aggregated_options()
+
+        # Check if there are untracked handlers (O(1) - uses cached tracked_handler_count)
+        has_untracked_handlers = self._inner.handler_count > tracked_handler_count
+
+        # If there are untracked handlers (like default console) and they need info, collect.
+        has_untracked_caller_need = (
+            has_untracked_handlers and self._inner.needs_caller_info_for_handlers
+        )
+        has_untracked_thread_need = (
+            has_untracked_handlers and self._inner.needs_thread_info_for_handlers
+        )
+        has_untracked_process_need = (
+            has_untracked_handlers and self._inner.needs_process_info_for_handlers
+        )
+
+        # Dynamic collection is needed when:
+        # 1. Auto-detect (xxx_none) and handler format needs it
+        # 2. Raw callbacks/filters need full records
+        # 3. Untracked handlers may need it
+        needs_dynamic_caller = (
+            (self._inner.needs_caller_info_for_handlers and caller_none)
+            or needs_full_records
+            or has_untracked_caller_need
+        )
+        needs_dynamic_thread = (
+            (self._inner.needs_thread_info_for_handlers and thread_none)
+            or needs_full_records
+            or has_untracked_thread_need
+        )
+        needs_dynamic_process = (
+            (self._inner.needs_process_info_for_handlers and process_none)
+            or needs_full_records
+            or has_untracked_process_need
+        )
+
+        # Caller
+        if caller_true:
+            needs_caller: bool | CallerInfo = True
+        elif needs_dynamic_caller:
+            needs_caller = True
+        elif caller_fixed is not None:
+            needs_caller = caller_fixed
+        elif caller_false:
+            needs_caller = False
+        else:
+            needs_caller = False
+
+        # Thread
+        if thread_true:
+            needs_thread: bool | ThreadInfo = True
+        elif needs_dynamic_thread:
+            needs_thread = True
+        elif thread_fixed is not None:
+            needs_thread = thread_fixed
+        elif thread_false:
+            needs_thread = False
+        else:
+            needs_thread = False
+
+        # Process
+        if process_true:
+            needs_process: bool | ProcessInfo = True
+        elif needs_dynamic_process:
+            needs_process = True
+        elif process_fixed is not None:
+            needs_process = process_fixed
+        elif process_false:
+            needs_process = False
+        else:
+            needs_process = False
+
+        # Cache and return the result
+        result = (needs_caller, needs_thread, needs_process)
+        self._requirements_cache_box[0] = result
+        return result
 
     def _log_with_level(
         self,
@@ -108,10 +555,107 @@ class Logger:
     ) -> None:
         if level_value < self._inner.min_level:
             return
-        name, function, line = _get_caller_info(depth + 1)
-        getattr(self._inner, level_name)(
-            str(message), exception=exception, name=name, function=function, line=line
-        )
+
+        # Compute effective requirements considering CollectOptions
+        needs_caller, needs_thread, needs_process = self._compute_effective_requirements()
+
+        if needs_caller is False and needs_thread is False and needs_process is False:
+            if exception is None:
+                getattr(self._inner, level_name)(str(message))
+            else:
+                getattr(self._inner, level_name)(str(message), exception=exception)
+            return
+
+        if needs_thread is False and needs_process is False:
+            if needs_caller is True:
+                name, function, line, file = _get_caller_info(depth + 1)
+            else:
+                # needs_caller is CallerInfo (False case already returned above)
+                name, function, line, file = (
+                    needs_caller.name,  # type: ignore[union-attr]
+                    needs_caller.function,  # type: ignore[union-attr]
+                    needs_caller.line,  # type: ignore[union-attr]
+                    needs_caller.file,  # type: ignore[union-attr]
+                )
+            if exception is None:
+                getattr(self._inner, level_name)(
+                    str(message), name=name, function=function, line=line, file=file
+                )
+            else:
+                getattr(self._inner, level_name)(
+                    str(message),
+                    exception=exception,
+                    name=name,
+                    function=function,
+                    line=line,
+                    file=file,
+                )
+            return
+
+        # Handle caller info
+        c_name: str | None
+        c_function: str | None
+        c_line: int | None
+        c_file: str | None
+        if needs_caller is True:
+            c_name, c_function, c_line, c_file = _get_caller_info(depth + 1)
+        elif needs_caller is not False:
+            c_name, c_function, c_line, c_file = (
+                needs_caller.name,
+                needs_caller.function,
+                needs_caller.line,
+                needs_caller.file,
+            )
+        else:
+            c_name, c_function, c_line, c_file = None, None, None, None
+
+        # Handle thread info
+        t_name: str | None
+        t_id: int | None
+        if needs_thread is True:
+            t_name, t_id = _get_thread_info()
+        elif needs_thread is not False:
+            t_name = needs_thread.name
+            t_id = needs_thread.id
+        else:
+            t_name, t_id = None, None
+
+        # Handle process info
+        p_name: str | None
+        p_id: int | None
+        if needs_process is True:
+            p_name, p_id = _get_process_info()
+        elif needs_process is not False:
+            p_name = needs_process.name
+            p_id = needs_process.id
+        else:
+            p_name, p_id = None, None
+
+        if exception is None:
+            getattr(self._inner, level_name)(
+                str(message),
+                name=c_name,
+                function=c_function,
+                line=c_line,
+                file=c_file,
+                thread_name=t_name,
+                thread_id=t_id,
+                process_name=p_name,
+                process_id=p_id,
+            )
+        else:
+            getattr(self._inner, level_name)(
+                str(message),
+                exception=exception,
+                name=c_name,
+                function=c_function,
+                line=c_line,
+                file=c_file,
+                thread_name=t_name,
+                thread_id=t_id,
+                process_name=p_name,
+                process_id=p_id,
+            )
 
     def trace(
         self, message: str, *, exception: str | None = None, _depth: int = 0, **kwargs: Any
@@ -242,10 +786,106 @@ class Logger:
             self._log_with_level(level, _LEVEL_VALUE_MAP[level], message, exception, _depth + 1)
             return
 
-        name, function, line = _get_caller_info(_depth + 1)
-        self._inner.log(
-            level, str(message), exception=exception, name=name, function=function, line=line
-        )
+        # Compute effective requirements considering CollectOptions
+        needs_caller, needs_thread, needs_process = self._compute_effective_requirements()
+
+        if needs_caller is False and needs_thread is False and needs_process is False:
+            if exception is None:
+                self._inner.log(level, str(message))
+            else:
+                self._inner.log(level, str(message), exception=exception)
+            return
+
+        if needs_thread is False and needs_process is False:
+            if needs_caller is True:
+                name, function, line, file = _get_caller_info(_depth + 1)
+            else:
+                # needs_caller is CallerInfo (False case already returned above)
+                name, function, line, file = (
+                    needs_caller.name,  # type: ignore[union-attr]
+                    needs_caller.function,  # type: ignore[union-attr]
+                    needs_caller.line,  # type: ignore[union-attr]
+                    needs_caller.file,  # type: ignore[union-attr]
+                )
+            if exception is None:
+                self._inner.log(
+                    level, str(message), name=name, function=function, line=line, file=file
+                )
+            else:
+                self._inner.log(
+                    level,
+                    str(message),
+                    exception=exception,
+                    name=name,
+                    function=function,
+                    line=line,
+                    file=file,
+                )
+            return
+
+        name_: str | None
+        function_: str | None
+        line_: int | None
+        file_: str | None
+        if needs_caller is True:
+            name_, function_, line_, file_ = _get_caller_info(_depth + 1)
+        elif needs_caller is not False:
+            name_, function_, line_, file_ = (
+                needs_caller.name,
+                needs_caller.function,
+                needs_caller.line,
+                needs_caller.file,
+            )
+        else:
+            name_, function_, line_, file_ = None, None, None, None
+
+        thread_name: str | None
+        thread_id: int | None
+        if needs_thread is True:
+            thread_name, thread_id = _get_thread_info()
+        elif needs_thread is not False:
+            thread_name = needs_thread.name
+            thread_id = needs_thread.id
+        else:
+            thread_name, thread_id = None, None
+
+        process_name: str | None
+        process_id: int | None
+        if needs_process is True:
+            process_name, process_id = _get_process_info()
+        elif needs_process is not False:
+            process_name = needs_process.name
+            process_id = needs_process.id
+        else:
+            process_name, process_id = None, None
+
+        if exception is None:
+            self._inner.log(
+                level,
+                str(message),
+                name=name_,
+                function=function_,
+                line=line_,
+                file=file_,
+                thread_name=thread_name,
+                thread_id=thread_id,
+                process_name=process_name,
+                process_id=process_id,
+            )
+        else:
+            self._inner.log(
+                level,
+                str(message),
+                exception=exception,
+                name=name_,
+                function=function_,
+                line=line_,
+                file=file_,
+                thread_name=thread_name,
+                thread_id=thread_id,
+                process_name=process_name,
+                process_id=process_id,
+            )
 
     def set_level(self, level: LogLevel | str) -> None:
         """Set minimum log level for console output."""
@@ -291,7 +931,7 @@ class Logger:
 
     def add(
         self,
-        sink: str | os.PathLike[str] | TextIO,
+        sink: str | os.PathLike[str] | TextIO | Callable[[str], Any],
         *,
         level: LogLevel | str | None = None,
         format: str | None = None,
@@ -302,11 +942,13 @@ class Logger:
         filter: Callable[[dict[str, Any]], bool] | None = None,
         enqueue: bool = False,
         colorize: bool | None = None,
+        collect: CollectOptions | None = None,
     ) -> int:
-        """Add a handler (file or console sink).
+        """Add a handler (file, console, or callable sink).
 
         Args:
-            sink: Path to the log file (str or Path object), or sys.stdout/sys.stderr.
+            sink: Path to the log file (str or Path object), sys.stdout/sys.stderr,
+                  or a callable that receives formatted log messages.
             level: Minimum log level for this handler.
             format: Custom format string (e.g., "{time} | {level} | {message}").
             rotation: Rotation strategy ("daily", "hourly", "500 MB", etc.)
@@ -325,6 +967,8 @@ class Logger:
             colorize: Enable ANSI color codes (for console sinks).
                       If None, auto-detect based on whether sink is a TTY.
                       Only valid for console sinks.
+            collect: Options for controlling information collection.
+                     Can override auto-detection from format string.
 
         Returns:
             Handler ID for later removal.
@@ -337,8 +981,38 @@ class Logger:
             >>> logger.add("async.log", enqueue=True)  # Async writes
             >>> logger.add(sys.stdout, colorize=True)  # Colored console output
             >>> logger.add(sys.stderr, serialize=True)  # JSON to stderr
+            >>> logger.add(lambda msg: print(msg))  # Callable sink
+            >>> logger.add("app.log", collect=CollectOptions(caller=False))
+
+        Note:
+            Callable sinks can be removed with remove() or remove_callback().
         """
         import sys
+
+        # Check for callable sink first (before checking stdout/stderr)
+        if callable(sink) and sink not in (sys.stdout, sys.stderr):
+            handler_id = self._add_callable_sink(
+                sink,
+                level=level,
+                format=format,
+                serialize=serialize,
+                filter=filter,
+            )
+            # For callable sinks, compute CollectOptions from format if not specified
+            # This avoids relying on Rust's needs_* which is polluted by callback registration
+            if collect is not None:
+                resolved_collect = collect
+            else:
+                default_format = "{time} | {level:<8} | {name}:{function}:{line} - {message}"
+                resolved_collect = _collect_options_from_format(format or default_format)
+            self._collect_options[handler_id] = resolved_collect
+            # Track as callback for proper removal via remove()
+            self._callback_ids.add(handler_id)
+            # Track handlers with filters (they need full records)
+            if filter is not None:
+                self._filter_ids.add(handler_id)
+            self._invalidate_requirements_cache()
+            return handler_id
 
         if sink is sys.stdout or sink is sys.stderr:
             stream_name = "stdout" if sink is sys.stdout else "stderr"
@@ -347,7 +1021,7 @@ class Logger:
             if resolved_colorize is None:
                 resolved_colorize = sink.isatty() if hasattr(sink, "isatty") else False
 
-            return self._inner.add_console(
+            handler_id = self._inner.add_console(
                 stream=stream_name,
                 level=resolved_level,
                 format=format,
@@ -355,6 +1029,12 @@ class Logger:
                 filter=filter,
                 colorize=resolved_colorize,
             )
+            # Always track handler with CollectOptions (default to auto-detect if not specified)
+            self._collect_options[handler_id] = collect if collect is not None else CollectOptions()
+            if filter is not None:
+                self._filter_ids.add(handler_id)
+            self._invalidate_requirements_cache()
+            return handler_id
 
         # At this point sink must be a path (str or PathLike), not TextIO
         sink_str = os.fspath(sink)  # type: ignore[arg-type]
@@ -365,7 +1045,7 @@ class Logger:
         if retention is not None:
             retention_str = str(retention) if isinstance(retention, int) else retention
 
-        return self._inner.add(
+        handler_id = self._inner.add(
             sink_str,
             level=resolved_level,
             format=format,
@@ -376,6 +1056,84 @@ class Logger:
             filter=filter,
             enqueue=enqueue,
         )
+        # Always track handler with CollectOptions (default to auto-detect if not specified)
+        self._collect_options[handler_id] = collect if collect is not None else CollectOptions()
+        if filter is not None:
+            self._filter_ids.add(handler_id)
+        self._invalidate_requirements_cache()
+        return handler_id
+
+    def _add_callable_sink(
+        self,
+        sink: Callable[[str], Any],
+        *,
+        level: LogLevel | str | None = None,
+        format: str | None = None,
+        serialize: bool = False,
+        filter: Callable[[dict[str, Any]], bool] | None = None,
+    ) -> int:
+        """Add a callable as a sink (internal method).
+
+        The callable will receive formatted log messages as strings.
+
+        Args:
+            sink: Callable that receives formatted log messages.
+            level: Minimum log level for this handler.
+            format: Custom format string.
+            serialize: Output as JSON instead of text format.
+            filter: Optional callable that receives a record dict and returns
+                    True if the record should be logged, False to skip.
+
+        Returns:
+            Handler ID for later removal.
+        """
+        import json
+
+        resolved_level = _to_log_level(level) if level is not None else None
+        default_format = "{time} | {level:<8} | {name}:{function}:{line} - {message}"
+        template_str = format or default_format
+
+        # Pre-parse template for efficient single-pass formatting
+        parsed_template = ParsedCallableTemplate(template_str)
+
+        def callback_wrapper(record: dict[str, Any]) -> None:
+            # Apply filter if provided
+            if filter is not None and not filter(record):
+                return
+
+            try:
+                if serialize:
+                    # Output as JSON matching Rust's format_record_json
+                    json_record: dict[str, Any] = {
+                        "time": record.get("timestamp", ""),
+                        "level": record.get("level", ""),
+                        "message": record.get("message", ""),
+                    }
+                    # Only include non-empty caller info
+                    if record.get("name"):
+                        json_record["name"] = record["name"]
+                    if record.get("function"):
+                        json_record["function"] = record["function"]
+                    if record.get("line"):
+                        json_record["line"] = record["line"]
+                    # Include extra if non-empty
+                    extra = record.get("extra", {})
+                    if extra:
+                        json_record["extra"] = extra
+                    # Include exception if present
+                    if record.get("exception"):
+                        json_record["exception"] = record["exception"]
+                    formatted = json.dumps(json_record)
+                else:
+                    # Format using pre-parsed template (single-pass, ~1-2us faster)
+                    formatted = parsed_template.format(record)
+
+                sink(formatted)
+            except Exception:
+                # Silently ignore sink errors (like loguru behavior)
+                pass
+
+        return self._inner.add_callback(callback_wrapper, resolved_level)
 
     def remove(self, handler_id: int | None = None) -> bool:
         """Remove a handler by ID, or all handlers if None.
@@ -391,7 +1149,31 @@ class Logger:
             >>> logger.remove(handler_id)  # Remove specific handler
             >>> logger.remove()  # Remove ALL handlers (including console)
         """
-        return self._inner.remove(handler_id)
+        # If this is a callable sink, redirect to remove_callback
+        if handler_id is not None and handler_id in self._callback_ids:
+            return self.remove_callback(handler_id)
+
+        result = self._inner.remove(handler_id)
+        # Clean up CollectOptions and tracking sets
+        if handler_id is not None:
+            self._collect_options.pop(handler_id, None)
+            self._filter_ids.discard(handler_id)
+            self._invalidate_requirements_cache()
+        else:
+            # Remove all handlers: also remove all callable sinks and raw callbacks
+            # Use batch removal to avoid O(n²) cache updates
+            all_callback_ids = list(self._callback_ids) + list(self._raw_callback_ids)
+            callbacks_removed = (
+                self._inner.remove_callbacks(all_callback_ids) if all_callback_ids else 0
+            )
+            self._collect_options.clear()
+            self._callback_ids.clear()
+            self._filter_ids.clear()
+            self._raw_callback_ids.clear()
+            self._invalidate_requirements_cache()
+            # Return True if handlers OR callbacks were removed
+            return result or callbacks_removed > 0
+        return result
 
     def bind(self, **kwargs: Any) -> Logger:
         """Create a new logger with bound context values.
@@ -408,7 +1190,16 @@ class Logger:
             # Output includes extra context in JSON mode
         """
         new_inner = self._inner.bind(kwargs)
-        return Logger(new_inner, patchers=self._patchers.copy())
+        return Logger(
+            new_inner,
+            patchers=self._patchers.copy(),
+            collect_options=self._collect_options,
+            callback_ids=self._callback_ids,
+            filter_ids=self._filter_ids,
+            raw_callback_ids=self._raw_callback_ids,
+            requirements_cache_box=self._requirements_cache_box,
+            aggregated_options_box=self._aggregated_options_box,
+        )
 
     @contextmanager
     def contextualize(self, **kwargs: Any) -> Generator[Logger, None, None]:
@@ -501,7 +1292,13 @@ class Logger:
             >>> logger.remove_callback(callback_id)
         """
         resolved_level = _to_log_level(level) if level is not None else None
-        return self._inner.add_callback(callback, resolved_level)
+        callback_id = self._inner.add_callback(callback, resolved_level)
+        # Track with default CollectOptions (auto-detect) so callbacks get full records
+        self._collect_options[callback_id] = CollectOptions()
+        # Track as raw callback (receives raw records, needs full records)
+        self._raw_callback_ids.add(callback_id)
+        self._invalidate_requirements_cache()
+        return callback_id
 
     def remove_callback(self, callback_id: int) -> bool:
         """Remove a callback by ID.
@@ -512,7 +1309,14 @@ class Logger:
         Returns:
             True if callback was removed, False otherwise.
         """
-        return self._inner.remove_callback(callback_id)
+        result = self._inner.remove_callback(callback_id)
+        # Clean up CollectOptions and tracking sets
+        self._collect_options.pop(callback_id, None)
+        self._callback_ids.discard(callback_id)
+        self._filter_ids.discard(callback_id)
+        self._raw_callback_ids.discard(callback_id)
+        self._invalidate_requirements_cache()
+        return result
 
     def patch(self, patcher: Callable[[dict[str, Any]], None]) -> Logger:
         """Create a new logger with a patcher function.
@@ -540,7 +1344,16 @@ class Logger:
         """
         new_patchers = self._patchers.copy()
         new_patchers.append(patcher)
-        return Logger(self._inner, patchers=new_patchers)
+        return Logger(
+            self._inner,
+            patchers=new_patchers,
+            collect_options=self._collect_options,
+            callback_ids=self._callback_ids,
+            filter_ids=self._filter_ids,
+            raw_callback_ids=self._raw_callback_ids,
+            requirements_cache_box=self._requirements_cache_box,
+            aggregated_options_box=self._aggregated_options_box,
+        )
 
     def configure(
         self,

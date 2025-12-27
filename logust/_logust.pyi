@@ -139,6 +139,52 @@ class PyLogger:
         """Remove a callback by ID."""
         ...
 
+    def remove_callbacks(self, callback_ids: list[int]) -> int:
+        """Remove multiple callbacks by IDs (batch operation).
+
+        More efficient than calling remove_callback multiple times
+        as it only updates caches once at the end.
+
+        Returns:
+            Number of callbacks actually removed.
+        """
+        ...
+
+    @property
+    def needs_caller_info(self) -> bool:
+        """Check if any handler/callback needs caller info."""
+        ...
+
+    @property
+    def needs_thread_info(self) -> bool:
+        """Check if any handler/callback needs thread info."""
+        ...
+
+    @property
+    def needs_process_info(self) -> bool:
+        """Check if any handler/callback needs process info."""
+        ...
+
+    @property
+    def needs_caller_info_for_handlers(self) -> bool:
+        """Check if any handler format needs caller info (excludes callbacks)."""
+        ...
+
+    @property
+    def needs_thread_info_for_handlers(self) -> bool:
+        """Check if any handler format needs thread info (excludes callbacks)."""
+        ...
+
+    @property
+    def needs_process_info_for_handlers(self) -> bool:
+        """Check if any handler format needs process info (excludes callbacks)."""
+        ...
+
+    @property
+    def handler_count(self) -> int:
+        """Get the current number of handlers (excludes callbacks)."""
+        ...
+
     def level(
         self,
         name: str,
@@ -157,39 +203,140 @@ class PyLogger:
         name: str | None = None,
         function: str | None = None,
         line: int | None = None,
+        file: str | None = None,
+        thread_name: str | None = None,
+        thread_id: int | None = None,
+        process_name: str | None = None,
+        process_id: int | None = None,
     ) -> None:
         """Log at any level (built-in or custom)."""
         ...
 
-    def trace(self, message: str, exception: str | None = None) -> None:
+    def trace(
+        self,
+        message: str,
+        exception: str | None = None,
+        name: str | None = None,
+        function: str | None = None,
+        line: int | None = None,
+        file: str | None = None,
+        thread_name: str | None = None,
+        thread_id: int | None = None,
+        process_name: str | None = None,
+        process_id: int | None = None,
+    ) -> None:
         """Output TRACE level log message."""
         ...
 
-    def debug(self, message: str, exception: str | None = None) -> None:
+    def debug(
+        self,
+        message: str,
+        exception: str | None = None,
+        name: str | None = None,
+        function: str | None = None,
+        line: int | None = None,
+        file: str | None = None,
+        thread_name: str | None = None,
+        thread_id: int | None = None,
+        process_name: str | None = None,
+        process_id: int | None = None,
+    ) -> None:
         """Output DEBUG level log message."""
         ...
 
-    def info(self, message: str, exception: str | None = None) -> None:
+    def info(
+        self,
+        message: str,
+        exception: str | None = None,
+        name: str | None = None,
+        function: str | None = None,
+        line: int | None = None,
+        file: str | None = None,
+        thread_name: str | None = None,
+        thread_id: int | None = None,
+        process_name: str | None = None,
+        process_id: int | None = None,
+    ) -> None:
         """Output INFO level log message."""
         ...
 
-    def success(self, message: str, exception: str | None = None) -> None:
+    def success(
+        self,
+        message: str,
+        exception: str | None = None,
+        name: str | None = None,
+        function: str | None = None,
+        line: int | None = None,
+        file: str | None = None,
+        thread_name: str | None = None,
+        thread_id: int | None = None,
+        process_name: str | None = None,
+        process_id: int | None = None,
+    ) -> None:
         """Output SUCCESS level log message."""
         ...
 
-    def warning(self, message: str, exception: str | None = None) -> None:
+    def warning(
+        self,
+        message: str,
+        exception: str | None = None,
+        name: str | None = None,
+        function: str | None = None,
+        line: int | None = None,
+        file: str | None = None,
+        thread_name: str | None = None,
+        thread_id: int | None = None,
+        process_name: str | None = None,
+        process_id: int | None = None,
+    ) -> None:
         """Output WARNING level log message."""
         ...
 
-    def error(self, message: str, exception: str | None = None) -> None:
+    def error(
+        self,
+        message: str,
+        exception: str | None = None,
+        name: str | None = None,
+        function: str | None = None,
+        line: int | None = None,
+        file: str | None = None,
+        thread_name: str | None = None,
+        thread_id: int | None = None,
+        process_name: str | None = None,
+        process_id: int | None = None,
+    ) -> None:
         """Output ERROR level log message."""
         ...
 
-    def fail(self, message: str, exception: str | None = None) -> None:
+    def fail(
+        self,
+        message: str,
+        exception: str | None = None,
+        name: str | None = None,
+        function: str | None = None,
+        line: int | None = None,
+        file: str | None = None,
+        thread_name: str | None = None,
+        thread_id: int | None = None,
+        process_name: str | None = None,
+        process_id: int | None = None,
+    ) -> None:
         """Output FAIL level log message."""
         ...
 
-    def critical(self, message: str, exception: str | None = None) -> None:
+    def critical(
+        self,
+        message: str,
+        exception: str | None = None,
+        name: str | None = None,
+        function: str | None = None,
+        line: int | None = None,
+        file: str | None = None,
+        thread_name: str | None = None,
+        thread_id: int | None = None,
+        process_name: str | None = None,
+        process_id: int | None = None,
+    ) -> None:
         """Output CRITICAL level log message."""
         ...
 

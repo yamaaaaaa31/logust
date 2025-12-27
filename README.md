@@ -10,10 +10,10 @@ A fast, Rust-powered Python logging library inspired by [loguru](https://github.
 
 ## Features
 
-- **Blazing Fast** - Rust-powered core delivers up to 17x faster performance than loguru
+- **Blazing Fast** - Rust-powered core delivers 5-24x faster performance than loguru
 - **Beautiful by Default** - Colored output with zero configuration needed
 - **Caller Information** - Automatic module, function, and line number in every log
-- **Console & File Sinks** - Output to stdout, stderr, or files with different formats
+- **Flexible Sinks** - Output to console, files, or any callable (lambda, function)
 - **Simple API** - loguru-compatible interface for easy migration
 - **File Management** - Size/time-based rotation, retention policies, gzip compression
 - **JSON Support** - Built-in serialization for structured logging
@@ -26,25 +26,25 @@ A fast, Rust-powered Python logging library inspired by [loguru](https://github.
 
 ## Benchmarks
 
-Comparison with Python logging and loguru (10,000 log messages):
+Comparison with Python logging and loguru (10,000 log messages, all with caller info):
 
 | Scenario | logging | loguru | logust | vs loguru |
 |----------|---------|--------|--------|-----------|
-| File write (sync) | 57 ms | 67 ms | **11 ms** | 6x faster |
-| Formatted messages | 56 ms | 67 ms | **11 ms** | 6x faster |
-| JSON serialize | N/A | 137 ms | **10 ms** | 14x faster |
-| Context binding | N/A | 66 ms | **10 ms** | 7x faster |
+| File write (sync) | 59 ms | 64 ms | **13 ms** | 5x faster |
+| Formatted messages | 58 ms | 67 ms | **14 ms** | 5x faster |
+| JSON serialize | N/A | 137 ms | **13 ms** | 11x faster |
+| Context binding | N/A | 65 ms | **13 ms** | 5x faster |
 
 ### Async writes
 
 | Scenario | loguru | logust | vs loguru |
 |----------|--------|--------|-----------|
-| File write (async) | 313 ms | **10 ms** | 31x faster |
-| Sync vs Async overhead | **4x slower** | **No overhead** | - |
+| File write (async) | 307 ms | **13 ms** | 24x faster |
+| Sync vs Async overhead | **5x slower** | **No overhead** | - |
 
 loguru's `enqueue=True` adds significant overhead due to Python's Queue. Logust uses Rust's lock-free channels, maintaining speed while offloading I/O.
 
-**Summary:** logust is **17x faster** than loguru on average with rich caller information included in every log message.
+**Summary:** logust is **5-24x faster** than loguru with rich caller information included in every log message (sync: 5-11x, async: 24x).
 
 ## Installation
 
@@ -192,9 +192,38 @@ logger.add("custom.log", format="[{level}] {message}")
 # {level:<8}   - Level with width specifier
 # {message}    - Log message
 # {name}       - Module name
+# {module}     - Module name (alias for {name})
 # {function}   - Function name
 # {line}       - Line number
+# {file}       - Source file name
+# {elapsed}    - Time since logger start (HH:MM:SS.mmm)
+# {thread}     - Thread name:id
+# {process}    - Process name:id
 # {extra[key]} - Extra context fields
+```
+
+## Callable Sinks
+
+Send logs to any callable (function, lambda, method):
+
+```python
+from logust import logger
+
+# Lambda sink
+messages = []
+logger.add(lambda msg: messages.append(msg))
+
+# Function sink with formatting
+def my_sink(msg):
+    print(f"[LOG] {msg}")
+
+logger.add(my_sink, format="{level} | {message}")
+
+# With level filter
+logger.add(lambda msg: send_to_slack(msg), level="ERROR")
+
+# With JSON serialization
+logger.add(lambda msg: send_to_elasticsearch(msg), serialize=True)
 ```
 
 ## Context Binding
@@ -455,7 +484,7 @@ setup_fastapi(app, skip_routes=["/health"])
 | `trace/debug/info/success/warning/error/fail/critical(message)` | Log at specific level |
 | `log(level, message)` | Log at any level (name or number) |
 | `exception(message)` | Log ERROR with current traceback |
-| `add(sink, **options)` | Add file handler |
+| `add(sink, **options)` | Add handler (file, console, or callable) |
 | `remove(handler_id)` | Remove handler |
 | `bind(**kwargs)` | Create logger with bound context |
 | `contextualize(**kwargs)` | Temporary context (context manager) |

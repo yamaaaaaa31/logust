@@ -33,7 +33,10 @@ def setup_python_logging(log_file: Path | None = None) -> logging.Logger:
         handler = logging.NullHandler()
 
     handler.setLevel(logging.DEBUG)
-    formatter = logging.Formatter("%(asctime)s | %(levelname)s | %(message)s")
+    # Match loguru/logust format: time | level | module:function:line - message
+    formatter = logging.Formatter(
+        "%(asctime)s | %(levelname)-8s | %(name)s:%(funcName)s:%(lineno)d - %(message)s"
+    )
     handler.setFormatter(formatter)
     py_logger.addHandler(handler)
 

@@ -50,7 +50,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from ._logger import Logger
+from ._logger import CallerInfo, CollectOptions, Logger, ProcessInfo, ThreadInfo
 from ._logust import LogLevel, PyLogger, Rotation
 from ._logust import logger as _rust_logger
 from ._opt import OptLogger
@@ -90,6 +90,8 @@ def __getattr__(name: str) -> Any:
 
 
 __all__ = [
+    "CallerInfo",
+    "CollectOptions",
     "FilterCallback",
     "HandlerConfig",
     "LevelConfig",
@@ -99,10 +101,12 @@ __all__ = [
     "Logger",
     "OptLogger",
     "PatcherCallback",
+    "ProcessInfo",
     "PyLogger",
     "RecordException",
     "RecordLevel",
     "Rotation",
+    "ThreadInfo",
     "__version__",
     "logger",
     "parse",

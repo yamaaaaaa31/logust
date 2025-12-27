@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::LazyLock;
 
 use chrono::{DateTime, Local};
 use colored::Color;
@@ -6,6 +7,22 @@ use serde::Serialize;
 
 use crate::handler::LogRecord;
 use crate::level::LogLevel;
+
+/// Logger initialization time for elapsed calculation
+pub static LOGGER_START_TIME: LazyLock<DateTime<Local>> = LazyLock::new(Local::now);
+
+/// Format elapsed time as HH:MM:SS.mmm
+/// Handles negative durations (e.g., clock adjustment) by clamping to 0
+pub fn format_elapsed(start: &DateTime<Local>, now: &DateTime<Local>) -> String {
+    let duration = *now - *start;
+    let total_millis = duration.num_milliseconds().max(0) as u64;
+    let millis = (total_millis % 1000) as u32;
+    let total_secs = total_millis / 1000;
+    let hours = total_secs / 3600;
+    let minutes = (total_secs % 3600) / 60;
+    let seconds = total_secs % 60;
+    format!("{:02}:{:02}:{:02}.{:03}", hours, minutes, seconds, millis)
+}
 
 /// Apply ANSI color code to text (thread-safe, no global state)
 #[inline]
@@ -58,6 +75,53 @@ const DEFAULT_TIME_FORMAT: &str = "%Y-%m-%d %H:%M:%S%.3f";
 /// Initial capacity hint for formatted result strings
 const FORMAT_RESULT_CAPACITY: usize = 64;
 
+/// Flags indicating which runtime information is needed for formatting
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TokenRequirements {
+    /// Needs caller info (name, module, function, line, file)
+    pub needs_caller: bool,
+    /// Needs thread info (thread name and id)
+    pub needs_thread: bool,
+    /// Needs process info (process name and id)
+    pub needs_process: bool,
+    /// Needs time formatting (for lazy computation optimization)
+    pub needs_time: bool,
+    /// Needs level formatting (for lazy computation optimization)
+    pub needs_level: bool,
+    /// Needs message formatting (for lazy computation optimization)
+    pub needs_message: bool,
+    /// Needs elapsed time (for lazy computation optimization)
+    pub needs_elapsed: bool,
+}
+
+impl TokenRequirements {
+    /// Merge requirements (OR operation)
+    pub fn merge(&self, other: &TokenRequirements) -> TokenRequirements {
+        TokenRequirements {
+            needs_caller: self.needs_caller || other.needs_caller,
+            needs_thread: self.needs_thread || other.needs_thread,
+            needs_process: self.needs_process || other.needs_process,
+            needs_time: self.needs_time || other.needs_time,
+            needs_level: self.needs_level || other.needs_level,
+            needs_message: self.needs_message || other.needs_message,
+            needs_elapsed: self.needs_elapsed || other.needs_elapsed,
+        }
+    }
+
+    /// All requirements enabled (for callbacks/filters that need full record)
+    pub fn all() -> TokenRequirements {
+        TokenRequirements {
+            needs_caller: true,
+            needs_thread: true,
+            needs_process: true,
+            needs_time: true,
+            needs_level: true,
+            needs_message: true,
+            needs_elapsed: true,
+        }
+    }
+}
+
 /// Pre-parsed format token for efficient template rendering
 #[derive(Clone, Debug)]
 pub enum FormatToken {
@@ -79,6 +143,52 @@ pub enum FormatToken {
     Function,
     /// {line} placeholder - line number
     Line,
+    /// {elapsed} placeholder - time since logger start
+    Elapsed,
+    /// {thread} placeholder - thread name:id
+    Thread,
+    /// {process} placeholder - process name:id
+    Process,
+    /// {file} placeholder - source file basename
+    File,
+    /// {module} placeholder - module name (alias for Name)
+    Module,
+}
+
+/// Compute token requirements from parsed tokens
+fn compute_requirements(tokens: &[FormatToken]) -> TokenRequirements {
+    let mut reqs = TokenRequirements::default();
+    for token in tokens {
+        match token {
+            FormatToken::Name
+            | FormatToken::Module
+            | FormatToken::Function
+            | FormatToken::Line
+            | FormatToken::File => {
+                reqs.needs_caller = true;
+            }
+            FormatToken::Thread => {
+                reqs.needs_thread = true;
+            }
+            FormatToken::Process => {
+                reqs.needs_process = true;
+            }
+            FormatToken::Time => {
+                reqs.needs_time = true;
+            }
+            FormatToken::Level | FormatToken::LevelWidth(_) => {
+                reqs.needs_level = true;
+            }
+            FormatToken::Message => {
+                reqs.needs_message = true;
+            }
+            FormatToken::Elapsed => {
+                reqs.needs_elapsed = true;
+            }
+            _ => {}
+        }
+    }
+    reqs
 }
 
 /// Parse a template string into tokens
@@ -114,6 +224,16 @@ fn parse_template(template: &str) -> Vec<FormatToken> {
                 tokens.push(FormatToken::Function);
             } else if placeholder == "line" {
                 tokens.push(FormatToken::Line);
+            } else if placeholder == "elapsed" {
+                tokens.push(FormatToken::Elapsed);
+            } else if placeholder == "thread" {
+                tokens.push(FormatToken::Thread);
+            } else if placeholder == "process" {
+                tokens.push(FormatToken::Process);
+            } else if placeholder == "file" {
+                tokens.push(FormatToken::File);
+            } else if placeholder == "module" {
+                tokens.push(FormatToken::Module);
             } else if let Some(width_str) = placeholder.strip_prefix("level:<") {
                 if let Ok(width) = width_str.parse::<usize>() {
                     tokens.push(FormatToken::LevelWidth(width));
@@ -253,17 +373,21 @@ pub struct FormatConfig {
     pub serialize: bool,
     /// Time format string
     pub time_format: String,
+    /// Computed requirements based on tokens
+    requirements: TokenRequirements,
 }
 
 impl Default for FormatConfig {
     fn default() -> Self {
         let template = DEFAULT_FORMAT_TEMPLATE.to_string();
         let tokens = parse_template(&template);
+        let requirements = compute_requirements(&tokens);
         FormatConfig {
             template,
             tokens,
             serialize: false,
             time_format: DEFAULT_TIME_FORMAT.to_string(),
+            requirements,
         }
     }
 }
@@ -273,12 +397,19 @@ impl FormatConfig {
     pub fn new(template: Option<String>, serialize: bool) -> Self {
         let template = template.unwrap_or_else(|| DEFAULT_FORMAT_TEMPLATE.to_string());
         let tokens = parse_template(&template);
+        let requirements = compute_requirements(&tokens);
         FormatConfig {
             template,
             tokens,
             serialize,
             time_format: DEFAULT_TIME_FORMAT.to_string(),
+            requirements,
         }
+    }
+
+    /// Get token requirements for this format
+    pub fn requirements(&self) -> TokenRequirements {
+        self.requirements
     }
 
     /// Format a log record
@@ -309,6 +440,9 @@ impl FormatConfig {
 
     /// Format a LogRecord using pre-parsed tokens (O(n) single pass, thread-safe)
     fn format_record_template(&self, record: &LogRecord, colorize: bool) -> String {
+        let reqs = &self.requirements;
+
+        // Lazy computation: only compute if token is needed
         let level_name = record.level_name();
         let level_color = record
             .level_info
@@ -316,23 +450,38 @@ impl FormatConfig {
             .map(|info| info.get_color())
             .unwrap_or_else(|| record.level.color());
 
-        let time_raw = record.timestamp.format(&self.time_format).to_string();
-        let time_fmt = if colorize {
-            dim_text(&time_raw)
+        // Lazy time formatting - only compute if {time} token is in format
+        let time_fmt = if reqs.needs_time {
+            let time_raw = record.timestamp.format(&self.time_format).to_string();
+            if colorize {
+                Some(dim_text(&time_raw))
+            } else {
+                Some(time_raw)
+            }
         } else {
-            time_raw
+            None
         };
 
-        let level_fmt = if colorize {
-            colorize_text(level_name, level_color, true)
+        // Lazy level formatting - only compute if {level} token is in format
+        let level_fmt = if reqs.needs_level {
+            if colorize {
+                Some(colorize_text(level_name, level_color, true))
+            } else {
+                Some(level_name.to_string())
+            }
         } else {
-            level_name.to_string()
+            None
         };
 
-        let message_fmt = if colorize {
-            apply_color_markup(&record.message)
+        // Lazy message formatting - only compute if {message} token is in format
+        let message_fmt = if reqs.needs_message {
+            if colorize {
+                Some(apply_color_markup(&record.message))
+            } else {
+                Some(record.message.clone())
+            }
         } else {
-            record.message.clone()
+            None
         };
 
         let mut result = String::with_capacity(self.template.len() + FORMAT_RESULT_CAPACITY);
@@ -340,9 +489,21 @@ impl FormatConfig {
         for token in &self.tokens {
             match token {
                 FormatToken::Static(s) => result.push_str(s),
-                FormatToken::Time => result.push_str(&time_fmt),
-                FormatToken::Message => result.push_str(&message_fmt),
-                FormatToken::Level => result.push_str(&level_fmt),
+                FormatToken::Time => {
+                    if let Some(ref fmt) = time_fmt {
+                        result.push_str(fmt);
+                    }
+                }
+                FormatToken::Message => {
+                    if let Some(ref fmt) = message_fmt {
+                        result.push_str(fmt);
+                    }
+                }
+                FormatToken::Level => {
+                    if let Some(ref fmt) = level_fmt {
+                        result.push_str(fmt);
+                    }
+                }
                 FormatToken::LevelWidth(width) => {
                     let padded = format!("{:<width$}", level_name, width = width);
                     if colorize {
@@ -376,6 +537,45 @@ impl FormatConfig {
                         result.push_str(&cyan_text(&line_str));
                     } else {
                         result.push_str(&line_str);
+                    }
+                }
+                FormatToken::Elapsed => {
+                    let elapsed = format_elapsed(&LOGGER_START_TIME, &record.timestamp);
+                    if colorize {
+                        result.push_str(&dim_text(&elapsed));
+                    } else {
+                        result.push_str(&elapsed);
+                    }
+                }
+                FormatToken::Thread => {
+                    let thread_str = format!("{}:{}", record.thread.name, record.thread.id);
+                    if colorize {
+                        result.push_str(&cyan_text(&thread_str));
+                    } else {
+                        result.push_str(&thread_str);
+                    }
+                }
+                FormatToken::Process => {
+                    let process_str = format!("{}:{}", record.process.name, record.process.id);
+                    if colorize {
+                        result.push_str(&cyan_text(&process_str));
+                    } else {
+                        result.push_str(&process_str);
+                    }
+                }
+                FormatToken::File => {
+                    if colorize {
+                        result.push_str(&cyan_text(&record.caller.file));
+                    } else {
+                        result.push_str(&record.caller.file);
+                    }
+                }
+                FormatToken::Module => {
+                    // Alias for Name
+                    if colorize {
+                        result.push_str(&cyan_text(&record.caller.name));
+                    } else {
+                        result.push_str(&record.caller.name);
                     }
                 }
             }
@@ -479,8 +679,15 @@ impl FormatConfig {
                         result.push_str(value);
                     }
                 }
-                // These tokens are not available in this context (no caller info)
-                FormatToken::Name | FormatToken::Function | FormatToken::Line => {}
+                // These tokens are not available in this context (no caller/thread/process info)
+                FormatToken::Name
+                | FormatToken::Function
+                | FormatToken::Line
+                | FormatToken::Elapsed
+                | FormatToken::Thread
+                | FormatToken::Process
+                | FormatToken::File
+                | FormatToken::Module => {}
             }
         }
 

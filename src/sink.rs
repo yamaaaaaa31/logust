@@ -1,6 +1,7 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufWriter, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -94,10 +95,12 @@ enum WriterBackend {
 pub struct FileSink {
     config: FileSinkConfig,
     backend: WriterBackend,
-    current_size: Mutex<u64>,
+    /// Current file size in bytes (lock-free for hot path)
+    current_size: AtomicU64,
     current_file_time: Mutex<DateTime<Local>>,
-    /// Cached next rotation boundary for O(1) time-based rotation check
-    next_rotation_boundary: Mutex<Option<DateTime<Local>>>,
+    /// Cached next rotation boundary as epoch milliseconds for O(1) time-based rotation check.
+    /// 0 means no rotation boundary (equivalent to None).
+    next_rotation_boundary: AtomicI64,
 }
 
 impl FileSink {
@@ -170,9 +173,11 @@ impl FileSink {
         Ok(FileSink {
             config,
             backend,
-            current_size: Mutex::new(current_size),
+            current_size: AtomicU64::new(current_size),
             current_file_time: Mutex::new(now),
-            next_rotation_boundary: Mutex::new(next_boundary),
+            next_rotation_boundary: AtomicI64::new(
+                next_boundary.map(|b| b.timestamp_millis()).unwrap_or(0),
+            ),
         })
     }
 
@@ -228,7 +233,7 @@ impl FileSink {
             }
         }
 
-        *self.current_size.lock() += msg_len;
+        self.current_size.fetch_add(msg_len, Ordering::Relaxed);
 
         Ok(())
     }
@@ -252,7 +257,7 @@ impl FileSink {
             }
         }
 
-        *self.current_size.lock() += msg_len;
+        self.current_size.fetch_add(msg_len, Ordering::Relaxed);
 
         Ok(())
     }
@@ -281,17 +286,20 @@ impl FileSink {
         Ok(())
     }
 
-    /// Check if rotation is needed
+    /// Check if rotation is needed (lock-free hot path)
     #[inline]
     fn check_rotation_needed(&self) -> bool {
+        // Size-based rotation check (AtomicU64)
         if let Some(max_size) = self.config.max_size
-            && *self.current_size.lock() >= max_size
+            && self.current_size.load(Ordering::Relaxed) >= max_size
         {
             return true;
         }
 
-        if let Some(boundary) = *self.next_rotation_boundary.lock() {
-            Local::now() >= boundary
+        // Time-based rotation check (AtomicI64 as epoch millis, 0 = None)
+        let boundary_millis = self.next_rotation_boundary.load(Ordering::Relaxed);
+        if boundary_millis > 0 {
+            Local::now().timestamp_millis() >= boundary_millis
         } else {
             false
         }
@@ -315,10 +323,13 @@ impl FileSink {
 
         self.apply_retention()?;
 
-        *self.current_size.lock() = 0;
+        self.current_size.store(0, Ordering::Relaxed);
         *self.current_file_time.lock() = now;
-        *self.next_rotation_boundary.lock() =
-            Self::calculate_next_rotation_boundary(&self.config.rotation, &now);
+        let next_boundary = Self::calculate_next_rotation_boundary(&self.config.rotation, &now);
+        self.next_rotation_boundary.store(
+            next_boundary.map(|b| b.timestamp_millis()).unwrap_or(0),
+            Ordering::Relaxed,
+        );
 
         Ok(())
     }
