@@ -8,7 +8,7 @@ name = "_logust"
 crate-type = ["cdylib"]
 
 [dependencies]
-pyo3 = { version = "0.27", features = ["extension-module"] }
+pyo3 = { version = "0.28", features = ["extension-module"] }
 chrono = { version = "0.4", features = ["serde"] }
 colored = "3.0"
 flate2 = "1.0"
