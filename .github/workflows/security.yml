@@ -37,8 +37,13 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Install pip-audit
-        run: pip install pip-audit
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install pip-audit and project
+        run: |
+          pip install pip-audit
+          pip install --no-build-isolation .
 
       - name: Run pip-audit
-        run: pip-audit
+        run: pip-audit --local
