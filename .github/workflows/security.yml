@@ -42,7 +42,7 @@ jobs:
 
       - name: Install pip-audit and project
         run: |
-          pip install pip-audit
+          pip install pip-audit maturin
           pip install --no-build-isolation .
 
       - name: Run pip-audit
