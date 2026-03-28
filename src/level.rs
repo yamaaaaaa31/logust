@@ -6,7 +6,7 @@ use parking_lot::RwLock;
 use pyo3::prelude::*;
 
 /// Log level enum with numeric ordering for filtering
-#[pyclass(eq, eq_int)]
+#[pyclass(eq, eq_int, from_py_object)]
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash, Default)]
 pub enum LogLevel {
     Trace = 5,

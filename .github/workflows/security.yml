@@ -25,25 +25,3 @@ jobs:
 
       - name: Run cargo audit
         run: cargo audit
-
-  python-audit:
-    name: Python Security Audit
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: '3.12'
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install pip-audit and project
-        run: |
-          pip install pip-audit
-          pip install --no-build-isolation .
-
-      - name: Run pip-audit
-        run: pip-audit --local

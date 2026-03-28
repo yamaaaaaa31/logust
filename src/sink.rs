@@ -25,7 +25,7 @@ const GB: u64 = MB * 1024;
 const TB: u64 = GB * 1024;
 
 /// Rotation strategy
-#[pyclass(eq, eq_int)]
+#[pyclass(eq, eq_int, from_py_object)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum Rotation {
     /// No rotation
@@ -38,7 +38,7 @@ pub enum Rotation {
 }
 
 /// Retention policy
-#[pyclass(eq, eq_int)]
+#[pyclass(eq, eq_int, from_py_object)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum RetentionPolicy {
     /// No retention limit
