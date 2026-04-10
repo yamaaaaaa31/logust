@@ -19,9 +19,8 @@ description: Fast, Rust-powered Python logging library with loguru-style API, JS
 
 ---
 
-!!! success "Release-build benchmark snapshot"
-    In a recent run of `benchmarks/bench_throughput.py` (10,000 messages), `logust` completed sync file writes in **15.93 ms** and formatted logging in **15.65 ms**.
-    See the [Comparison](comparison.md) page for the full results and reproduction notes.
+!!! success "**60× faster** than logging — **170× faster** than loguru"
+    [Benchmark details →](comparison.md)
 
 ## Installation
 
