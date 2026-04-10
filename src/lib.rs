@@ -84,7 +84,10 @@ impl FormattedSinkRequirements {
 
     fn as_token_requirements(&self) -> TokenRequirements {
         TokenRequirements {
-            needs_caller: self.needs_name || self.needs_function || self.needs_line || self.needs_file,
+            needs_caller: self.needs_name
+                || self.needs_function
+                || self.needs_line
+                || self.needs_file,
             needs_thread: self.needs_thread,
             needs_process: self.needs_process,
             needs_time: self.needs_timestamp,
@@ -1041,9 +1044,9 @@ impl PyLogger {
         if needs_gil {
             Python::attach(|py| {
                 let need_full_dict = has_eligible_filtered_handler
-                    || callbacks.iter().any(|e| {
-                        level >= e.level && matches!(e.kind, CallbackKind::Raw)
-                    });
+                    || callbacks
+                        .iter()
+                        .any(|e| level >= e.level && matches!(e.kind, CallbackKind::Raw));
 
                 let shared_full: Option<Bound<'_, PyDict>> = if need_full_dict {
                     Some(Self::build_record_dict(py, level, &record))
@@ -1158,10 +1161,7 @@ impl PyLogger {
         let dict = PyDict::new(py);
 
         if req.needs_timestamp {
-            let _ = dict.set_item(
-                intern!(py, "timestamp"),
-                record.timestamp.to_rfc3339(),
-            );
+            let _ = dict.set_item(intern!(py, "timestamp"), record.timestamp.to_rfc3339());
         }
         if req.needs_level {
             let _ = dict.set_item(intern!(py, "level"), level.as_str());

@@ -145,7 +145,10 @@ class ParsedCallableTemplate:
         )
 
     def lightweight_extra_keys_for_rust(self) -> tuple[str, ...]:
-        """``extra[key]`` names for Rust ``FormattedSinkRequirements.extra_keys`` (order preserved, unique)."""
+        """``extra[key]`` names for Rust ``FormattedSinkRequirements.extra_keys``.
+
+        Order preserved, unique.
+        """
         keys: list[str] = []
         seen: set[str] = set()
         for seg in self._segments:

@@ -496,7 +496,7 @@ class Logger:
         # Check if there are untracked handlers (O(1) - uses cached tracked_handler_count)
         has_untracked_handlers = self._inner.handler_count > tracked_handler_count
 
-        # If there are untracked handlers (like default console), use emit-scoped handler formats only.
+        # Untracked handlers (e.g. default console): emit-scoped handler formats only.
         h_caller, h_thread, h_process = self._inner.handler_only_needs_for_emit_no(eff_emit)
         has_untracked_caller_need = has_untracked_handlers and h_caller
         has_untracked_thread_need = has_untracked_handlers and h_thread
@@ -821,7 +821,7 @@ class Logger:
 
         if needs_thread is False and needs_process is False:
             if needs_caller is True:
-                # Unlike ``info()`` → ``_log_with_level(..., _depth + 1)``, there is no extra wrapper.
+                # Custom ``log()`` has no ``info()`` → ``_log_with_level`` wrapper frame.
                 name, function, line, file = _get_caller_info(_depth + 1)
             else:
                 # needs_caller is CallerInfo (False case already returned above)
