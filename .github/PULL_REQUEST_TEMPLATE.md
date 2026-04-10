@@ -38,7 +38,7 @@ Describe how you tested your changes:
 ## Checklist
 
 - [ ] My code follows the project's coding standards
-- [ ] I have run `pre-commit run --all-files` and all checks pass
+- [ ] I have run `prek run --all-files` and all checks pass
 - [ ] I have added tests that prove my fix/feature works
 - [ ] I have updated the documentation (if applicable)
 - [ ] I have updated the CHANGELOG.md (if applicable)

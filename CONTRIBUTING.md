@@ -39,14 +39,14 @@ uv venv
 source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 
 # Install development dependencies
-uv pip install maturin pre-commit
+uv pip install maturin prek
 
 # Build the Rust extension in development mode
 maturin develop
 
-# Install pre-commit hooks
-pre-commit install
-pre-commit install --hook-type pre-push
+# Install git hooks
+prek install
+prek install --hook-type pre-push
 
 # Verify installation
 python -c "import logust; logust.info('Ready to contribute!')"
@@ -76,7 +76,7 @@ logust/
 ├── docs/                    # Documentation (MkDocs)
 ├── Cargo.toml              # Rust dependencies
 ├── pyproject.toml          # Python project configuration
-└── .pre-commit-config.yaml # Pre-commit hooks
+└── prek.toml               # Git hooks (prek)
 ```
 
 ## Making Changes
@@ -101,10 +101,10 @@ git checkout -b fix/your-bug-fix
 maturin develop
 ```
 
-### 4. Run Pre-commit Checks
+### 4. Run Prek Checks
 
 ```bash
-pre-commit run --all-files
+prek run --all-files
 ```
 
 ### 5. Run Tests

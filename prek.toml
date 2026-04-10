@@ -1,0 +1,76 @@
+minimum_prek_version = "0.2.0"
+default_stages = ["pre-commit"]
+
+# General hooks
+[[repos]]
+repo = "builtin"
+hooks = [
+  { id = "trailing-whitespace" },
+  { id = "end-of-file-fixer" },
+  { id = "check-yaml" },
+  { id = "check-toml" },
+  { id = "check-added-large-files", args = ["--maxkb=1000"] },
+  { id = "check-merge-conflict" },
+  { id = "detect-private-key" },
+]
+
+# Rust formatting and linting
+[[repos]]
+repo = "local"
+
+[[repos.hooks]]
+id = "cargo-fmt"
+name = "cargo fmt"
+language = "system"
+entry = "cargo fmt --all --"
+types = ["rust"]
+pass_filenames = false
+
+[[repos.hooks]]
+id = "cargo-clippy"
+name = "cargo clippy"
+language = "system"
+entry = "cargo clippy --all-targets --all-features -- -D warnings"
+types = ["rust"]
+pass_filenames = false
+
+[[repos.hooks]]
+id = "cargo-test"
+name = "cargo test"
+language = "system"
+entry = "cargo test"
+types = ["rust"]
+pass_filenames = false
+stages = ["pre-push"]
+
+# Python formatting and linting
+[[repos]]
+repo = "https://github.com/astral-sh/ruff-pre-commit"
+rev = "v0.8.4"
+hooks = [
+  { id = "ruff", args = ["--fix", "--exit-non-zero-on-fix"] },
+  { id = "ruff-format" },
+]
+
+# Python type checking
+[[repos]]
+repo = "https://github.com/pre-commit/mirrors-mypy"
+rev = "v1.14.1"
+
+[[repos.hooks]]
+id = "mypy"
+args = ["--ignore-missing-imports", "logust"]
+additional_dependencies = []
+pass_filenames = false
+
+# Build check (ensures Rust compiles)
+[[repos]]
+repo = "local"
+
+[[repos.hooks]]
+id = "cargo-check"
+name = "cargo check"
+language = "system"
+entry = "cargo check --all-targets"
+pass_filenames = false
+stages = ["pre-commit"]

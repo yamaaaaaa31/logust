@@ -536,14 +536,14 @@ cd logust
 uv venv && source .venv/bin/activate
 
 # Install maturin and dev dependencies
-uv pip install maturin pre-commit
+uv pip install maturin prek
 
 # Development build
 maturin develop
 
-# Set up pre-commit hooks
-pre-commit install
-pre-commit install --hook-type pre-push
+# Set up git hooks
+prek install
+prek install --hook-type pre-push
 
 # Run tests
 cargo test                # Rust tests
@@ -558,7 +558,7 @@ python -c "import logust; logust.info('It works!')"
 
 ### Pre-commit Hooks
 
-This project uses pre-commit to maintain code quality. The following checks run automatically:
+This project uses prek to maintain code quality. The following checks run automatically:
 
 | Hook | Stage | Description |
 |------|-------|-------------|
@@ -573,7 +573,7 @@ This project uses pre-commit to maintain code quality. The following checks run 
 Run all checks manually:
 
 ```bash
-pre-commit run --all-files
+prek run --all-files
 ```
 
 ## Requirements
@@ -591,9 +591,9 @@ We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guid
 git clone https://github.com/yamaaaaaa31/logust.git
 cd logust
 uv venv && source .venv/bin/activate
-uv pip install maturin pre-commit
+uv pip install maturin prek
 maturin develop
-pre-commit install
+prek install
 ```
 
 ## License
