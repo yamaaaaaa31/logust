@@ -1,5 +1,5 @@
-name-template: 'Logust v$RESOLVED_VERSION ✨'
-tag-template: 'v$RESOLVED_VERSION'
+name-template: 'Logust — Draft Changelog'
+tag-template: ''
 categories:
   - title: '🚀 Core & Features'
     labels:
@@ -29,28 +29,6 @@ categories:
       - 'deps'
 change-template: '- $TITLE (by @$AUTHOR) #$NUMBER'
 change-title-escapes: '\<*_&'
-version-resolver:
-  major:
-    labels:
-      - 'major'
-      - 'breaking-change'
-  minor:
-    labels:
-      - 'minor'
-      - 'feature'
-      - 'enhancement'
-  patch:
-    labels:
-      - 'patch'
-      - 'fix'
-      - 'bugfix'
-      - 'bug'
-      - 'chore'
-      - 'documentation'
-      - 'ci'
-      - 'testing'
-      - 'dependencies'
-  default: patch
 template: |
   ## What's New
 
