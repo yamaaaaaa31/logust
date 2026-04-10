@@ -1,0 +1,63 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "timezone": "Asia/Tokyo",
+  "schedule": ["before 9am on Monday"],
+  "labels": ["dependencies"],
+  "packageRules": [
+    {
+      "description": "Rust dependencies - automerge minor/patch",
+      "matchManagers": ["cargo"],
+      "groupName": "rust-dependencies",
+      "addLabels": ["rust"],
+      "commitMessagePrefix": "chore(deps):",
+      "automerge": true,
+      "matchUpdateTypes": ["minor", "patch"]
+    },
+    {
+      "description": "Rust dependencies - major (no automerge)",
+      "matchManagers": ["cargo"],
+      "matchUpdateTypes": ["major"],
+      "addLabels": ["rust"],
+      "commitMessagePrefix": "chore(deps):",
+      "automerge": false
+    },
+    {
+      "description": "Python dev tools",
+      "matchManagers": ["pep621"],
+      "matchPackagePatterns": ["^mypy", "^ruff", "^pytest", "^pre-commit"],
+      "groupName": "python-dev",
+      "addLabels": ["python"],
+      "commitMessagePrefix": "chore(deps):",
+      "automerge": true,
+      "matchUpdateTypes": ["minor", "patch"]
+    },
+    {
+      "description": "Python docs tools",
+      "matchManagers": ["pep621"],
+      "matchPackagePatterns": ["^mkdocs"],
+      "groupName": "python-docs",
+      "addLabels": ["python"],
+      "commitMessagePrefix": "chore(deps):",
+      "automerge": true,
+      "matchUpdateTypes": ["minor", "patch"]
+    },
+    {
+      "description": "GitHub Actions - automerge minor/patch",
+      "matchManagers": ["github-actions"],
+      "groupName": "github-actions",
+      "addLabels": ["ci"],
+      "commitMessagePrefix": "chore(ci):",
+      "automerge": true,
+      "matchUpdateTypes": ["minor", "patch"]
+    },
+    {
+      "description": "GitHub Actions - major (no automerge)",
+      "matchManagers": ["github-actions"],
+      "matchUpdateTypes": ["major"],
+      "addLabels": ["ci"],
+      "commitMessagePrefix": "chore(ci):",
+      "automerge": false
+    }
+  ]
+}
