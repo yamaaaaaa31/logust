@@ -72,35 +72,6 @@ def setup_logust(log_file: Path | None = None) -> Any:
     return logust_logger
 
 
-def benchmark_simple_no_output() -> dict[str, float]:
-    """Benchmark simple log calls with no output (fastest case)."""
-    results = {}
-
-    # Python logging with NullHandler
-    py_logger = setup_python_logging(None)
-    start = time.perf_counter()
-    for i in range(N):
-        py_logger.info("Simple message %d", i)
-    results["logging"] = time.perf_counter() - start
-
-    # loguru (if available)
-    loguru_logger = setup_loguru(None)
-    if loguru_logger:
-        start = time.perf_counter()
-        for i in range(N):
-            loguru_logger.info("Simple message {}", i)
-        results["loguru"] = time.perf_counter() - start
-
-    # logust
-    logust_logger = setup_logust(None)
-    start = time.perf_counter()
-    for i in range(N):
-        logust_logger.info(f"Simple message {i}")
-    results["logust"] = time.perf_counter() - start
-
-    return results
-
-
 def benchmark_callable_sink_formatted_only() -> dict[str, float]:
     """Callable sink with ``format="{message}"`` only (no console/file).
 
@@ -589,48 +560,43 @@ def run_all_benchmarks() -> None:
 
         results = {}
 
-        print("  [1/10] Simple (no output)...", end="", flush=True)
-        results["simple"] = benchmark_simple_no_output()
-        print(" done")
-
-        print("  [2/10] File write (sync)...", end="", flush=True)
+        print("  [1/9] File write (sync)...", end="", flush=True)
         results["file"] = benchmark_file_write()
         print(" done")
 
-        print("  [3/10] Formatted...", end="", flush=True)
+        print("  [2/9] Formatted...", end="", flush=True)
         results["formatted"] = benchmark_formatted()
         print(" done")
 
-        print("  [4/10] JSON serialize...", end="", flush=True)
+        print("  [3/9] JSON serialize...", end="", flush=True)
         results["json"] = benchmark_json_serialize()
         print(" done")
 
-        print("  [5/10] With context (sync)...", end="", flush=True)
+        print("  [4/9] With context (sync)...", end="", flush=True)
         results["context"] = benchmark_with_context()
         print(" done")
 
-        print("  [6/10] File write (async)...", end="", flush=True)
+        print("  [5/9] File write (async)...", end="", flush=True)
         results["async"] = benchmark_async_write()
         print(" done")
 
-        print("  [7/10] With context (async)...", end="", flush=True)
+        print("  [6/9] With context (async)...", end="", flush=True)
         results["async_context"] = benchmark_async_with_context()
         print(" done")
 
-        print("  [8/10] Async non-blocking...", end="", flush=True)
+        print("  [7/9] Async non-blocking...", end="", flush=True)
         results["nonblocking"] = benchmark_async_nonblocking()
         print(" done")
 
-        print("  [9/10] Sync vs Async latency...", end="", flush=True)
+        print("  [8/9] Sync vs Async latency...", end="", flush=True)
         results["latency"] = benchmark_sync_vs_async_latency()
         print(" done")
 
-        print("  [10/10] Callable sink `{message}` only...", end="", flush=True)
+        print("  [9/9] Callable sink `{message}` only...", end="", flush=True)
         results["callable_sink"] = benchmark_callable_sink_formatted_only()
         print(" done")
 
     # Print all results
-    print_results("Simple (no output)", results["simple"])
     print_results("File write (sync)", results["file"])
     print_results("Formatted", results["formatted"])
     print_results("JSON serialize", results["json"])
@@ -679,13 +645,6 @@ def run_all_benchmarks() -> None:
 # Pytest integration
 class TestBenchmark:
     """Benchmark tests for pytest execution."""
-
-    def test_simple_no_output(self) -> None:
-        """Benchmark simple logging without output."""
-        results = benchmark_simple_no_output()
-        print_results("Simple (no output)", results)
-        assert "logust" in results
-        assert results["logust"] > 0
 
     def test_file_write(self) -> None:
         """Benchmark file writing."""

@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-04-11
+
 ### Performance
 - **Formatting hot path (Rust, non-color)**: `format_record_template` writes padded level, line, thread, process, and elapsed into the output buffer with `std::fmt::Write` where possible, avoiding per-token `String` / `format!` temporaries; colorized branches unchanged. `format_template` skips time/level/message work when those tokens are absent (`TokenRequirements`). Added `benchmarks/bench_format_record.py` for a rich-template throughput check.
 - **Formatted callable sink (built-in `logger.add`, `filter=None`, `serialize=False`)**: Rust distinguishes raw `add_callback` from formatted sinks and builds a **minimal record dict** per template flags (see `ParsedCallableTemplate::lightweight_requirements_for_rust()`), instead of always calling `build_record_dict`. Python still runs `ParsedCallableTemplate.format()` for full template/spec compatibility. Nested `record["extra"]` is populated only when `extra[...]` tokens are used (no duplicate flat extra keys on the lightweight path). Custom-level logs (`_log_custom`) keep the previous `build_custom_record_dict` path for all callbacks.
@@ -106,5 +108,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 1.3x faster than Python standard logging
 - Lock-free fast path for filtered messages
 
-[Unreleased]: https://github.com/yamaaaaaa31/logust/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/yamaaaaaa31/logust/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/yamaaaaaa31/logust/compare/v0.2.1...v0.3.0
+[0.2.1]: https://github.com/yamaaaaaa31/logust/releases/tag/v0.2.1
+[0.2.0]: https://github.com/yamaaaaaa31/logust/releases/tag/v0.2.0
 [0.1.0]: https://github.com/yamaaaaaa31/logust/releases/tag/v0.1.0

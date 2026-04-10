@@ -19,7 +19,9 @@ description: Fast, Rust-powered Python logging library with loguru-style API, JS
 
 ---
 
-!!! success "14x faster than loguru, 4x faster than logging"
+!!! success "Release-build benchmark snapshot"
+    In a recent run of `benchmarks/bench_throughput.py` (10,000 messages), `logust` completed sync file writes in **15.93 ms** and formatted logging in **15.65 ms**.
+    See the [Comparison](comparison.md) page for the full results and reproduction notes.
 
 ## Installation
 
@@ -47,7 +49,7 @@ logust.error("Error message")
 
 ## Key Features
 
-- **Blazing Fast** - Rust-powered core delivers 5-24x faster performance
+- **Blazing Fast** - Rust-powered core optimized for formatting, serialization, and file I/O
 - **Beautiful by Default** - Colored output with zero configuration
 - **Simple API** - loguru-compatible interface for easy migration
 - **File Management** - Size/time-based rotation, retention policies, gzip compression
