@@ -238,21 +238,10 @@ impl PyLogger {
         LogLevel::Debug
     }
 
-    /// Check if any handler would accept messages at the given level
+    /// Check if any handler would accept messages at the given level (O(1) via `cached_min_level`).
     fn is_level_enabled(&self, level: LogLevel) -> bool {
-        let handlers = self.handlers.read();
-        for entry in handlers.iter() {
-            if level >= entry.handler.level() {
-                return true;
-            }
-        }
-        let callbacks = self.callbacks.read();
-        for entry in callbacks.iter() {
-            if level >= entry.level {
-                return true;
-            }
-        }
-        false
+        let m = self.cached_min_level.load(Ordering::Relaxed);
+        (level as u32) >= m
     }
 
     /// Get the cached minimum log level across all handlers and callbacks
