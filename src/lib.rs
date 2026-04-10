@@ -6,7 +6,7 @@ mod sink;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use parking_lot::RwLock;
 use pyo3::intern;
@@ -42,8 +42,6 @@ pub struct PyLogger {
     cached_requirements: Arc<RwLock<TokenRequirements>>,
     /// Cached token requirements for handlers only (excludes callbacks)
     cached_handler_requirements: Arc<RwLock<TokenRequirements>>,
-    /// Cached flag: whether any handler has a filter (shared via Arc)
-    cached_has_filters: Arc<AtomicBool>,
 }
 
 #[pymethods]
@@ -58,7 +56,6 @@ impl PyLogger {
             cached_min_level: Arc::new(AtomicU32::new(u32::MAX)),
             cached_requirements: Arc::new(RwLock::new(TokenRequirements::default())),
             cached_handler_requirements: Arc::new(RwLock::new(TokenRequirements::default())),
-            cached_has_filters: Arc::new(AtomicBool::new(false)),
         };
 
         let console_level = level.unwrap_or_default();
@@ -213,7 +210,6 @@ impl PyLogger {
             cached_min_level: Arc::clone(&self.cached_min_level),
             cached_requirements: Arc::clone(&self.cached_requirements),
             cached_handler_requirements: Arc::clone(&self.cached_handler_requirements),
-            cached_has_filters: Arc::clone(&self.cached_has_filters),
         };
         Py::new(py, new_logger)
     }
@@ -761,8 +757,6 @@ impl PyLogger {
 
         // If we have any filters, we also need all info
         let has_filters = handlers.iter().any(|e| e.filter.is_some());
-        self.cached_has_filters
-            .store(has_filters, Ordering::Relaxed);
         if has_filters {
             combined = TokenRequirements::all();
         }
@@ -790,7 +784,16 @@ impl PyLogger {
         let handlers = self.handlers.read();
         let callbacks = self.callbacks.read();
 
-        let has_eligible_handler = handlers.iter().any(|e| level >= e.handler.level());
+        let mut has_eligible_handler = false;
+        let mut has_eligible_filtered_handler = false;
+        for e in handlers.iter() {
+            if level >= e.handler.level() {
+                has_eligible_handler = true;
+                if e.filter.is_some() {
+                    has_eligible_filtered_handler = true;
+                }
+            }
+        }
         let has_eligible_callback = callbacks.iter().any(|e| level >= e.level);
 
         if !has_eligible_handler && !has_eligible_callback {
@@ -798,8 +801,7 @@ impl PyLogger {
         }
 
         let has_callbacks = !callbacks.is_empty() && has_eligible_callback;
-        let has_filters = self.cached_has_filters.load(Ordering::Relaxed);
-        let needs_gil = has_callbacks || has_filters;
+        let needs_gil = has_callbacks || has_eligible_filtered_handler;
 
         let extra = Arc::clone(&self.context);
 
@@ -833,6 +835,9 @@ impl PyLogger {
                 }
 
                 for entry in handlers.iter() {
+                    if level < entry.handler.level() {
+                        continue;
+                    }
                     if let Some(ref filter) = entry.filter {
                         let passes = filter
                             .call1(py, (dict.clone(),))
@@ -925,9 +930,16 @@ impl PyLogger {
         let callbacks = self.callbacks.read();
 
         let level_no = level_info.no;
-        let has_eligible_handler = handlers
-            .iter()
-            .any(|e| level_no >= e.handler.level() as u32);
+        let mut has_eligible_handler = false;
+        let mut has_eligible_filtered_handler = false;
+        for e in handlers.iter() {
+            if level_no >= e.handler.level() as u32 {
+                has_eligible_handler = true;
+                if e.filter.is_some() {
+                    has_eligible_filtered_handler = true;
+                }
+            }
+        }
         let has_eligible_callback = callbacks.iter().any(|e| level_no >= e.level as u32);
 
         if !has_eligible_handler && !has_eligible_callback {
@@ -935,8 +947,7 @@ impl PyLogger {
         }
 
         let has_callbacks = !callbacks.is_empty() && has_eligible_callback;
-        let has_filters = self.cached_has_filters.load(Ordering::Relaxed);
-        let needs_gil = has_callbacks || has_filters;
+        let needs_gil = has_callbacks || has_eligible_filtered_handler;
 
         let extra = Arc::clone(&self.context);
 
@@ -978,6 +989,9 @@ impl PyLogger {
                 }
 
                 for entry in handlers.iter() {
+                    if level_no < entry.handler.level() as u32 {
+                        continue;
+                    }
                     if let Some(ref filter) = entry.filter {
                         let passes = filter
                             .call1(py, (dict.clone(),))
