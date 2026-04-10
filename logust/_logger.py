@@ -251,9 +251,7 @@ class Logger:
         filter_ids: set[int] | None = None,
         raw_callback_ids: set[int] | None = None,
         requirements_cache_box: (
-            list[
-                dict[int, tuple[bool | CallerInfo, bool | ThreadInfo, bool | ProcessInfo]] | None
-            ]
+            list[dict[int, tuple[bool | CallerInfo, bool | ThreadInfo, bool | ProcessInfo]] | None]
             | None
         ) = None,
         aggregated_options_box: (
@@ -502,9 +500,7 @@ class Logger:
         has_untracked_thread_need = has_untracked_handlers and h_thread
         has_untracked_process_need = has_untracked_handlers and h_process
 
-        merged_caller, merged_thread, merged_proc = self._inner.collect_needs_for_emit_no(
-            eff_emit
-        )
+        merged_caller, merged_thread, merged_proc = self._inner.collect_needs_for_emit_no(eff_emit)
 
         # Dynamic collection is needed when:
         # 1. Auto-detect (xxx_none) and Rust merge at this emit severity needs it
