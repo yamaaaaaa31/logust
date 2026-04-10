@@ -109,6 +109,31 @@ class TestIsLevelEnabled:
         assert logger.is_level_enabled("INFO") is True
         assert logger.is_level_enabled("ERROR") is True
 
+    def test_is_level_enabled_callback_only_matches_callback_threshold(self) -> None:
+        """Callbacks alone determine cached_min_level; no file/console handlers needed."""
+        inner = PyLogger(LogLevel.Trace)
+        logger = Logger(inner)
+        logger.remove()
+        logger.add_callback(lambda _r: None, level="ERROR")
+
+        assert logger.is_level_enabled(LogLevel.Debug) is False
+        assert logger.is_level_enabled(LogLevel.Error) is True
+
+    def test_is_level_enabled_after_remove_callback(self) -> None:
+        """Removing a callback must refresh enablement (cached_min_level includes callbacks)."""
+        inner = PyLogger(LogLevel.Trace)
+        logger = Logger(inner)
+        logger.remove()
+        cb_id = logger.add_callback(lambda _r: None, level="ERROR")
+
+        assert logger.is_level_enabled(LogLevel.Debug) is False
+        assert logger.is_level_enabled(LogLevel.Error) is True
+
+        assert logger.remove_callback(cb_id) is True
+
+        assert logger.is_level_enabled(LogLevel.Debug) is False
+        assert logger.is_level_enabled(LogLevel.Error) is False
+
 
 class TestEnableDisable:
     """Test enable and disable methods for console output."""

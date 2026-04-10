@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Performance
+- **`is_level_enabled()` (Rust)**: Uses the existing `cached_min_level` atomic instead of scanning every handler and callback, so enablement checks are O(1). This makes disabled `logger.opt(lazy=True).…` cheap even with large sink lists. Added regression tests (callback-only and `remove_callback`) and `benchmarks/bench_lazy_is_level.py`.
 - **Filter fast path (Rust)**: Logs no longer enter the GIL path solely because a *lower-priority* handler has a Python `filter`. Handler filters run only after the handler's level gate passes. Removed the unused `cached_has_filters` cache; token requirements still treat any present filter as requiring full record fields for Python dict building.
 
 ## [0.2.1] - 2025-12-27
