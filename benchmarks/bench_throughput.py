@@ -101,6 +101,38 @@ def benchmark_simple_no_output() -> dict[str, float]:
     return results
 
 
+def benchmark_callable_sink_formatted_only() -> dict[str, float]:
+    """Callable sink with ``format="{message}"`` only (no console/file).
+
+    Intended to exercise the lightweight formatted-sink path: no raw
+    ``add_callback``, no ``filter``, no ``serialize``. Compares logust vs loguru.
+    """
+    from logust import Logger, LogLevel
+    from logust._logust import PyLogger
+
+    results: dict[str, float] = {}
+
+    loguru_logger = setup_loguru(None)
+    if loguru_logger:
+        loguru_logger.remove()
+        loguru_logger.add(lambda _m: None, format="{message}", level="DEBUG")
+        start = time.perf_counter()
+        for i in range(N):
+            loguru_logger.info("msg {}", i)
+        results["loguru"] = time.perf_counter() - start
+
+    inner = PyLogger(LogLevel.Trace)
+    logger = Logger(inner)
+    logger.remove()
+    logger.add(lambda _m: None, format="{message}", level="DEBUG")
+    start = time.perf_counter()
+    for i in range(N):
+        logger.info(f"msg {i}")
+    results["logust"] = time.perf_counter() - start
+
+    return results
+
+
 def benchmark_file_write() -> dict[str, float]:
     """Benchmark writing logs to file."""
     results = {}
@@ -557,40 +589,44 @@ def run_all_benchmarks() -> None:
 
         results = {}
 
-        print("  [1/9] Simple (no output)...", end="", flush=True)
+        print("  [1/10] Simple (no output)...", end="", flush=True)
         results["simple"] = benchmark_simple_no_output()
         print(" done")
 
-        print("  [2/9] File write (sync)...", end="", flush=True)
+        print("  [2/10] File write (sync)...", end="", flush=True)
         results["file"] = benchmark_file_write()
         print(" done")
 
-        print("  [3/9] Formatted...", end="", flush=True)
+        print("  [3/10] Formatted...", end="", flush=True)
         results["formatted"] = benchmark_formatted()
         print(" done")
 
-        print("  [4/9] JSON serialize...", end="", flush=True)
+        print("  [4/10] JSON serialize...", end="", flush=True)
         results["json"] = benchmark_json_serialize()
         print(" done")
 
-        print("  [5/9] With context (sync)...", end="", flush=True)
+        print("  [5/10] With context (sync)...", end="", flush=True)
         results["context"] = benchmark_with_context()
         print(" done")
 
-        print("  [6/9] File write (async)...", end="", flush=True)
+        print("  [6/10] File write (async)...", end="", flush=True)
         results["async"] = benchmark_async_write()
         print(" done")
 
-        print("  [7/9] With context (async)...", end="", flush=True)
+        print("  [7/10] With context (async)...", end="", flush=True)
         results["async_context"] = benchmark_async_with_context()
         print(" done")
 
-        print("  [8/9] Async non-blocking...", end="", flush=True)
+        print("  [8/10] Async non-blocking...", end="", flush=True)
         results["nonblocking"] = benchmark_async_nonblocking()
         print(" done")
 
-        print("  [9/9] Sync vs Async latency...", end="", flush=True)
+        print("  [9/10] Sync vs Async latency...", end="", flush=True)
         results["latency"] = benchmark_sync_vs_async_latency()
+        print(" done")
+
+        print("  [10/10] Callable sink `{message}` only...", end="", flush=True)
+        results["callable_sink"] = benchmark_callable_sink_formatted_only()
         print(" done")
 
     # Print all results
@@ -602,6 +638,7 @@ def run_all_benchmarks() -> None:
     print_results("File write (async + complete)", results["async"])
     print_results("With context (async + complete)", results["async_context"])
     print_results("Async non-blocking (no wait)", results["nonblocking"])
+    print_results("Callable sink `{message}` only (in-memory)", results["callable_sink"])
 
     # Print sync vs async comparison
     print_latency_comparison(results["latency"])
@@ -696,6 +733,13 @@ class TestBenchmark:
         """Benchmark async non-blocking (queue time only)."""
         results = benchmark_async_nonblocking()
         print_results("Async non-blocking", results)
+        assert "logust" in results
+        assert results["logust"] > 0
+
+    def test_callable_sink_formatted_only(self) -> None:
+        """Benchmark callable sink with `{message}` template (lightweight path)."""
+        results = benchmark_callable_sink_formatted_only()
+        print_results("Callable sink `{message}` only", results)
         assert "logust" in results
         assert results["logust"] > 0
 

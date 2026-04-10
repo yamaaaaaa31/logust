@@ -923,3 +923,33 @@ class TestNeedsInfoForHandlers:
         # Neither should need caller info
         assert inner.needs_caller_info is False
         assert inner.needs_caller_info_for_handlers is False
+
+
+class TestEmitScopedRequirementsCacheInvalidation:
+    """``enable`` / ``disable`` / ``set_level`` must clear per-emit Python cache."""
+
+    def test_console_mutations_clear_requirements_cache(self, tmp_path: Path) -> None:
+        inner = PyLogger(LogLevel.Trace)
+        logger = Logger(inner)
+        logger.remove()
+
+        logf = tmp_path / "app.log"
+        logger.add(str(logf), format="{message}")
+
+        logger.info("warm")
+        assert logger._requirements_cache_box[0] is not None
+
+        logger.enable(LogLevel.Trace)
+        assert logger._requirements_cache_box[0] is None
+
+        logger.info("after enable")
+        assert logger._requirements_cache_box[0] is not None
+
+        logger.disable()
+        assert logger._requirements_cache_box[0] is None
+
+        logger.info("file only")
+        assert logger._requirements_cache_box[0] is not None
+
+        logger.set_level(LogLevel.Warning)
+        assert logger._requirements_cache_box[0] is None

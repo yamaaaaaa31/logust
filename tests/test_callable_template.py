@@ -371,3 +371,33 @@ class TestExtraKeyPatterns:
         }
         result = template.format(record)
         assert result == "req-123 | Test"
+
+
+class TestLightweightRequirementsForRust:
+    """Flags passed to Rust `FormattedSinkRequirements` must match template tokens."""
+
+    def test_message_only(self) -> None:
+        t = ParsedCallableTemplate("{message}")
+        assert t.lightweight_requirements_for_rust() == (
+            False,
+            False,
+            False,
+            False,
+            False,
+            False,
+            False,
+            False,
+            False,
+            True,
+            False,
+        )
+
+    def test_extra_nested_flag(self) -> None:
+        t = ParsedCallableTemplate("{extra[a]}")
+        flags = t.lightweight_requirements_for_rust()
+        assert flags[-1] is True
+        assert flags[-2] is False
+
+    def test_lightweight_extra_keys_order_unique(self) -> None:
+        t = ParsedCallableTemplate("{extra[b]} {extra[a]} {extra[b]}")
+        assert t.lightweight_extra_keys_for_rust() == ("b", "a")

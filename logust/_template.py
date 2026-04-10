@@ -123,6 +123,38 @@ class ParsedCallableTemplate:
 
         return tuple(segments)
 
+    def lightweight_requirements_for_rust(self) -> tuple[bool, ...]:
+        """Booleans for Rust `FormattedSinkRequirements` / `build_mini_record_dict`.
+
+        Order: timestamp, level, name, function, line, file, elapsed, thread, process,
+        message, nested extra. Must match ``src/lib.rs`` ``FormattedSinkRequirements``.
+        """
+        nt = self._needed_tokens
+        return (
+            "time" in nt,
+            "level" in nt,
+            ("name" in nt) or ("module" in nt),
+            "function" in nt,
+            "line" in nt,
+            "file" in nt,
+            "elapsed" in nt,
+            self._needs_thread,
+            self._needs_process,
+            "message" in nt,
+            self._needs_extra,
+        )
+
+    def lightweight_extra_keys_for_rust(self) -> tuple[str, ...]:
+        """``extra[key]`` names for Rust ``FormattedSinkRequirements.extra_keys`` (order preserved, unique)."""
+        keys: list[str] = []
+        seen: set[str] = set()
+        for seg in self._segments:
+            if isinstance(seg, TokenSegment) and seg.is_extra and seg.extra_key:
+                if seg.extra_key not in seen:
+                    seen.add(seg.extra_key)
+                    keys.append(seg.extra_key)
+        return tuple(keys)
+
     def format(self, record: dict[str, Any]) -> str:
         """Format the record using pre-parsed template.
 

@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Performance
+- **Formatted callable sink (built-in `logger.add`, `filter=None`, `serialize=False`)**: Rust distinguishes raw `add_callback` from formatted sinks and builds a **minimal record dict** per template flags (see `ParsedCallableTemplate::lightweight_requirements_for_rust()`), instead of always calling `build_record_dict`. Python still runs `ParsedCallableTemplate.format()` for full template/spec compatibility. Nested `record["extra"]` is populated only when `extra[...]` tokens are used (no duplicate flat extra keys on the lightweight path). Custom-level logs (`_log_custom`) keep the previous `build_custom_record_dict` path for all callbacks.
+- **`update_requirements_cache` (Rust)**: Merges per-sink `FormattedSinkRequirements` into `TokenRequirements` instead of forcing `TokenRequirements::all()` whenever any callback exists; raw callbacks still force the full requirement set.
+- **Non-color `format_record_template` (Rust)**: Avoids an extra `String` allocation for `{level}` / `{message}` when ANSI coloring is off; colorized output still reuses precomputed strings for repeated tokens.
 - **`is_level_enabled()` (Rust)**: Uses the existing `cached_min_level` atomic instead of scanning every handler and callback, so enablement checks are O(1). This makes disabled `logger.opt(lazy=True).…` cheap even with large sink lists. Added regression tests (callback-only and `remove_callback`) and `benchmarks/bench_lazy_is_level.py`.
 - **Filter fast path (Rust)**: Logs no longer enter the GIL path solely because a *lower-priority* handler has a Python `filter`. Handler filters run only after the handler's level gate passes. Removed the unused `cached_has_filters` cache; token requirements still treat any present filter as requiring full record fields for Python dict building.
 

@@ -59,6 +59,28 @@ class TestCustomLevels:
         content = log_file.read_text()
         assert "Alert message" in content
 
+    def test_custom_emit_no_above_builtin_range_callable_needs_caller(self) -> None:
+        """Severity ``no`` above 50: Python must still pre-collect for ``{function}`` sinks."""
+        inner = PyLogger(LogLevel.Trace)
+        logger = Logger(inner)
+        logger.remove()
+
+        logger.level("AUDIT", no=60, color="white")
+        out: list[str] = []
+
+        def sink(msg: str) -> None:
+            out.append(msg)
+
+        # Callable threshold uses built-in ``LogLevel``; emit via numeric custom ``no``.
+        logger.add(sink, format="{function}", level=LogLevel.Trace)
+
+        def emit_audit() -> None:
+            logger.log(60, "msg")
+
+        emit_audit()
+        assert len(out) == 1
+        assert "emit_audit" in out[0]
+
 
 class TestSetGetLevel:
     """Test set_level and get_level methods."""
