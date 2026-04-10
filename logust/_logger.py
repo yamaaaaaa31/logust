@@ -216,6 +216,18 @@ _LEVEL_VALUE_MAP: dict[int, str] = {v: k for k, v in _LEVEL_VALUES.items()}
 if len(_LEVEL_VALUE_MAP) != len(_LEVEL_VALUES):
     raise ValueError("Duplicate numeric level values detected")
 
+# ``u32::MAX`` — matches Rust conservative merge for unknown emit severity.
+_EMIT_NO_SUPERSET: int = 4_294_967_295
+
+
+def _coerce_emit_no_u32(emit_no: int) -> int:
+    """Clamp numeric severity to ``0 .. 0xFFFFFFFF`` for Rust ``u32`` APIs."""
+    if emit_no < 0:
+        return 0
+    if emit_no > _EMIT_NO_SUPERSET:
+        return _EMIT_NO_SUPERSET
+    return emit_no
+
 
 class Logger:
     """Main logger class wrapping the Rust PyLogger.
@@ -239,7 +251,8 @@ class Logger:
         filter_ids: set[int] | None = None,
         raw_callback_ids: set[int] | None = None,
         requirements_cache_box: (
-            list[tuple[bool | CallerInfo, bool | ThreadInfo, bool | ProcessInfo] | None] | None
+            list[dict[int, tuple[bool | CallerInfo, bool | ThreadInfo, bool | ProcessInfo]] | None]
+            | None
         ) = None,
         aggregated_options_box: (
             list[
@@ -280,9 +293,9 @@ class Logger:
             raw_callback_ids if raw_callback_ids is not None else set()
         )
         # Cached requirements in a box (list) for sharing between bound loggers
-        # Box[0] is the cached value or None if invalid
+        # Box[0] is ``emit_no -> (caller, thread, process)`` or None if invalid
         self._requirements_cache_box: list[
-            tuple[bool | CallerInfo, bool | ThreadInfo, bool | ProcessInfo] | None
+            dict[int, tuple[bool | CallerInfo, bool | ThreadInfo, bool | ProcessInfo]] | None
         ] = requirements_cache_box if requirements_cache_box is not None else [None]
         # Cached aggregated options in a box for O(1) access during log
         # Format: (caller_true, caller_fixed, caller_none, caller_false,
@@ -416,11 +429,17 @@ class Logger:
 
     def _compute_effective_requirements(
         self,
+        emit_no: int | None = None,
     ) -> tuple[bool | CallerInfo, bool | ThreadInfo, bool | ProcessInfo]:
         """Compute effective requirements considering CollectOptions.
 
-        Results are cached and returned on subsequent calls until invalidated.
-        Uses pre-aggregated options for O(1) computation after first call.
+        ``emit_no`` is numeric severity (built-in ``LogLevel`` value or custom ``no``).
+        When omitted, uses a conservative merge (``u32::MAX`` in Rust).
+
+        With ``CollectOptions``, results are cached per ``emit_no`` until invalidated.
+
+        When there are no ``CollectOptions``, Rust requirements are scoped to ``emit_no``
+        when provided; otherwise the conservative superset getters are used.
 
         Priority order (highest to lowest):
         1. True - explicit request to collect dynamically
@@ -437,20 +456,22 @@ class Logger:
             Tuple of (caller_requirement, thread_requirement, process_requirement)
             where each is True (collect), False (skip), or a fixed value instance.
         """
-        # Return cached result if available (O(1) hot path)
-        cached = self._requirements_cache_box[0]
-        if cached is not None:
-            return cached
+        eff_emit = _coerce_emit_no_u32(emit_no) if emit_no is not None else _EMIT_NO_SUPERSET
 
         if not self._collect_options:
-            # No CollectOptions, use Rust-detected requirements
-            result: tuple[bool | CallerInfo, bool | ThreadInfo, bool | ProcessInfo] = (
-                self._inner.needs_caller_info,
-                self._inner.needs_thread_info,
-                self._inner.needs_process_info,
-            )
-            self._requirements_cache_box[0] = result
-            return result
+            if emit_no is None:
+                return (
+                    self._inner.needs_caller_info,
+                    self._inner.needs_thread_info,
+                    self._inner.needs_process_info,
+                )
+            e = _coerce_emit_no_u32(emit_no)
+            return self._inner.collect_needs_for_emit_no(e)
+
+        # Return cached result if available (O(1) hot path, keyed by emit severity)
+        cache = self._requirements_cache_box[0]
+        if cache is not None and eff_emit in cache:
+            return cache[eff_emit]
 
         # Get pre-aggregated options (O(1) if already cached)
         (
@@ -473,35 +494,26 @@ class Logger:
         # Check if there are untracked handlers (O(1) - uses cached tracked_handler_count)
         has_untracked_handlers = self._inner.handler_count > tracked_handler_count
 
-        # If there are untracked handlers (like default console) and they need info, collect.
-        has_untracked_caller_need = (
-            has_untracked_handlers and self._inner.needs_caller_info_for_handlers
-        )
-        has_untracked_thread_need = (
-            has_untracked_handlers and self._inner.needs_thread_info_for_handlers
-        )
-        has_untracked_process_need = (
-            has_untracked_handlers and self._inner.needs_process_info_for_handlers
-        )
+        # Untracked handlers (e.g. default console): emit-scoped handler formats only.
+        h_caller, h_thread, h_process = self._inner.handler_only_needs_for_emit_no(eff_emit)
+        has_untracked_caller_need = has_untracked_handlers and h_caller
+        has_untracked_thread_need = has_untracked_handlers and h_thread
+        has_untracked_process_need = has_untracked_handlers and h_process
+
+        merged_caller, merged_thread, merged_proc = self._inner.collect_needs_for_emit_no(eff_emit)
 
         # Dynamic collection is needed when:
-        # 1. Auto-detect (xxx_none) and handler format needs it
+        # 1. Auto-detect (xxx_none) and Rust merge at this emit severity needs it
         # 2. Raw callbacks/filters need full records
         # 3. Untracked handlers may need it
         needs_dynamic_caller = (
-            (self._inner.needs_caller_info_for_handlers and caller_none)
-            or needs_full_records
-            or has_untracked_caller_need
+            (merged_caller and caller_none) or needs_full_records or has_untracked_caller_need
         )
         needs_dynamic_thread = (
-            (self._inner.needs_thread_info_for_handlers and thread_none)
-            or needs_full_records
-            or has_untracked_thread_need
+            (merged_thread and thread_none) or needs_full_records or has_untracked_thread_need
         )
         needs_dynamic_process = (
-            (self._inner.needs_process_info_for_handlers and process_none)
-            or needs_full_records
-            or has_untracked_process_need
+            (merged_proc and process_none) or needs_full_records or has_untracked_process_need
         )
 
         # Caller
@@ -542,7 +554,11 @@ class Logger:
 
         # Cache and return the result
         result = (needs_caller, needs_thread, needs_process)
-        self._requirements_cache_box[0] = result
+        cache_dict = self._requirements_cache_box[0]
+        if cache_dict is None:
+            cache_dict = {}
+            self._requirements_cache_box[0] = cache_dict
+        cache_dict[eff_emit] = result
         return result
 
     def _log_with_level(
@@ -557,7 +573,9 @@ class Logger:
             return
 
         # Compute effective requirements considering CollectOptions
-        needs_caller, needs_thread, needs_process = self._compute_effective_requirements()
+        needs_caller, needs_thread, needs_process = self._compute_effective_requirements(
+            level_value
+        )
 
         if needs_caller is False and needs_thread is False and needs_process is False:
             if exception is None:
@@ -786,8 +804,9 @@ class Logger:
             self._log_with_level(level, _LEVEL_VALUE_MAP[level], message, exception, _depth + 1)
             return
 
-        # Compute effective requirements considering CollectOptions
-        needs_caller, needs_thread, needs_process = self._compute_effective_requirements()
+        resolved_emit = self._inner.try_resolve_emit_level_no(level)
+        eff = resolved_emit if resolved_emit is not None else _EMIT_NO_SUPERSET
+        needs_caller, needs_thread, needs_process = self._compute_effective_requirements(eff)
 
         if needs_caller is False and needs_thread is False and needs_process is False:
             if exception is None:
@@ -798,6 +817,7 @@ class Logger:
 
         if needs_thread is False and needs_process is False:
             if needs_caller is True:
+                # Custom ``log()`` has no ``info()`` → ``_log_with_level`` wrapper frame.
                 name, function, line, file = _get_caller_info(_depth + 1)
             else:
                 # needs_caller is CallerInfo (False case already returned above)
@@ -890,6 +910,7 @@ class Logger:
     def set_level(self, level: LogLevel | str) -> None:
         """Set minimum log level for console output."""
         self._inner.set_level(_to_log_level(level))
+        self._invalidate_requirements_cache()
 
     def get_level(self) -> LogLevel:
         """Get current minimum log level."""
@@ -909,10 +930,12 @@ class Logger:
     def enable(self, level: LogLevel | str | None = None) -> None:
         """Enable console logging."""
         self._inner.enable(_to_log_level(level) if level is not None else None)
+        self._invalidate_requirements_cache()
 
     def disable(self) -> None:
         """Disable console logging."""
         self._inner.disable()
+        self._invalidate_requirements_cache()
 
     def is_enabled(self) -> bool:
         """Check if console logging is enabled."""
@@ -1133,6 +1156,13 @@ class Logger:
                 # Silently ignore sink errors (like loguru behavior)
                 pass
 
+        # Lightweight path: Rust builds a minimal dict; filter/JSON need full dict.
+        if filter is None and not serialize:
+            flags = parsed_template.lightweight_requirements_for_rust()
+            extra_keys = parsed_template.lightweight_extra_keys_for_rust()
+            return self._inner.add_formatted_sink_callback(
+                callback_wrapper, flags, extra_keys, resolved_level
+            )
         return self._inner.add_callback(callback_wrapper, resolved_level)
 
     def remove(self, handler_id: int | None = None) -> bool:

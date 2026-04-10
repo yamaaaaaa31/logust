@@ -135,6 +135,16 @@ class PyLogger:
         """Add a callback to receive log records."""
         ...
 
+    def add_formatted_sink_callback(
+        self,
+        callback: Callable[[dict[str, Any]], None],
+        requirements: tuple[bool, ...],
+        extra_keys: tuple[str, ...],
+        level: LogLevel | None = None,
+    ) -> int:
+        """Add a formatted callable sink (minimal record dict for templates)."""
+        ...
+
     def remove_callback(self, callback_id: int) -> bool:
         """Remove a callback by ID."""
         ...
@@ -178,6 +188,24 @@ class PyLogger:
     @property
     def needs_process_info_for_handlers(self) -> bool:
         """Check if any handler format needs process info (excludes callbacks)."""
+        ...
+
+    def try_resolve_emit_level_no(self, level_arg: str | int) -> int | None:
+        """Resolve level name or numeric ``no`` to registered severity (``LevelInfo.no``)."""
+        ...
+
+    def needs_caller_info_for_emit_no(self, emit_no: int) -> bool:
+        """Whether caller info is needed when emitting at numeric severity ``emit_no``."""
+        ...
+
+    def needs_thread_info_for_emit_no(self, emit_no: int) -> bool: ...
+    def needs_process_info_for_emit_no(self, emit_no: int) -> bool: ...
+    def collect_needs_for_emit_no(self, emit_no: int) -> tuple[bool, bool, bool]:
+        """``(needs_caller, needs_thread, needs_process)`` after full merge at ``emit_no``."""
+        ...
+
+    def handler_only_needs_for_emit_no(self, emit_no: int) -> tuple[bool, bool, bool]:
+        """Handler formats only (no callbacks), merged for handlers eligible at ``emit_no``."""
         ...
 
     @property

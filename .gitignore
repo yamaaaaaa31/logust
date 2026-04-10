@@ -87,5 +87,11 @@ uv.lock
 
 # Local development
 *.json.log
+
+# maturin / macOS build artifacts next to the package
+*.dSYM/
+
+# Local Codex working notes (not shipped with the library)
+codex/
 #.claude may cause errors on Windows.
 .claude

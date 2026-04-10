@@ -462,24 +462,16 @@ impl FormatConfig {
             None
         };
 
-        // Lazy level formatting - only compute if {level} token is in format
-        let level_fmt = if reqs.needs_level {
-            if colorize {
-                Some(colorize_text(level_name, level_color, true))
-            } else {
-                Some(level_name.to_string())
-            }
+        // Lazy level formatting - only for colorized output (non-color uses `level_name` in-token)
+        let level_fmt_color = if colorize && reqs.needs_level {
+            Some(colorize_text(level_name, level_color, true))
         } else {
             None
         };
 
-        // Lazy message formatting - only compute if {message} token is in format
-        let message_fmt = if reqs.needs_message {
-            if colorize {
-                Some(apply_color_markup(&record.message))
-            } else {
-                Some(record.message.clone())
-            }
+        // Lazy message formatting - only for colorized output (non-color uses `record.message` in-token)
+        let message_fmt_color = if colorize && reqs.needs_message {
+            Some(apply_color_markup(&record.message))
         } else {
             None
         };
@@ -495,13 +487,17 @@ impl FormatConfig {
                     }
                 }
                 FormatToken::Message => {
-                    if let Some(ref fmt) = message_fmt {
+                    if let Some(ref fmt) = message_fmt_color {
                         result.push_str(fmt);
+                    } else if reqs.needs_message {
+                        result.push_str(&record.message);
                     }
                 }
                 FormatToken::Level => {
-                    if let Some(ref fmt) = level_fmt {
+                    if let Some(ref fmt) = level_fmt_color {
                         result.push_str(fmt);
+                    } else if reqs.needs_level {
+                        result.push_str(level_name);
                     }
                 }
                 FormatToken::LevelWidth(width) => {

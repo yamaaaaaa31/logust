@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use parking_lot::RwLock;
 use pyo3::intern;
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::types::{PyDict, PyTuple};
 
 pub use format::{FormatConfig, LOGGER_START_TIME, TokenRequirements, format_elapsed};
 pub use handler::{
@@ -21,11 +21,152 @@ pub use handler::{
 pub use level::{LevelInfo, LogLevel, get_level_by_no, get_level_info, register_level};
 pub use sink::{FileSink, FileSinkConfig, Rotation};
 
+/// Built-in levels used to precompute per-emit-level token requirements (Python passes `level_value`).
+const EMIT_LEVELS: [LogLevel; 8] = [
+    LogLevel::Trace,
+    LogLevel::Debug,
+    LogLevel::Info,
+    LogLevel::Success,
+    LogLevel::Warning,
+    LogLevel::Error,
+    LogLevel::Fail,
+    LogLevel::Critical,
+];
+
+/// Requirements for a formatted callable sink (`ParsedCallableTemplate` on Python).
+/// Bool order matches [`ParsedCallableTemplate::lightweight_requirements_for_rust`].
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FormattedSinkRequirements {
+    pub needs_timestamp: bool,
+    pub needs_level: bool,
+    pub needs_name: bool,
+    pub needs_function: bool,
+    pub needs_line: bool,
+    pub needs_file: bool,
+    pub needs_elapsed: bool,
+    pub needs_thread: bool,
+    pub needs_process: bool,
+    pub needs_message: bool,
+    pub needs_nested_extra: bool,
+    /// Keys referenced as `extra[key]` in the template (empty if none).
+    pub extra_keys: Vec<String>,
+}
+
+impl FormattedSinkRequirements {
+    fn from_python_tuples(
+        req: &Bound<'_, PyTuple>,
+        extra_keys: &Bound<'_, PyTuple>,
+    ) -> PyResult<Self> {
+        if req.len() != 11 {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "requirements tuple must have 11 bool fields",
+            ));
+        }
+        let mut keys = Vec::with_capacity(extra_keys.len());
+        for i in 0..extra_keys.len() {
+            keys.push(extra_keys.get_item(i)?.extract::<String>()?);
+        }
+        Ok(Self {
+            needs_timestamp: req.get_item(0)?.extract()?,
+            needs_level: req.get_item(1)?.extract()?,
+            needs_name: req.get_item(2)?.extract()?,
+            needs_function: req.get_item(3)?.extract()?,
+            needs_line: req.get_item(4)?.extract()?,
+            needs_file: req.get_item(5)?.extract()?,
+            needs_elapsed: req.get_item(6)?.extract()?,
+            needs_thread: req.get_item(7)?.extract()?,
+            needs_process: req.get_item(8)?.extract()?,
+            needs_message: req.get_item(9)?.extract()?,
+            needs_nested_extra: req.get_item(10)?.extract()?,
+            extra_keys: keys,
+        })
+    }
+
+    fn as_token_requirements(&self) -> TokenRequirements {
+        TokenRequirements {
+            needs_caller: self.needs_name
+                || self.needs_function
+                || self.needs_line
+                || self.needs_file,
+            needs_thread: self.needs_thread,
+            needs_process: self.needs_process,
+            needs_time: self.needs_timestamp,
+            needs_level: self.needs_level,
+            needs_message: self.needs_message,
+            needs_elapsed: self.needs_elapsed,
+        }
+    }
+}
+
+/// Raw callbacks receive a full record dict; formatted sinks receive a minimal dict for templates.
+pub enum CallbackKind {
+    Raw,
+    FormattedLight(FormattedSinkRequirements),
+}
+
 /// Callback entry for log record callbacks
 pub struct CallbackEntry {
     pub id: u64,
     pub callback: Py<PyAny>,
     pub level: LogLevel,
+    pub kind: CallbackKind,
+}
+
+/// Merge handler + callback token requirements eligible when emitting at severity `emit_no`
+/// (numeric level value: built-in `LogLevel` as u32 or custom `LevelInfo.no`).
+fn merge_token_requirements_for_emit_no(
+    handlers: &[HandlerEntry],
+    callbacks: &[CallbackEntry],
+    emit_no: u32,
+) -> TokenRequirements {
+    let mut combined = TokenRequirements::default();
+    for entry in handlers.iter() {
+        if emit_no >= entry.handler.level() as u32 {
+            combined = combined.merge(&entry.handler.requirements());
+        }
+    }
+
+    let mut any_raw = false;
+    for entry in callbacks.iter() {
+        if emit_no < entry.level as u32 {
+            continue;
+        }
+        match &entry.kind {
+            CallbackKind::Raw => {
+                any_raw = true;
+            }
+            CallbackKind::FormattedLight(req) => {
+                combined = combined.merge(&req.as_token_requirements());
+            }
+        }
+    }
+
+    if any_raw {
+        combined = TokenRequirements::all();
+    }
+
+    let has_filter = handlers
+        .iter()
+        .any(|e| e.filter.is_some() && emit_no >= e.handler.level() as u32);
+    if has_filter {
+        combined = TokenRequirements::all();
+    }
+
+    combined
+}
+
+/// Handler formats only (no callbacks), merged for handlers eligible at `emit_no`.
+fn merge_handler_only_requirements_for_emit_no(
+    handlers: &[HandlerEntry],
+    emit_no: u32,
+) -> TokenRequirements {
+    let mut combined = TokenRequirements::default();
+    for entry in handlers.iter() {
+        if emit_no >= entry.handler.level() as u32 {
+            combined = combined.merge(&entry.handler.requirements());
+        }
+    }
+    combined
 }
 
 #[pyclass]
@@ -38,8 +179,8 @@ pub struct PyLogger {
     callbacks: Arc<RwLock<Vec<CallbackEntry>>>,
     /// Cached minimum log level across all handlers and callbacks (shared via Arc)
     cached_min_level: Arc<AtomicU32>,
-    /// Cached token requirements across all handlers and callbacks (shared via Arc)
-    cached_requirements: Arc<RwLock<TokenRequirements>>,
+    /// Precomputed token requirements for built-in emit levels; arbitrary `emit_no` values are memoized on miss.
+    cached_requirements_by_level: Arc<RwLock<HashMap<u32, TokenRequirements>>>,
     /// Cached token requirements for handlers only (excludes callbacks)
     cached_handler_requirements: Arc<RwLock<TokenRequirements>>,
 }
@@ -54,7 +195,7 @@ impl PyLogger {
             context: empty_context(),
             callbacks: Arc::new(RwLock::new(Vec::new())),
             cached_min_level: Arc::new(AtomicU32::new(u32::MAX)),
-            cached_requirements: Arc::new(RwLock::new(TokenRequirements::default())),
+            cached_requirements_by_level: Arc::new(RwLock::new(HashMap::new())),
             cached_handler_requirements: Arc::new(RwLock::new(TokenRequirements::default())),
         };
 
@@ -208,7 +349,7 @@ impl PyLogger {
             context: new_context,
             callbacks: Arc::clone(&self.callbacks),
             cached_min_level: Arc::clone(&self.cached_min_level),
-            cached_requirements: Arc::clone(&self.cached_requirements),
+            cached_requirements_by_level: Arc::clone(&self.cached_requirements_by_level),
             cached_handler_requirements: Arc::clone(&self.cached_handler_requirements),
         };
         Py::new(py, new_logger)
@@ -225,6 +366,7 @@ impl PyLogger {
             }
         }
         self.update_min_level_cache();
+        self.update_requirements_cache();
     }
 
     /// Get current minimum log level (from first console handler)
@@ -250,22 +392,69 @@ impl PyLogger {
         self.cached_min_level.load(Ordering::Relaxed)
     }
 
-    /// Check if any handler/callback needs caller info (name, function, line, file)
+    /// True if a maximal-severity emit would need caller info (merge of all handlers/callbacks).
     #[getter]
     fn needs_caller_info(&self) -> bool {
-        self.cached_requirements.read().needs_caller
+        self.token_requirements_for_emit_no(u32::MAX).needs_caller
     }
 
-    /// Check if any handler/callback needs thread info
     #[getter]
     fn needs_thread_info(&self) -> bool {
-        self.cached_requirements.read().needs_thread
+        self.token_requirements_for_emit_no(u32::MAX).needs_thread
     }
 
-    /// Check if any handler/callback needs process info
     #[getter]
     fn needs_process_info(&self) -> bool {
-        self.cached_requirements.read().needs_process
+        self.token_requirements_for_emit_no(u32::MAX).needs_process
+    }
+
+    /// Resolve ``level`` / numeric ``no`` the same way as [`Self::log`], for Python emit-scoped collection.
+    fn try_resolve_emit_level_no(&self, level_arg: &Bound<'_, PyAny>) -> Option<u32> {
+        if let Ok(lvl_name) = level_arg.extract::<String>() {
+            get_level_info(&lvl_name).map(|i| i.no)
+        } else if let Ok(no) = level_arg.extract::<u32>() {
+            get_level_by_no(no).map(|i| i.no)
+        } else {
+            None
+        }
+    }
+
+    fn needs_caller_info_for_emit_no(&self, emit_no: u32) -> bool {
+        self.token_requirements_for_emit_no(emit_no).needs_caller
+    }
+
+    fn needs_thread_info_for_emit_no(&self, emit_no: u32) -> bool {
+        self.token_requirements_for_emit_no(emit_no).needs_thread
+    }
+
+    fn needs_process_info_for_emit_no(&self, emit_no: u32) -> bool {
+        self.token_requirements_for_emit_no(emit_no).needs_process
+    }
+
+    /// Single merge for Python: ``(needs_caller, needs_thread, needs_process)`` at ``emit_no``.
+    fn collect_needs_for_emit_no(&self, emit_no: u32) -> (bool, bool, bool) {
+        let t = self.token_requirements_for_emit_no(emit_no);
+        (t.needs_caller, t.needs_thread, t.needs_process)
+    }
+
+    /// Handler formats only at ``emit_no`` (untracked default console vs tracked handlers).
+    fn handler_only_needs_for_emit_no(&self, emit_no: u32) -> (bool, bool, bool) {
+        let handlers = self.handlers.read();
+        let t = merge_handler_only_requirements_for_emit_no(&handlers, emit_no);
+        (t.needs_caller, t.needs_thread, t.needs_process)
+    }
+
+    /// Back-compat: `level_value` is a built-in `LogLevel` discriminant (5–50).
+    fn needs_caller_info_for_level(&self, level_value: u8) -> bool {
+        self.needs_caller_info_for_emit_no(level_value as u32)
+    }
+
+    fn needs_thread_info_for_level(&self, level_value: u8) -> bool {
+        self.needs_thread_info_for_emit_no(level_value as u32)
+    }
+
+    fn needs_process_info_for_level(&self, level_value: u8) -> bool {
+        self.needs_process_info_for_emit_no(level_value as u32)
     }
 
     /// Check if any handler format needs caller info (excludes callbacks)
@@ -349,7 +538,7 @@ impl PyLogger {
         Ok(())
     }
 
-    /// Add a callback to receive log records
+    /// Add a callback to receive full log record dicts (raw callback).
     #[pyo3(signature = (callback, level=None))]
     fn add_callback(&self, callback: Py<PyAny>, level: Option<LogLevel>) -> u64 {
         let id = handler::next_handler_id();
@@ -357,11 +546,35 @@ impl PyLogger {
             id,
             callback,
             level: level.unwrap_or(LogLevel::Debug),
+            kind: CallbackKind::Raw,
         };
         self.callbacks.write().push(entry);
         self.update_min_level_cache();
         self.update_requirements_cache();
         id
+    }
+
+    /// Add a formatted callable sink callback (minimal dict + Python `ParsedCallableTemplate`).
+    #[pyo3(signature = (callback, requirements, extra_keys, level=None))]
+    fn add_formatted_sink_callback(
+        &self,
+        callback: Py<PyAny>,
+        requirements: Bound<'_, PyTuple>,
+        extra_keys: Bound<'_, PyTuple>,
+        level: Option<LogLevel>,
+    ) -> PyResult<u64> {
+        let req = FormattedSinkRequirements::from_python_tuples(&requirements, &extra_keys)?;
+        let id = handler::next_handler_id();
+        let entry = CallbackEntry {
+            id,
+            callback,
+            level: level.unwrap_or(LogLevel::Debug),
+            kind: CallbackKind::FormattedLight(req),
+        };
+        self.callbacks.write().push(entry);
+        self.update_min_level_cache();
+        self.update_requirements_cache();
+        Ok(id)
     }
 
     /// Remove a callback by ID
@@ -720,7 +933,7 @@ impl PyLogger {
             .store(min_handler.min(min_callback), Ordering::Relaxed);
     }
 
-    /// Update the cached token requirements across all handlers and callbacks
+    /// Update the cached token requirements per built-in emit level (handlers + eligible callbacks).
     fn update_requirements_cache(&self) {
         let handlers = self.handlers.read();
         let callbacks = self.callbacks.read();
@@ -736,21 +949,36 @@ impl PyLogger {
         // Cache handler-only requirements (excludes callbacks)
         *self.cached_handler_requirements.write() = handler_only;
 
-        // Now compute combined requirements including callbacks/filters
-        let mut combined = handler_only;
+        let mut map = HashMap::new();
 
-        // If we have any callbacks, we need all info (callbacks receive full record dict)
-        if !callbacks.is_empty() {
-            combined = TokenRequirements::all();
+        for &emit_level in &EMIT_LEVELS {
+            let emit_no = emit_level as u32;
+            let combined = merge_token_requirements_for_emit_no(&handlers, &callbacks, emit_no);
+            map.insert(emit_no, combined);
         }
 
-        // If we have any filters, we also need all info
-        let has_filters = handlers.iter().any(|e| e.filter.is_some());
-        if has_filters {
-            combined = TokenRequirements::all();
-        }
+        *self.cached_requirements_by_level.write() = map;
+    }
 
-        *self.cached_requirements.write() = combined;
+    /// Merge result for `emit_no`, using the precomputed map and memoizing misses.
+    fn token_requirements_for_emit_no(&self, emit_no: u32) -> TokenRequirements {
+        {
+            let map = self.cached_requirements_by_level.read();
+            if let Some(t) = map.get(&emit_no) {
+                return *t;
+            }
+        }
+        let merged = {
+            let handlers = self.handlers.read();
+            let callbacks = self.callbacks.read();
+            merge_token_requirements_for_emit_no(&handlers, &callbacks, emit_no)
+        };
+        let mut map = self.cached_requirements_by_level.write();
+        if let Some(t) = map.get(&emit_no) {
+            return *t;
+        }
+        map.insert(emit_no, merged);
+        merged
     }
 
     /// Internal log method - optimized for performance
@@ -815,11 +1043,33 @@ impl PyLogger {
 
         if needs_gil {
             Python::attach(|py| {
-                let dict = Self::build_record_dict(py, level, &record);
+                let need_full_dict = has_eligible_filtered_handler
+                    || callbacks
+                        .iter()
+                        .any(|e| level >= e.level && matches!(e.kind, CallbackKind::Raw));
+
+                let shared_full: Option<Bound<'_, PyDict>> = if need_full_dict {
+                    Some(Self::build_record_dict(py, level, &record))
+                } else {
+                    None
+                };
 
                 for entry in callbacks.iter() {
-                    if level >= entry.level {
-                        let _ = entry.callback.call1(py, (dict.clone(),));
+                    if level < entry.level {
+                        continue;
+                    }
+                    match &entry.kind {
+                        CallbackKind::Raw => {
+                            let full = shared_full
+                                .as_ref()
+                                .expect("raw callback implies full dict was built");
+                            let _ = entry.callback.call1(py, (full.clone(),));
+                        }
+                        CallbackKind::FormattedLight(req) => {
+                            let mini = Self::build_mini_record_dict(py, level, &record, req)
+                                .expect("build_mini_record_dict");
+                            let _ = entry.callback.call1(py, (mini,));
+                        }
                     }
                 }
 
@@ -828,8 +1078,11 @@ impl PyLogger {
                         continue;
                     }
                     if let Some(ref filter) = entry.filter {
+                        let full = shared_full
+                            .as_ref()
+                            .expect("handler filter implies full dict was built");
                         let passes = filter
-                            .call1(py, (dict.clone(),))
+                            .call1(py, (full.clone(),))
                             .and_then(|result| result.is_truthy(py))
                             .unwrap_or(true);
                         if !passes {
@@ -896,6 +1149,69 @@ impl PyLogger {
         }
 
         dict
+    }
+
+    /// Minimal Python dict for formatted callable sinks (matches `ParsedCallableTemplate.format` keys).
+    fn build_mini_record_dict<'py>(
+        py: Python<'py>,
+        level: LogLevel,
+        record: &LogRecord,
+        req: &FormattedSinkRequirements,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let dict = PyDict::new(py);
+
+        if req.needs_timestamp {
+            let _ = dict.set_item(intern!(py, "timestamp"), record.timestamp.to_rfc3339());
+        }
+        if req.needs_level {
+            let _ = dict.set_item(intern!(py, "level"), level.as_str());
+        }
+        if req.needs_name {
+            let _ = dict.set_item(intern!(py, "name"), &record.caller.name);
+        }
+        if req.needs_function {
+            let _ = dict.set_item(intern!(py, "function"), &record.caller.function);
+        }
+        if req.needs_line {
+            let _ = dict.set_item(intern!(py, "line"), record.caller.line);
+        }
+        if req.needs_file {
+            let _ = dict.set_item(intern!(py, "file"), &record.caller.file);
+        }
+        if req.needs_elapsed {
+            let _ = dict.set_item(
+                intern!(py, "elapsed"),
+                format_elapsed(&LOGGER_START_TIME, &record.timestamp),
+            );
+        }
+        if req.needs_thread {
+            let _ = dict.set_item(intern!(py, "thread_name"), &record.thread.name);
+            let _ = dict.set_item(intern!(py, "thread_id"), record.thread.id);
+        }
+        if req.needs_process {
+            let _ = dict.set_item(intern!(py, "process_name"), &record.process.name);
+            let _ = dict.set_item(intern!(py, "process_id"), record.process.id);
+        }
+        if req.needs_message {
+            let _ = dict.set_item(intern!(py, "message"), &record.message);
+        }
+        if req.needs_nested_extra {
+            let extra_dict = PyDict::new(py);
+            if req.extra_keys.is_empty() {
+                for (key, value) in record.extra.iter() {
+                    let _ = extra_dict.set_item(key.as_str(), value.as_str());
+                }
+            } else {
+                for key in &req.extra_keys {
+                    if let Some(value) = record.extra.get(key) {
+                        let _ = extra_dict.set_item(key.as_str(), value.as_str());
+                    }
+                }
+            }
+            let _ = dict.set_item(intern!(py, "extra"), extra_dict);
+        }
+
+        Ok(dict)
     }
 
     /// Internal log method for custom levels - optimized
@@ -1011,9 +1327,27 @@ impl PyLogger {
         }
         let _ = dict.set_item(intern!(py, "message"), &record.message);
         let _ = dict.set_item(intern!(py, "timestamp"), record.timestamp.to_rfc3339());
+
+        let extra_dict = PyDict::new(py);
         for (key, value) in record.extra.iter() {
             let _ = dict.set_item(key.as_str(), value.as_str());
+            let _ = extra_dict.set_item(key.as_str(), value.as_str());
         }
+
+        let _ = dict.set_item(intern!(py, "name"), &record.caller.name);
+        let _ = dict.set_item(intern!(py, "function"), &record.caller.function);
+        let _ = dict.set_item(intern!(py, "line"), record.caller.line);
+        let _ = dict.set_item(intern!(py, "file"), &record.caller.file);
+        let _ = dict.set_item(intern!(py, "thread_name"), &record.thread.name);
+        let _ = dict.set_item(intern!(py, "thread_id"), record.thread.id);
+        let _ = dict.set_item(intern!(py, "process_name"), &record.process.name);
+        let _ = dict.set_item(intern!(py, "process_id"), record.process.id);
+        let _ = dict.set_item(
+            intern!(py, "elapsed"),
+            format_elapsed(&LOGGER_START_TIME, &record.timestamp),
+        );
+        let _ = dict.set_item(intern!(py, "extra"), extra_dict);
+
         if let Some(ref exc) = record.exception {
             let _ = dict.set_item(intern!(py, "exception"), exc.as_str());
         }
