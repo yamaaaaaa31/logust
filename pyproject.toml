@@ -4,13 +4,13 @@ build-backend = "maturin"
 
 [project]
 name = "logust"
-description = "A fast, Rust-powered Python logging library inspired by loguru"
+description = "A fast, Rust-powered Python logging library with free-threaded support, inspired by loguru"
 readme = "README.md"
 license = { text = "MIT" }
 authors = [
     { name = "yamaaaaaa31" }
 ]
-keywords = ["logging", "logger", "rust", "performance", "loguru"]
+keywords = ["logging", "logger", "rust", "performance", "loguru", "free-threaded", "nogil"]
 requires-python = ">=3.10"
 classifiers = [
     "Development Status :: 4 - Beta",

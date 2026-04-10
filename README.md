@@ -1,10 +1,10 @@
 # Logust
 
 [![CI](https://github.com/yamaaaaaa31/logust/actions/workflows/test.yml/badge.svg)](https://github.com/yamaaaaaa31/logust/actions/workflows/test.yml)
-[![PyPI version](https://badge.fury.io/py/logust.svg)](https://badge.fury.io/py/logust)
+[![PyPI](https://badge.fury.io/py/logust.svg)](https://badge.fury.io/py/logust)
 [![Downloads](https://static.pepy.tech/badge/logust)](https://pepy.tech/project/logust)
-[![Python Versions](https://img.shields.io/pypi/pyversions/logust.svg)](https://pypi.org/project/logust/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Python](https://img.shields.io/pypi/pyversions/logust.svg)](https://pypi.org/project/logust/)
+[![MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 A fast, Rust-powered Python logging library inspired by [loguru](https://github.com/Delgan/loguru).
 
@@ -22,7 +22,7 @@ A fast, Rust-powered Python logging library inspired by [loguru](https://github.
 - **Custom Levels** - Define your own log levels with colors and icons
 - **Color Markup** - Inline `<red>color</red>` tags in log messages
 - **Async Writing** - Optional thread-safe async file writes with `enqueue=True`
-- **Free-Threaded Python** - Covered in CI on CPython 3.13t and 3.14t
+- **Free-Threaded Python** - Release automation builds wheels for CPython 3.13t and 3.14t on Linux and macOS
 - **Zero-Config Integrations** - Built-in support for standard logging, FastAPI, and function timing
 
 ## Benchmarks
