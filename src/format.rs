@@ -561,11 +561,7 @@ impl FormatConfig {
                         let thread_str = format!("{}:{}", record.thread.name, record.thread.id);
                         result.push_str(&cyan_text(&thread_str));
                     } else {
-                        let _ = write!(
-                            result,
-                            "{}:{}",
-                            record.thread.name, record.thread.id
-                        );
+                        let _ = write!(result, "{}:{}", record.thread.name, record.thread.id);
                     }
                 }
                 FormatToken::Process => {
@@ -573,11 +569,7 @@ impl FormatConfig {
                         let process_str = format!("{}:{}", record.process.name, record.process.id);
                         result.push_str(&cyan_text(&process_str));
                     } else {
-                        let _ = write!(
-                            result,
-                            "{}:{}",
-                            record.process.name, record.process.id
-                        );
+                        let _ = write!(result, "{}:{}", record.process.name, record.process.id);
                     }
                 }
                 FormatToken::File => {
@@ -975,13 +967,8 @@ mod tests {
     #[test]
     fn test_record_line_noncolor() {
         let caller = CallerInfo::with_file("mod".into(), "f".into(), 12345, "a.py".into());
-        let record = LogRecord::with_caller(
-            LogLevel::Info,
-            "m".into(),
-            empty_context(),
-            None,
-            caller,
-        );
+        let record =
+            LogRecord::with_caller(LogLevel::Info, "m".into(), empty_context(), None, caller);
         let config = FormatConfig::new(Some("L={line}".to_string()), false);
         assert_eq!(config.format_record(&record, false), "L=12345");
     }
