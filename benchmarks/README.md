@@ -10,6 +10,7 @@ uv run python -m pytest benchmarks/ -v
 
 # Run specific benchmark
 uv run python benchmarks/bench_throughput.py
+uv run python benchmarks/bench_filter_mixed.py
 ```
 
 ## Requirements
