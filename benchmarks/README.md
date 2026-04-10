@@ -22,7 +22,7 @@ Default `pytest` only discovers `tests/` (see `pyproject.toml`). Run benchmarks 
 uv pip install loguru   # optional dependency for loguru rows
 python benchmarks/bench_throughput.py
 
-# Pytest wrapper (same scenarios, 10 cases)
+# Pytest wrapper (same scenarios, 9 cases)
 pytest benchmarks/bench_throughput.py -v
 
 # Other scripts
