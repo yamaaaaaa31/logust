@@ -39,7 +39,7 @@ Issues = "https://github.com/yamaaaaaa31/logust/issues"
 [project.optional-dependencies]
 dev = [
     "mypy>=1.0",
-    "pre-commit>=4.0",
+    "prek>=0.2",
     "ruff>=0.8",
 ]
 test = [
@@ -109,7 +109,7 @@ exclude_lines = [
 [dependency-groups]
 dev = [
     "mypy>=1.19.1",
-    "pre-commit>=4.0",
+    "prek>=0.2",
     "pytest-xdist>=3.8.0",
     "ruff>=0.14.10",
 ]

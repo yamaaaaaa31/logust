@@ -25,7 +25,7 @@
     {
       "description": "Python dev tools",
       "matchManagers": ["pep621"],
-      "matchPackagePatterns": ["^mypy", "^ruff", "^pytest", "^pre-commit"],
+      "matchPackagePatterns": ["^mypy", "^ruff", "^pytest", "^prek"],
       "groupName": "python-dev",
       "addLabels": ["python"],
       "commitMessagePrefix": "chore(deps):",
