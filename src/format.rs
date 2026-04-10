@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::sync::LazyLock;
 
 use chrono::{DateTime, Local};
@@ -11,9 +12,9 @@ use crate::level::LogLevel;
 /// Logger initialization time for elapsed calculation
 pub static LOGGER_START_TIME: LazyLock<DateTime<Local>> = LazyLock::new(Local::now);
 
-/// Format elapsed time as HH:MM:SS.mmm
-/// Handles negative durations (e.g., clock adjustment) by clamping to 0
-pub fn format_elapsed(start: &DateTime<Local>, now: &DateTime<Local>) -> String {
+/// Write elapsed time as HH:MM:SS.mmm into `out`.
+/// Handles negative durations (e.g., clock adjustment) by clamping to 0.
+fn write_elapsed(start: &DateTime<Local>, now: &DateTime<Local>, out: &mut String) {
     let duration = *now - *start;
     let total_millis = duration.num_milliseconds().max(0) as u64;
     let millis = (total_millis % 1000) as u32;
@@ -21,7 +22,19 @@ pub fn format_elapsed(start: &DateTime<Local>, now: &DateTime<Local>) -> String 
     let hours = total_secs / 3600;
     let minutes = (total_secs % 3600) / 60;
     let seconds = total_secs % 60;
-    format!("{:02}:{:02}:{:02}.{:03}", hours, minutes, seconds, millis)
+    let _ = write!(
+        out,
+        "{:02}:{:02}:{:02}.{:03}",
+        hours, minutes, seconds, millis
+    );
+}
+
+/// Format elapsed time as HH:MM:SS.mmm
+/// Handles negative durations (e.g., clock adjustment) by clamping to 0
+pub fn format_elapsed(start: &DateTime<Local>, now: &DateTime<Local>) -> String {
+    let mut s = String::with_capacity(16);
+    write_elapsed(start, now, &mut s);
+    s
 }
 
 /// Apply ANSI color code to text (thread-safe, no global state)
@@ -501,11 +514,11 @@ impl FormatConfig {
                     }
                 }
                 FormatToken::LevelWidth(width) => {
-                    let padded = format!("{:<width$}", level_name, width = width);
                     if colorize {
+                        let padded = format!("{:<width$}", level_name, width = width);
                         result.push_str(&colorize_text(&padded, level_color, true));
-                    } else {
-                        result.push_str(&padded);
+                    } else if reqs.needs_level {
+                        let _ = write!(result, "{:<width$}", level_name, width = width);
                     }
                 }
                 FormatToken::Extra(key) => {
@@ -528,35 +541,43 @@ impl FormatConfig {
                     }
                 }
                 FormatToken::Line => {
-                    let line_str = record.caller.line.to_string();
                     if colorize {
+                        let line_str = record.caller.line.to_string();
                         result.push_str(&cyan_text(&line_str));
                     } else {
-                        result.push_str(&line_str);
+                        let _ = write!(result, "{}", record.caller.line);
                     }
                 }
                 FormatToken::Elapsed => {
-                    let elapsed = format_elapsed(&LOGGER_START_TIME, &record.timestamp);
                     if colorize {
+                        let elapsed = format_elapsed(&LOGGER_START_TIME, &record.timestamp);
                         result.push_str(&dim_text(&elapsed));
                     } else {
-                        result.push_str(&elapsed);
+                        write_elapsed(&LOGGER_START_TIME, &record.timestamp, &mut result);
                     }
                 }
                 FormatToken::Thread => {
-                    let thread_str = format!("{}:{}", record.thread.name, record.thread.id);
                     if colorize {
+                        let thread_str = format!("{}:{}", record.thread.name, record.thread.id);
                         result.push_str(&cyan_text(&thread_str));
                     } else {
-                        result.push_str(&thread_str);
+                        let _ = write!(
+                            result,
+                            "{}:{}",
+                            record.thread.name, record.thread.id
+                        );
                     }
                 }
                 FormatToken::Process => {
-                    let process_str = format!("{}:{}", record.process.name, record.process.id);
                     if colorize {
+                        let process_str = format!("{}:{}", record.process.name, record.process.id);
                         result.push_str(&cyan_text(&process_str));
                     } else {
-                        result.push_str(&process_str);
+                        let _ = write!(
+                            result,
+                            "{}:{}",
+                            record.process.name, record.process.id
+                        );
                     }
                 }
                 FormatToken::File => {
@@ -632,26 +653,31 @@ impl FormatConfig {
         exception: &Option<String>,
         colorize: bool,
     ) -> String {
+        let reqs = self.requirements;
         let level_name = level.as_str();
         let level_color = level.color();
 
-        let time_raw = timestamp.format(&self.time_format).to_string();
-        let time_fmt = if colorize {
-            dim_text(&time_raw)
+        let time_fmt = if reqs.needs_time {
+            let time_raw = timestamp.format(&self.time_format).to_string();
+            Some(if colorize {
+                dim_text(&time_raw)
+            } else {
+                time_raw
+            })
         } else {
-            time_raw
+            None
         };
 
-        let level_fmt = if colorize {
-            colorize_text(level_name, level_color, true)
+        let level_fmt_color = if colorize && reqs.needs_level {
+            Some(colorize_text(level_name, level_color, true))
         } else {
-            level_name.to_string()
+            None
         };
 
-        let message_fmt = if colorize {
-            apply_color_markup(message)
+        let message_fmt_color = if colorize && reqs.needs_message {
+            Some(apply_color_markup(message))
         } else {
-            message.to_string()
+            None
         };
 
         let mut result = String::with_capacity(self.template.len() + FORMAT_RESULT_CAPACITY);
@@ -659,15 +685,31 @@ impl FormatConfig {
         for token in &self.tokens {
             match token {
                 FormatToken::Static(s) => result.push_str(s),
-                FormatToken::Time => result.push_str(&time_fmt),
-                FormatToken::Message => result.push_str(&message_fmt),
-                FormatToken::Level => result.push_str(&level_fmt),
+                FormatToken::Time => {
+                    if let Some(ref fmt) = time_fmt {
+                        result.push_str(fmt);
+                    }
+                }
+                FormatToken::Message => {
+                    if let Some(ref fmt) = message_fmt_color {
+                        result.push_str(fmt);
+                    } else if reqs.needs_message {
+                        result.push_str(message);
+                    }
+                }
+                FormatToken::Level => {
+                    if let Some(ref fmt) = level_fmt_color {
+                        result.push_str(fmt);
+                    } else if reqs.needs_level {
+                        result.push_str(level_name);
+                    }
+                }
                 FormatToken::LevelWidth(width) => {
-                    let padded = format!("{:<width$}", level_name, width = width);
                     if colorize {
+                        let padded = format!("{:<width$}", level_name, width = width);
                         result.push_str(&colorize_text(&padded, level_color, true));
-                    } else {
-                        result.push_str(&padded);
+                    } else if reqs.needs_level {
+                        let _ = write!(result, "{:<width$}", level_name, width = width);
                     }
                 }
                 FormatToken::Extra(key) => {
@@ -730,6 +772,10 @@ impl FormatConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use crate::handler::empty_context;
+    use crate::handler::{CallerInfo, LogRecord, ProcessInfo, ThreadInfo};
+    use crate::level::LevelInfo;
 
     #[test]
     fn test_default_format() {
@@ -870,5 +916,73 @@ mod tests {
         assert!(matches!(tokens[0], FormatToken::Message));
         assert!(matches!(&tokens[1], FormatToken::Static(s) if s == " user="));
         assert!(matches!(&tokens[2], FormatToken::Extra(k) if k == "user_id"));
+    }
+
+    #[test]
+    fn test_format_template_message_only_omits_time() {
+        let config = FormatConfig::new(Some("{message}".to_string()), false);
+        let now = Local::now();
+        let extra = HashMap::new();
+        let result = config.format(&now, LogLevel::Info, "only", &extra, &None, false);
+        assert_eq!(result, "only");
+        assert!(!result.contains(&format!("{}", now.format("%Y"))));
+    }
+
+    #[test]
+    fn test_record_level_width_left_pad_noncolor() {
+        let config = FormatConfig::new(Some("{level:<8}".to_string()), false);
+        let record = LogRecord::new(LogLevel::Info, "x".into());
+        assert_eq!(config.format_record(&record, false), "INFO    ");
+    }
+
+    #[test]
+    fn test_record_level_width_long_level_not_truncated() {
+        let info = LevelInfo::new(
+            "VERYLONGCUSTOMLEVEL".to_string(),
+            99,
+            Some("red".to_string()),
+            None,
+        );
+        let record = LogRecord::with_custom_level(info, "m".into(), empty_context(), None);
+        let config = FormatConfig::new(Some("{level:<8}".to_string()), false);
+        let out = config.format_record(&record, false);
+        let expected = format!("{:<8}", "VERYLONGCUSTOMLEVEL");
+        assert_eq!(out, expected);
+        assert!(out.len() > 8);
+    }
+
+    #[test]
+    fn test_record_thread_process_noncolor() {
+        let record = LogRecord::with_all(
+            LogLevel::Info,
+            "m".into(),
+            empty_context(),
+            None,
+            CallerInfo::default(),
+            ThreadInfo {
+                name: "worker".into(),
+                id: 42,
+            },
+            ProcessInfo {
+                name: "app".into(),
+                id: 7,
+            },
+        );
+        let config = FormatConfig::new(Some("{thread} | {process}".to_string()), false);
+        assert_eq!(config.format_record(&record, false), "worker:42 | app:7");
+    }
+
+    #[test]
+    fn test_record_line_noncolor() {
+        let caller = CallerInfo::with_file("mod".into(), "f".into(), 12345, "a.py".into());
+        let record = LogRecord::with_caller(
+            LogLevel::Info,
+            "m".into(),
+            empty_context(),
+            None,
+            caller,
+        );
+        let config = FormatConfig::new(Some("L={line}".to_string()), false);
+        assert_eq!(config.format_record(&record, false), "L=12345");
     }
 }

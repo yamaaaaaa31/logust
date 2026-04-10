@@ -27,7 +27,14 @@ pytest benchmarks/bench_throughput.py -v
 
 # Other scripts
 python benchmarks/bench_filter_mixed.py
+
+# format_record hot path (rich template: thread, process, elapsed, padded level)
+python benchmarks/bench_format_record.py
 ```
+
+### `bench_format_record.py` — before/after
+
+Use a **release** build (`maturin develop --release` above). For allocation/formatting work, **compare the printed throughput on the baseline commit vs after your change** on the same machine (same `N`, quiet system). A single run without a baseline only tells you absolute speed, not regression or improvement.
 
 ## Requirements
 
