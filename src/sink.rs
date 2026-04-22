@@ -101,6 +101,9 @@ pub struct FileSink {
     /// Cached next rotation boundary as epoch milliseconds for O(1) time-based rotation check.
     /// 0 means no rotation boundary (equivalent to None).
     next_rotation_boundary: AtomicI64,
+    /// PID of the process that created this sink. Used in Drop to detect whether we
+    /// are running in a forked child, where the async writer thread does not exist.
+    creation_pid: u32,
 }
 
 impl FileSink {
@@ -178,6 +181,7 @@ impl FileSink {
             next_rotation_boundary: AtomicI64::new(
                 next_boundary.map(|b| b.timestamp_millis()).unwrap_or(0),
             ),
+            creation_pid: std::process::id(),
         })
     }
 
@@ -441,6 +445,20 @@ impl FileSink {
 
 impl Drop for FileSink {
     fn drop(&mut self) {
+        // If we're in a child process after fork(), the background writer thread
+        // that `thread::spawn` created in the parent does not exist here — only
+        // the calling thread survives fork. The inherited JoinHandle references
+        // a non-existent thread and `join()` would panic with
+        // "threads should not terminate unexpectedly". See issue #22.
+        if std::process::id() != self.creation_pid {
+            if let WriterBackend::Async { handle, .. } = &mut self.backend
+                && let Some(h) = handle.take()
+            {
+                std::mem::forget(h);
+            }
+            return;
+        }
+
         match &mut self.backend {
             WriterBackend::Async { sender, handle } => {
                 let _ = sender.send(WriterMessage::Shutdown);

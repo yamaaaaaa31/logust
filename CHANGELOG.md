@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **`FileSink::drop` panic in forked children (`enqueue=True`)**: When a process using an `enqueue=True` file handler was forked (e.g. via `multiprocessing.Process`), the child inherited the parent's `JoinHandle` pointing at a background writer thread that does not survive `fork()`. Calling `logger.remove()` (or exit cleanup) in the child triggered `threads should not terminate unexpectedly`. `FileSink` now records its creation PID and skips the `JoinHandle::join` in non-original processes, preventing the panic. (#22)
+
 ## [0.3.0] - 2026-04-11
 
 ### Performance
