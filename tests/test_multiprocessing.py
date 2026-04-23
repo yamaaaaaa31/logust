@@ -370,10 +370,11 @@ def _scenario_fork_while_other_thread_is_logging_does_not_deadlock() -> None:
 
     tmp_path = Path(tempfile.mkdtemp())
     log_file = tmp_path / "fork-race.log"
+    inner = PyLogger(LogLevel.Trace)
+    logger = Logger(inner)
     stop_event = threading.Event()
     background_started = threading.Event()
     background_errors: list[BaseException] = []
-    logger = Logger(PyLogger(LogLevel.Trace))
     logger.disable()
     _INHERITED_TEST_LOGGER = logger
     handler_id = logger.add(
@@ -398,11 +399,15 @@ def _scenario_fork_while_other_thread_is_logging_does_not_deadlock() -> None:
 
     ctx = multiprocessing.get_context("fork")
     child_tokens = [f"fork-child-{idx:03d}|000|" for idx in range(100)]
+    parent_token = "fork-parent-after-race"
 
     try:
         assert background_started.wait(timeout=5), (
             "background writer did not start logging loop"
         )
+        # This remains a probabilistic stress test instead of a strict deterministic
+        # atfork lock-hold test. A lock-hold hook caused child crashes on macOS, so
+        # we keep the practical 100-fork loop that has been stable in CI and local runs.
         time.sleep(0.05)
 
         for token in child_tokens:
@@ -423,11 +428,13 @@ def _scenario_fork_while_other_thread_is_logging_does_not_deadlock() -> None:
         assert not thread.is_alive(), "background logging thread did not stop"
         assert not background_errors, f"background logging thread failed: {background_errors}"
 
+        logger.info(parent_token)
         logger.complete()
         lines = _read_aggregated_log_lines(log_file)
         assert any(
             line.startswith("background|") for line in lines
         ), "background logging thread produced no output"
+        assert lines.count(parent_token) == 1
         for token in child_tokens:
             assert lines.count(token) == 1, f"missing or duplicated child token {token!r}"
     finally:
