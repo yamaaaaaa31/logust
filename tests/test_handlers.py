@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from logust import Logger, LogLevel
 from logust._logust import PyLogger
 
@@ -166,6 +168,18 @@ class TestEnqueue:
 
         content = log_file.read_text()
         assert "Async message" in content
+
+    def test_enqueue_invalid_path_raises_immediately(self, tmp_path: Path) -> None:
+        """enqueue=True must surface file-open failures on add()."""
+        inner = PyLogger(LogLevel.Trace)
+        logger = Logger(inner)
+        logger.disable()
+
+        invalid_path = tmp_path / "existing-dir"
+        invalid_path.mkdir()
+
+        with pytest.raises(OSError):
+            logger.add(str(invalid_path), enqueue=True)
 
 
 class TestComplete:
