@@ -4,9 +4,13 @@ use std::io::{self, LineWriter, Write};
 use std::os::fd::AsRawFd;
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
+#[cfg(windows)]
+use std::os::windows::io::AsRawHandle;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicI64, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
+#[cfg(unix)]
+use std::sync::TryLockError;
 #[cfg(unix)]
 use std::sync::{LazyLock, OnceLock, Weak};
 use std::thread::{self, JoinHandle};
@@ -17,6 +21,15 @@ use crossbeam_channel::{RecvTimeoutError, Sender, bounded};
 use flate2::Compression;
 use flate2::write::GzEncoder;
 use pyo3::prelude::*;
+#[cfg(windows)]
+use windows_sys::Win32::Foundation::HANDLE;
+#[cfg(windows)]
+use windows_sys::Win32::Storage::FileSystem::{
+    BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle, LOCKFILE_EXCLUSIVE_LOCK, LockFileEx,
+    UnlockFileEx,
+};
+#[cfg(windows)]
+use windows_sys::Win32::System::IO::OVERLAPPED;
 
 /// Capacity of the async message queue
 const ASYNC_QUEUE_CAPACITY: usize = 10_000;
@@ -98,69 +111,131 @@ struct FileIdentity {
     dev: u64,
     #[cfg(unix)]
     ino: u64,
+    #[cfg(windows)]
+    volume: u32,
+    #[cfg(windows)]
+    index: u64,
 }
 
 impl FileIdentity {
     #[cfg(unix)]
-    fn from_metadata(metadata: &fs::Metadata) -> Self {
-        Self {
+    fn from_metadata(metadata: &fs::Metadata) -> io::Result<Self> {
+        Ok(Self {
             dev: metadata.dev(),
             ino: metadata.ino(),
-        }
+        })
     }
 
-    #[cfg(not(unix))]
-    fn from_metadata(_metadata: &fs::Metadata) -> Self {
-        Self {}
+    #[cfg(not(any(unix, windows)))]
+    fn from_metadata(_metadata: &fs::Metadata) -> io::Result<Self> {
+        Ok(Self {})
     }
 
+    #[cfg(windows)]
     fn from_file(file: &File) -> io::Result<Self> {
-        Ok(Self::from_metadata(&file.metadata()?))
+        Self::from_handle(file.as_raw_handle() as HANDLE)
     }
 
+    #[cfg(unix)]
+    fn from_file(file: &File) -> io::Result<Self> {
+        Self::from_metadata(&file.metadata()?)
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    fn from_file(file: &File) -> io::Result<Self> {
+        Self::from_metadata(&file.metadata()?)
+    }
+
+    #[cfg(windows)]
     fn from_path(path: &Path) -> io::Result<Self> {
-        Ok(Self::from_metadata(&fs::metadata(path)?))
+        // `std::os::windows::fs::MetadataExt::{volume_serial_number, file_index}`
+        // are nightly-only (`windows_by_handle`), so open the file with shared
+        // access and read the identity via `GetFileInformationByHandle`.
+        let file = OpenOptions::new().read(true).open(path)?;
+        Self::from_file(&file)
+    }
+
+    #[cfg(not(windows))]
+    fn from_path(path: &Path) -> io::Result<Self> {
+        Self::from_metadata(&fs::metadata(path)?)
+    }
+
+    #[cfg(windows)]
+    fn from_handle(handle: HANDLE) -> io::Result<Self> {
+        let mut info = BY_HANDLE_FILE_INFORMATION::default();
+        let rc = unsafe { GetFileInformationByHandle(handle, &mut info) };
+        if rc == 0 {
+            return Err(io::Error::last_os_error());
+        }
+
+        Ok(Self::from_handle_info(info))
+    }
+
+    #[cfg(windows)]
+    fn from_handle_info(info: BY_HANDLE_FILE_INFORMATION) -> Self {
+        Self {
+            volume: info.dwVolumeSerialNumber,
+            index: ((info.nFileIndexHigh as u64) << 32) | info.nFileIndexLow as u64,
+        }
     }
 }
 
 #[derive(Default)]
 struct SharedFileIdentity {
+    present: AtomicBool,
     #[cfg(unix)]
     dev: AtomicU64,
     #[cfg(unix)]
     ino: AtomicU64,
+    #[cfg(windows)]
+    volume: AtomicU32,
+    #[cfg(windows)]
+    index: AtomicU64,
 }
 
 impl SharedFileIdentity {
     fn store(&self, identity: Option<FileIdentity>) {
-        #[cfg(unix)]
-        {
-            if let Some(identity) = identity {
+        if let Some(identity) = identity {
+            #[cfg(unix)]
+            {
                 self.dev.store(identity.dev, Ordering::Release);
                 self.ino.store(identity.ino, Ordering::Release);
-            } else {
-                self.dev.store(0, Ordering::Release);
-                self.ino.store(0, Ordering::Release);
             }
-        }
 
-        #[cfg(not(unix))]
-        let _ = identity;
+            #[cfg(windows)]
+            {
+                self.volume.store(identity.volume, Ordering::Release);
+                self.index.store(identity.index, Ordering::Release);
+            }
+
+            self.present.store(true, Ordering::Release);
+        } else {
+            self.present.store(false, Ordering::Release);
+        }
     }
 
     fn load(&self) -> Option<FileIdentity> {
-        #[cfg(unix)]
-        {
-            let dev = self.dev.load(Ordering::Acquire);
-            let ino = self.ino.load(Ordering::Acquire);
-            if dev == 0 && ino == 0 {
-                None
-            } else {
-                Some(FileIdentity { dev, ino })
-            }
+        if !self.present.load(Ordering::Acquire) {
+            return None;
         }
 
-        #[cfg(not(unix))]
+        #[cfg(unix)]
+        {
+            Some(FileIdentity {
+                dev: self.dev.load(Ordering::Acquire),
+                ino: self.ino.load(Ordering::Acquire),
+            })
+        }
+
+        #[cfg(windows)]
+        {
+            Some(FileIdentity {
+                volume: self.volume.load(Ordering::Acquire),
+                index: self.index.load(Ordering::Acquire),
+            })
+        }
+
+        #[cfg(not(any(unix, windows)))]
         {
             None
         }
@@ -168,9 +243,9 @@ impl SharedFileIdentity {
 }
 
 struct FileLockGuard<'a> {
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     file: &'a File,
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     _phantom: std::marker::PhantomData<&'a File>,
 }
 
@@ -182,7 +257,13 @@ impl<'a> FileLockGuard<'a> {
             Ok(Self { file })
         }
 
-        #[cfg(not(unix))]
+        #[cfg(windows)]
+        {
+            windows_lock_file(file, false)?;
+            Ok(Self { file })
+        }
+
+        #[cfg(not(any(unix, windows)))]
         {
             let _ = file;
             Ok(Self {
@@ -198,7 +279,13 @@ impl<'a> FileLockGuard<'a> {
             Ok(Self { file })
         }
 
-        #[cfg(not(unix))]
+        #[cfg(windows)]
+        {
+            windows_lock_file(file, true)?;
+            Ok(Self { file })
+        }
+
+        #[cfg(not(any(unix, windows)))]
         {
             let _ = file;
             Ok(Self {
@@ -212,6 +299,9 @@ impl Drop for FileLockGuard<'_> {
     fn drop(&mut self) {
         #[cfg(unix)]
         let _ = flock_file(self.file, libc::LOCK_UN);
+
+        #[cfg(windows)]
+        let _ = windows_unlock_file(self.file);
     }
 }
 
@@ -228,6 +318,44 @@ fn flock_file(file: &File, operation: i32) -> io::Result<()> {
             continue;
         }
         return Err(err);
+    }
+}
+
+#[cfg(windows)]
+fn windows_lock_file(file: &File, exclusive: bool) -> io::Result<()> {
+    let mut overlapped = OVERLAPPED::default();
+    let flags = if exclusive {
+        LOCKFILE_EXCLUSIVE_LOCK
+    } else {
+        0
+    };
+    let rc = unsafe {
+        LockFileEx(
+            file.as_raw_handle() as HANDLE,
+            flags,
+            0,
+            1,
+            0,
+            &mut overlapped,
+        )
+    };
+
+    if rc == 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(windows)]
+fn windows_unlock_file(file: &File) -> io::Result<()> {
+    let mut overlapped = OVERLAPPED::default();
+    let rc = unsafe { UnlockFileEx(file.as_raw_handle() as HANDLE, 0, 1, 0, &mut overlapped) };
+
+    if rc == 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
     }
 }
 
@@ -273,7 +401,7 @@ impl RotatingFileWriter {
     }
 
     fn reopen_if_rotated(&mut self, path: &Path) -> io::Result<bool> {
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         {
             let current_identity = match FileIdentity::from_path(path) {
                 Ok(identity) => Some(identity),
@@ -291,7 +419,7 @@ impl RotatingFileWriter {
             Ok(true)
         }
 
-        #[cfg(not(unix))]
+        #[cfg(not(any(unix, windows)))]
         {
             let _ = path;
             Ok(false)
@@ -678,7 +806,7 @@ impl FileSinkInner {
 
     #[cfg(unix)]
     fn pause_for_fork_prepare(&self) {
-        let Ok(mut state) = self.state.try_lock() else {
+        let Some(mut state) = try_lock_or_recover(&self.state) else {
             return;
         };
         if let WriterBackend::Async(async_state) = &mut state.backend {
@@ -715,7 +843,7 @@ impl FileSinkInner {
     }
 
     fn path_identity_changed(&self, known_identity: Option<FileIdentity>) -> io::Result<bool> {
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         {
             let path_identity = match FileIdentity::from_path(&self.config.path) {
                 Ok(identity) => Some(identity),
@@ -725,7 +853,7 @@ impl FileSinkInner {
             Ok(path_identity != known_identity)
         }
 
-        #[cfg(not(unix))]
+        #[cfg(not(any(unix, windows)))]
         {
             let _ = known_identity;
             Ok(false)
@@ -1108,7 +1236,7 @@ extern "C" fn file_sink_atfork_prepare() {
     // Acquisition order: registry lock -> per-sink state lock.
     // atfork prepare must never block; if either lock cannot be obtained,
     // we skip pausing that sink and keep best-effort behavior.
-    let Ok(mut registry) = ASYNC_SINK_REGISTRY.try_lock() else {
+    let Some(mut registry) = try_lock_or_recover(&ASYNC_SINK_REGISTRY) else {
         return;
     };
     registry.retain(|weak| {
@@ -1126,6 +1254,15 @@ extern "C" fn file_sink_atfork_parent() {}
 
 #[cfg(unix)]
 extern "C" fn file_sink_atfork_child() {}
+
+#[cfg(unix)]
+fn try_lock_or_recover<T>(mutex: &StdMutex<T>) -> Option<std::sync::MutexGuard<'_, T>> {
+    match mutex.try_lock() {
+        Ok(guard) => Some(guard),
+        Err(TryLockError::Poisoned(err)) => Some(err.into_inner()),
+        Err(TryLockError::WouldBlock) => None,
+    }
+}
 
 /// Parse size string like "500 MB" to bytes
 pub fn parse_size(size_str: &str) -> Option<u64> {
