@@ -9,13 +9,32 @@ to the same sink safely.
 
 from __future__ import annotations
 
+import gzip
 import multiprocessing
+import os
+import subprocess
+import sys
+import threading
+import time
+from collections import Counter
 from pathlib import Path
+import tempfile
 
 import pytest
 
 from logust import Logger, LogLevel
 from logust._logust import PyLogger
+
+_INHERITED_TEST_LOGGER: Logger | None = None
+
+
+def _active_fork_logger() -> Logger:
+    if _INHERITED_TEST_LOGGER is not None:
+        return _INHERITED_TEST_LOGGER
+
+    import logust
+
+    return logust.logger
 
 
 def _child_remove(log_path: str) -> None:
@@ -45,16 +64,336 @@ def _child_inherited_write_batch(
     start_event: multiprocessing.synchronize.Event,
     prefix: str,
     count: int,
+    payload: str = "",
 ) -> None:
     """Run inside a forked child using the inherited global logger state."""
-    import logust
-
     assert start_event.wait(timeout=10), "start_event was never set"
+    logger = _active_fork_logger()
 
     for i in range(count):
-        logust.logger.info(f"{prefix}|{i:03d}|")
+        logger.info(f"{prefix}|{i:03d}|{payload}")
 
-    logust.logger.complete()
+    logger.complete()
+
+
+def _child_inherited_write_once(token: str) -> None:
+    """Run inside a forked child and append a single inherited-log token."""
+    logger = _active_fork_logger()
+    logger.info(token)
+    logger.complete()
+
+
+def _read_aggregated_log_lines(log_file: Path) -> list[str]:
+    """Read the active log plus every rotated raw/gzip file for the same sink."""
+    lines: list[str] = []
+    stem = log_file.stem
+    lock_name = f"{log_file.name}.lock"
+
+    for path in sorted(log_file.parent.iterdir()):
+        if path.name == lock_name:
+            continue
+        if path == log_file or path.name.startswith(f"{stem}."):
+            if path.suffix == ".gz":
+                with gzip.open(path, "rt", encoding="utf-8") as fh:
+                    lines.extend(fh.read().splitlines())
+            else:
+                lines.extend(path.read_text().splitlines())
+
+    return lines
+
+
+def _assert_exact_log_tokens(log_file: Path, expected_tokens: list[str]) -> None:
+    actual = Counter(_read_aggregated_log_lines(log_file))
+    expected = Counter(expected_tokens)
+    assert actual == expected, (
+        "aggregated log tokens did not match exactly; "
+        f"missing={expected - actual}, extra={actual - expected}"
+    )
+
+
+def _run_module_scenario(function_name: str) -> None:
+    script = (
+        "import runpy; "
+        f"ns = runpy.run_path({str(Path(__file__).resolve())!r}); "
+        f"ns[{function_name!r}]()"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        pytest.fail(
+            f"scenario {function_name} failed with exit code {result.returncode}\n"
+            f"stdout:\n{result.stdout}\n"
+            f"stderr:\n{result.stderr}"
+        )
+
+
+def _scenario_parent_and_children_share_inherited_enqueue_sink() -> None:
+    global _INHERITED_TEST_LOGGER
+
+    tmp_path = Path(tempfile.mkdtemp())
+    log_file = tmp_path / "shared.log"
+    logger = Logger(PyLogger(LogLevel.Trace))
+    logger.disable()
+    _INHERITED_TEST_LOGGER = logger
+    handler_id = logger.add(log_file, level=LogLevel.Trace, enqueue=True)
+
+    child_count = 3
+    messages_per_process = 40
+    ctx = multiprocessing.get_context("fork")
+    start_event = ctx.Event()
+    processes = [
+        ctx.Process(
+            target=_child_inherited_write_batch,
+            args=(start_event, f"child-{idx}", messages_per_process),
+        )
+        for idx in range(child_count)
+    ]
+
+    try:
+        for process in processes:
+            process.start()
+
+        start_event.set()
+
+        for i in range(messages_per_process):
+            logger.info(f"parent|{i:03d}|")
+
+        for process in processes:
+            exitcode = _join_process_or_fail(
+                process,
+                context="forked writer restart likely failed",
+            )
+            assert exitcode == 0, (
+                f"child exited with {exitcode} (expected 0); "
+                "forked writer restart likely failed"
+            )
+
+        logger.complete()
+
+        lines = log_file.read_text().splitlines()
+        expected_tokens = [
+            *(f"parent|{i:03d}|" for i in range(messages_per_process)),
+            *(
+                f"child-{child_idx}|{i:03d}|"
+                for child_idx in range(child_count)
+                for i in range(messages_per_process)
+            ),
+        ]
+
+        assert len(lines) == len(expected_tokens)
+        for token in expected_tokens:
+            assert sum(token in line for line in lines) == 1, (
+                f"missing or duplicated log line for token {token!r}"
+            )
+    finally:
+        logger.remove(handler_id)
+        _INHERITED_TEST_LOGGER = None
+
+
+def _scenario_shared_enqueue_rotation_with_compression_has_no_loss() -> None:
+    global _INHERITED_TEST_LOGGER
+
+    tmp_path = Path(tempfile.mkdtemp())
+    log_file = tmp_path / "rotation-compression.log"
+    payload = "x" * 96
+    child_count = 3
+    messages_per_process = 60
+    ctx = multiprocessing.get_context("fork")
+    start_event = ctx.Event()
+    logger = Logger(PyLogger(LogLevel.Trace))
+    logger.disable()
+    _INHERITED_TEST_LOGGER = logger
+    handler_id = logger.add(
+        log_file,
+        level=LogLevel.Trace,
+        format="{message}",
+        rotation="1 KB",
+        compression=True,
+        enqueue=True,
+    )
+    processes = [
+        ctx.Process(
+            target=_child_inherited_write_batch,
+            args=(start_event, f"child-{idx}", messages_per_process, payload),
+        )
+        for idx in range(child_count)
+    ]
+    expected_tokens = [
+        *(f"parent|{i:03d}|{payload}" for i in range(messages_per_process)),
+        *(
+            f"child-{child_idx}|{i:03d}|{payload}"
+            for child_idx in range(child_count)
+            for i in range(messages_per_process)
+        ),
+    ]
+
+    try:
+        for process in processes:
+            process.start()
+
+        start_event.set()
+
+        for i in range(messages_per_process):
+            logger.info(f"parent|{i:03d}|{payload}")
+
+        for process in processes:
+            exitcode = _join_process_or_fail(
+                process,
+                context="rotation+compression shared enqueue writer likely lost safety",
+            )
+            assert exitcode == 0
+
+        logger.complete()
+
+        rotated_files = [path for path in tmp_path.iterdir() if path.suffix == ".gz"]
+        assert rotated_files, "expected at least one compressed rotated file"
+        _assert_exact_log_tokens(log_file, expected_tokens)
+    finally:
+        logger.remove(handler_id)
+        _INHERITED_TEST_LOGGER = None
+
+
+def _scenario_shared_enqueue_rotation_with_retention_has_no_loss() -> None:
+    global _INHERITED_TEST_LOGGER
+
+    tmp_path = Path(tempfile.mkdtemp())
+    log_file = tmp_path / "rotation-retention.log"
+    payload = "y" * 96
+    child_count = 3
+    messages_per_process = 60
+    ctx = multiprocessing.get_context("fork")
+    start_event = ctx.Event()
+
+    stale_files = []
+    for idx in range(3):
+        stale_path = tmp_path / f"rotation-retention.2000-01-0{idx + 1}_00-00-00_000000.pid0.log"
+        stale_path.write_text(f"stale-{idx}\n")
+        old_time = time.time() - 10 * 24 * 60 * 60
+        os.utime(stale_path, (old_time, old_time))
+        stale_files.append(stale_path)
+
+    logger = Logger(PyLogger(LogLevel.Trace))
+    logger.disable()
+    _INHERITED_TEST_LOGGER = logger
+    handler_id = logger.add(
+        log_file,
+        level=LogLevel.Trace,
+        format="{message}",
+        rotation="1 KB",
+        retention="1 day",
+        enqueue=True,
+    )
+    processes = [
+        ctx.Process(
+            target=_child_inherited_write_batch,
+            args=(start_event, f"child-{idx}", messages_per_process, payload),
+        )
+        for idx in range(child_count)
+    ]
+    expected_tokens = [
+        *(f"parent|{i:03d}|{payload}" for i in range(messages_per_process)),
+        *(
+            f"child-{child_idx}|{i:03d}|{payload}"
+            for child_idx in range(child_count)
+            for i in range(messages_per_process)
+        ),
+    ]
+
+    try:
+        for process in processes:
+            process.start()
+
+        start_event.set()
+
+        for i in range(messages_per_process):
+            logger.info(f"parent|{i:03d}|{payload}")
+
+        for process in processes:
+            exitcode = _join_process_or_fail(
+                process,
+                context="rotation+retention shared enqueue writer likely lost safety",
+            )
+            assert exitcode == 0
+
+        logger.complete()
+
+        for stale_path in stale_files:
+            assert not stale_path.exists(), f"retention did not remove {stale_path.name}"
+
+        _assert_exact_log_tokens(log_file, expected_tokens)
+    finally:
+        logger.remove(handler_id)
+        _INHERITED_TEST_LOGGER = None
+
+
+def _scenario_fork_while_other_thread_is_logging_does_not_deadlock() -> None:
+    global _INHERITED_TEST_LOGGER
+
+    tmp_path = Path(tempfile.mkdtemp())
+    log_file = tmp_path / "fork-race.log"
+    stop_event = threading.Event()
+    started_event = threading.Event()
+    background_errors: list[BaseException] = []
+    logger = Logger(PyLogger(LogLevel.Trace))
+    logger.disable()
+    _INHERITED_TEST_LOGGER = logger
+    handler_id = logger.add(
+        log_file,
+        level=LogLevel.Trace,
+        format="{message}",
+        enqueue=True,
+    )
+
+    def _background_writer() -> None:
+        try:
+            started_event.set()
+            i = 0
+            while not stop_event.is_set():
+                logger.info(f"background|{i:05d}|")
+                i += 1
+        except BaseException as exc:
+            background_errors.append(exc)
+
+    thread = threading.Thread(target=_background_writer, daemon=True)
+    thread.start()
+    assert started_event.wait(timeout=5), "background logging thread did not start"
+
+    ctx = multiprocessing.get_context("fork")
+    child_tokens = [f"fork-child-{idx}|000|" for idx in range(6)]
+
+    try:
+        time.sleep(0.05)
+
+        for idx in range(len(child_tokens)):
+            process = ctx.Process(
+                target=_child_inherited_write_once,
+                args=(child_tokens[idx],),
+            )
+            process.start()
+            exitcode = _join_process_or_fail(
+                process,
+                context="fork while background logging likely deadlocked in atfork",
+            )
+            assert exitcode == 0
+
+        stop_event.set()
+        thread.join(timeout=10)
+        assert not thread.is_alive(), "background logging thread did not stop"
+        assert not background_errors, f"background logging thread failed: {background_errors}"
+
+        logger.complete()
+        lines = _read_aggregated_log_lines(log_file)
+        for token in child_tokens:
+            assert lines.count(token) == 1, f"missing or duplicated child token {token!r}"
+    finally:
+        stop_event.set()
+        thread.join(timeout=10)
+        logger.remove(handler_id)
+        _INHERITED_TEST_LOGGER = None
 
 
 def _join_process_or_fail(
@@ -167,60 +506,19 @@ class TestMultiprocessingFork:
         self, tmp_path: Path
     ) -> None:
         """Forked children lazily restart their writer and append without loss."""
-        import logust
+        _run_module_scenario("_scenario_parent_and_children_share_inherited_enqueue_sink")
 
-        log_file = tmp_path / "shared.log"
-        handler_id = logust.logger.add(
-            log_file, level=LogLevel.Trace, enqueue=True
-        )
+    def test_shared_enqueue_rotation_with_compression_has_no_loss(
+        self, tmp_path: Path
+    ) -> None:
+        _run_module_scenario("_scenario_shared_enqueue_rotation_with_compression_has_no_loss")
 
-        child_count = 3
-        messages_per_process = 40
-        ctx = multiprocessing.get_context("fork")
-        start_event = ctx.Event()
-        processes = [
-            ctx.Process(
-                target=_child_inherited_write_batch,
-                args=(start_event, f"child-{idx}", messages_per_process),
-            )
-            for idx in range(child_count)
-        ]
+    def test_shared_enqueue_rotation_with_retention_has_no_loss(
+        self, tmp_path: Path
+    ) -> None:
+        _run_module_scenario("_scenario_shared_enqueue_rotation_with_retention_has_no_loss")
 
-        try:
-            for process in processes:
-                process.start()
-
-            start_event.set()
-
-            for i in range(messages_per_process):
-                logust.logger.info(f"parent|{i:03d}|")
-
-            for process in processes:
-                exitcode = _join_process_or_fail(
-                    process,
-                    context="forked writer restart likely failed",
-                )
-                assert exitcode == 0, (
-                    f"child exited with {exitcode} (expected 0); "
-                    "forked writer restart likely failed"
-                )
-
-            logust.logger.complete()
-
-            lines = log_file.read_text().splitlines()
-            expected_tokens = [
-                *(f"parent|{i:03d}|" for i in range(messages_per_process)),
-                *(
-                    f"child-{child_idx}|{i:03d}|"
-                    for child_idx in range(child_count)
-                    for i in range(messages_per_process)
-                ),
-            ]
-
-            assert len(lines) == len(expected_tokens)
-            for token in expected_tokens:
-                assert sum(token in line for line in lines) == 1, (
-                    f"missing or duplicated log line for token {token!r}"
-                )
-        finally:
-            logust.logger.remove(handler_id)
+    def test_fork_while_other_thread_is_logging_does_not_deadlock(
+        self, tmp_path: Path
+    ) -> None:
+        _run_module_scenario("_scenario_fork_while_other_thread_is_logging_does_not_deadlock")
