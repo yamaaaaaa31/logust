@@ -85,7 +85,6 @@ impl Default for FileSinkConfig {
 enum WriterMessage {
     Write(String),
     Flush { ack: Sender<()> },
-    Shutdown,
 }
 
 struct AsyncWriterState {
@@ -94,7 +93,7 @@ struct AsyncWriterState {
 }
 
 struct SyncWriterState {
-    writer: BufWriter<File>,
+    writer: Option<BufWriter<File>>,
 }
 
 /// Writer backend for FileSink
@@ -154,7 +153,7 @@ impl FileSink {
             WriterBackend::Async(FileSinkInner::spawn_async_writer(&path)?)
         } else {
             WriterBackend::Sync(SyncWriterState {
-                writer: BufWriter::new(FileSinkInner::open_log_file(&path)?),
+                writer: Some(BufWriter::new(FileSinkInner::open_log_file(&path)?)),
             })
         };
 
@@ -222,10 +221,6 @@ impl FileSinkInner {
                         let _ = writer.flush();
                         let _ = ack.send(());
                     }
-                    Ok(WriterMessage::Shutdown) => {
-                        let _ = writer.flush();
-                        break;
-                    }
                     Err(RecvTimeoutError::Timeout) => {
                         let _ = writer.flush();
                     }
@@ -261,7 +256,11 @@ impl FileSinkInner {
                         .clone(),
                 ),
                 WriterBackend::Sync(sync_state) => {
-                    writeln!(sync_state.writer, "{}", message)?;
+                    let writer = sync_state
+                        .writer
+                        .as_mut()
+                        .ok_or_else(|| io::Error::other("sync backend writer missing"))?;
+                    writeln!(writer, "{}", message)?;
                     None
                 }
             }
@@ -290,7 +289,9 @@ impl FileSinkInner {
                         .clone(),
                 ),
                 WriterBackend::Sync(sync_state) => {
-                    sync_state.writer.flush()?;
+                    if let Some(writer) = sync_state.writer.as_mut() {
+                        writer.flush()?;
+                    }
                     None
                 }
             }
@@ -361,7 +362,16 @@ impl FileSinkInner {
             }
             WriterBackend::Sync(sync_state) => {
                 if pid_changed {
-                    sync_state.writer = BufWriter::new(Self::open_log_file(&self.config.path)?);
+                    if let Some(writer) = sync_state.writer.take() {
+                        std::mem::forget(writer);
+                    }
+                    sync_state.writer =
+                        Some(BufWriter::new(Self::open_log_file(&self.config.path)?));
+                    self.creation_pid.store(current_pid, Ordering::Release);
+                    self.refresh_current_size_from_disk();
+                } else if sync_state.writer.is_none() {
+                    sync_state.writer =
+                        Some(BufWriter::new(Self::open_log_file(&self.config.path)?));
                     self.creation_pid.store(current_pid, Ordering::Release);
                     self.refresh_current_size_from_disk();
                 }
@@ -390,9 +400,7 @@ impl FileSinkInner {
     }
 
     fn stop_async_writer_locked(async_state: &mut AsyncWriterState, can_join: bool) {
-        if let Some(sender) = async_state.sender.take() {
-            let _ = sender.send(WriterMessage::Shutdown);
-        }
+        async_state.sender.take();
 
         if let Some(handle) = async_state.handle.take() {
             if can_join {
@@ -403,9 +411,10 @@ impl FileSinkInner {
         }
     }
 
-    fn pause_for_fork(&self) {
-        let mut state = self.state.lock();
-        if let WriterBackend::Async(async_state) = &mut state.backend {
+    fn pause_for_fork_best_effort(&self) {
+        if let Some(mut state) = self.state.try_lock()
+            && let WriterBackend::Async(async_state) = &mut state.backend
+        {
             Self::stop_async_writer_locked(async_state, true);
         }
     }
@@ -453,6 +462,21 @@ impl FileSinkInner {
     /// Check and perform rotation if needed
     #[inline]
     fn maybe_rotate(&self) -> io::Result<()> {
+        if std::process::id() != self.creation_pid.load(Ordering::Acquire) {
+            let mut state = self.state.lock();
+            self.ensure_backend_ready_locked(&mut state)?;
+
+            if self.config.rotation == Rotation::Never && self.config.max_size.is_none() {
+                return Ok(());
+            }
+
+            if self.check_rotation_needed() {
+                self.rotate_locked(&mut state)?;
+            }
+
+            return Ok(());
+        }
+
         if self.config.rotation == Rotation::Never && self.config.max_size.is_none() {
             return Ok(());
         }
@@ -498,7 +522,9 @@ impl FileSinkInner {
                 Self::stop_async_writer_locked(async_state, can_join);
             }
             WriterBackend::Sync(sync_state) => {
-                sync_state.writer.flush()?;
+                if let Some(writer) = sync_state.writer.as_mut() {
+                    writer.flush()?;
+                }
             }
         }
 
@@ -528,7 +554,7 @@ impl FileSinkInner {
                 self.restart_async_writer_locked(async_state, std::process::id())
             }
             WriterBackend::Sync(sync_state) => {
-                sync_state.writer = BufWriter::new(Self::open_log_file(&self.config.path)?);
+                sync_state.writer = Some(BufWriter::new(Self::open_log_file(&self.config.path)?));
                 self.creation_pid
                     .store(std::process::id(), Ordering::Release);
                 self.refresh_current_size_from_disk();
@@ -677,10 +703,18 @@ impl Drop for FileSinkInner {
         // without flushing/joining inherited resources.
         if std::process::id() != self.creation_pid.load(Ordering::Acquire) {
             let state = self.state.get_mut();
-            if let WriterBackend::Async(async_state) = &mut state.backend
-                && let Some(handle) = async_state.handle.take()
-            {
-                std::mem::forget(handle);
+            match &mut state.backend {
+                WriterBackend::Async(async_state) => {
+                    async_state.sender.take();
+                    if let Some(handle) = async_state.handle.take() {
+                        std::mem::forget(handle);
+                    }
+                }
+                WriterBackend::Sync(sync_state) => {
+                    if let Some(writer) = sync_state.writer.take() {
+                        std::mem::forget(writer);
+                    }
+                }
             }
             return;
         }
@@ -691,7 +725,9 @@ impl Drop for FileSinkInner {
                 Self::stop_async_writer_locked(async_state, true);
             }
             WriterBackend::Sync(sync_state) => {
-                let _ = sync_state.writer.flush();
+                if let Some(writer) = sync_state.writer.as_mut() {
+                    let _ = writer.flush();
+                }
             }
         }
     }
@@ -726,22 +762,15 @@ fn register_async_sink(sink: &Arc<FileSinkInner>) {
 
 #[cfg(unix)]
 extern "C" fn file_sink_atfork_prepare() {
-    let sinks = {
-        let mut registry = ASYNC_SINK_REGISTRY.lock();
-        let mut live = Vec::with_capacity(registry.len());
+    if let Some(mut registry) = ASYNC_SINK_REGISTRY.try_lock() {
         registry.retain(|weak| {
             if let Some(sink) = weak.upgrade() {
-                live.push(sink);
+                sink.pause_for_fork_best_effort();
                 true
             } else {
                 false
             }
         });
-        live
-    };
-
-    for sink in sinks {
-        sink.pause_for_fork();
     }
 }
 
