@@ -5,10 +5,9 @@ mod sink;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, RwLockReadGuard, RwLockWriteGuard};
 
-use parking_lot::RwLock;
 use pyo3::intern;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyTuple};
@@ -20,6 +19,22 @@ pub use handler::{
 };
 pub use level::{LevelInfo, LogLevel, get_level_by_no, get_level_info, register_level};
 pub use sink::{FileSink, FileSinkConfig, Rotation};
+
+struct RwLock<T>(std::sync::RwLock<T>);
+
+impl<T> RwLock<T> {
+    fn new(value: T) -> Self {
+        Self(std::sync::RwLock::new(value))
+    }
+
+    fn read(&self) -> RwLockReadGuard<'_, T> {
+        self.0.read().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn write(&self) -> RwLockWriteGuard<'_, T> {
+        self.0.write().unwrap_or_else(|e| e.into_inner())
+    }
+}
 
 /// Built-in levels used to precompute per-emit-level token requirements (Python passes `level_value`).
 const EMIT_LEVELS: [LogLevel; 8] = [

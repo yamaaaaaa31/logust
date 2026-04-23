@@ -1,9 +1,24 @@
 use std::collections::HashMap;
-use std::sync::LazyLock;
+use std::sync::{LazyLock, RwLockReadGuard, RwLockWriteGuard};
 
 use colored::Color;
-use parking_lot::RwLock;
 use pyo3::prelude::*;
+
+struct RwLock<T>(std::sync::RwLock<T>);
+
+impl<T> RwLock<T> {
+    fn new(value: T) -> Self {
+        Self(std::sync::RwLock::new(value))
+    }
+
+    fn read(&self) -> RwLockReadGuard<'_, T> {
+        self.0.read().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn write(&self) -> RwLockWriteGuard<'_, T> {
+        self.0.write().unwrap_or_else(|e| e.into_inner())
+    }
+}
 
 /// Log level enum with numeric ordering for filtering
 #[pyclass(eq, eq_int, from_py_object)]
