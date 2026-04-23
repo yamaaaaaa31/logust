@@ -1,16 +1,15 @@
 """Regression tests for multiprocessing support (issue #22).
 
-A forked child process inherits the parent's FileSink memory, but the
-background writer thread created by ``thread::spawn`` does not survive
-fork — only the calling thread does. Without PID-aware Drop, the child's
-inherited ``JoinHandle`` references a non-existent thread and ``join()``
-panics with "threads should not terminate unexpectedly".
+A forked child process inherits the parent's ``FileSink`` memory, but an
+``enqueue=True`` sink owns thread/channel state that must be rebuilt in the
+child. These tests cover both the original panic and the follow-up fix that
+restarts the writer in forked children so parent/child processes can append
+to the same sink safely.
 """
 
 from __future__ import annotations
 
 import multiprocessing
-import sys
 from pathlib import Path
 
 import pytest
@@ -42,6 +41,22 @@ def _child_inherited_remove() -> None:
     logust.logger.remove()
 
 
+def _child_inherited_write_batch(
+    start_event: multiprocessing.synchronize.Event,
+    prefix: str,
+    count: int,
+) -> None:
+    """Run inside a forked child using the inherited global logger state."""
+    import logust
+
+    assert start_event.wait(timeout=10), "start_event was never set"
+
+    for i in range(count):
+        logust.logger.info(f"{prefix}|{i:03d}|")
+
+    logust.logger.complete()
+
+
 @pytest.mark.skipif(
     "fork" not in multiprocessing.get_all_start_methods(),
     reason="fork start method not available on this platform",
@@ -61,13 +76,6 @@ class TestMultiprocessingFork:
             "FileSink::drop likely panicked on the inherited JoinHandle"
         )
 
-    @pytest.mark.skipif(
-        sys.platform == "darwin",
-        reason=(
-            "fork() with a multi-threaded parent is unsafe on macOS "
-            "(libdispatch raises SIGTRAP independently of this bug)"
-        ),
-    )
     def test_child_drops_inherited_enqueue_sink(self, tmp_path: Path) -> None:
         """Parent creates an enqueue=True sink, forks, child removes handlers."""
         import logust
@@ -86,5 +94,64 @@ class TestMultiprocessingFork:
                 f"child exited with {p.exitcode} (expected 0); "
                 "inherited FileSink::drop likely panicked"
             )
+        finally:
+            logust.logger.remove(handler_id)
+
+    def test_parent_and_children_share_inherited_enqueue_sink(
+        self, tmp_path: Path
+    ) -> None:
+        """Forked children lazily restart their writer and append without loss."""
+        import logust
+
+        log_file = tmp_path / "shared.log"
+        handler_id = logust.logger.add(
+            log_file, level=LogLevel.Trace, enqueue=True
+        )
+
+        child_count = 3
+        messages_per_process = 40
+        ctx = multiprocessing.get_context("fork")
+        start_event = ctx.Event()
+        processes = [
+            ctx.Process(
+                target=_child_inherited_write_batch,
+                args=(start_event, f"child-{idx}", messages_per_process),
+            )
+            for idx in range(child_count)
+        ]
+
+        try:
+            for process in processes:
+                process.start()
+
+            start_event.set()
+
+            for i in range(messages_per_process):
+                logust.logger.info(f"parent|{i:03d}|")
+
+            for process in processes:
+                process.join(timeout=30)
+                assert process.exitcode == 0, (
+                    f"child exited with {process.exitcode} (expected 0); "
+                    "forked writer restart likely failed"
+                )
+
+            logust.logger.complete()
+
+            lines = log_file.read_text().splitlines()
+            expected_tokens = [
+                *(f"parent|{i:03d}|" for i in range(messages_per_process)),
+                *(
+                    f"child-{child_idx}|{i:03d}|"
+                    for child_idx in range(child_count)
+                    for i in range(messages_per_process)
+                ),
+            ]
+
+            assert len(lines) == len(expected_tokens)
+            for token in expected_tokens:
+                assert sum(token in line for line in lines) == 1, (
+                    f"missing or duplicated log line for token {token!r}"
+                )
         finally:
             logust.logger.remove(handler_id)

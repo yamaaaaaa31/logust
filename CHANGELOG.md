@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **`FileSink::drop` panic in forked children (`enqueue=True`)**: When a process using an `enqueue=True` file handler was forked (e.g. via `multiprocessing.Process`), the child inherited the parent's `JoinHandle` pointing at a background writer thread that does not survive `fork()`. Calling `logger.remove()` (or exit cleanup) in the child triggered `threads should not terminate unexpectedly`. `FileSink` now records its creation PID and skips the `JoinHandle::join` in non-original processes, preventing the panic. (#22)
+- **Fork-safe async file sinks across parent/child processes**: `FileSink` now registers async sinks in a global at-fork registry and uses `pthread_atfork(prepare)` to stop writer threads before `fork()` on Unix, avoiding macOS `SIGTRAP` failures from inheriting live threads. Parent and child lazily rebuild their crossbeam channel + writer thread on first `write()` / `flush()`, so multiple forked processes can keep appending to the same `enqueue=True` file sink without dropping lines. Async `flush()` now waits for the writer thread, and rotation reopens the file backend after renaming to keep future writes on the active log file. (#22)
 
 ## [0.3.0] - 2026-04-11
 
