@@ -360,6 +360,9 @@ fn windows_unlock_file(file: &File) -> io::Result<()> {
 }
 
 struct RotatingFileWriter {
+    // We intentionally flush on every newline so each write can observe
+    // cross-process rotation promptly via the current file identity.
+    // That trades away larger write batching, so keep this as `LineWriter`.
     writer: LineWriter<File>,
     lock_file: File,
     file_identity: Option<FileIdentity>,
@@ -370,6 +373,14 @@ impl RotatingFileWriter {
     fn open(path: &Path, shared_identity: Option<Arc<SharedFileIdentity>>) -> io::Result<Self> {
         let file = FileSinkInner::open_log_file(path)?;
         let lock_file = FileSinkInner::open_rotation_lock_file(path)?;
+        Ok(Self::from_open_files(file, lock_file, shared_identity))
+    }
+
+    fn from_open_files(
+        file: File,
+        lock_file: File,
+        shared_identity: Option<Arc<SharedFileIdentity>>,
+    ) -> Self {
         let file_identity = FileIdentity::from_file(&file).ok();
 
         let writer = Self {
@@ -379,7 +390,7 @@ impl RotatingFileWriter {
             shared_identity,
         };
         writer.update_shared_identity();
-        Ok(writer)
+        writer
     }
 
     fn write_line(&mut self, path: &Path, message: &str) -> io::Result<()> {
@@ -455,6 +466,14 @@ struct FileSinkState {
     backend: WriterBackend,
 }
 
+#[derive(Clone)]
+struct PendingRotation {
+    rotated_path: PathBuf,
+    rotation_time: DateTime<Local>,
+    needs_compression: bool,
+    needs_retention: bool,
+}
+
 struct FileSinkInner {
     config: FileSinkConfig,
     state: StdMutex<FileSinkState>,
@@ -467,6 +486,8 @@ struct FileSinkInner {
     /// PID of the process that currently owns the live backend.
     /// Child processes created via fork() lazily reopen/recreate the backend on first use.
     creation_pid: AtomicU32,
+    pending_rotation: StdMutex<Option<PendingRotation>>,
+    pending_rotation_active: AtomicBool,
 }
 
 /// File sink with optional async writing support
@@ -493,7 +514,7 @@ impl FileSink {
         }
 
         let backend = if config.enqueue {
-            WriterBackend::Async(FileSinkInner::spawn_async_writer(&path)?)
+            WriterBackend::Async(FileSinkInner::create_async_writer_state(&path)?)
         } else {
             WriterBackend::Sync(SyncWriterState {
                 writer: Some(FileSinkInner::open_sync_writer(&path)?),
@@ -512,6 +533,8 @@ impl FileSink {
                 next_boundary.map(|b| b.timestamp_millis()).unwrap_or(0),
             ),
             creation_pid: AtomicU32::new(std::process::id()),
+            pending_rotation: StdMutex::new(None),
+            pending_rotation_active: AtomicBool::new(false),
         });
 
         #[cfg(unix)]
@@ -565,20 +588,24 @@ impl FileSinkInner {
         RotatingFileWriter::open(path, None)
     }
 
-    fn spawn_async_writer(path: &Path) -> io::Result<AsyncWriterState> {
-        let path = path.to_path_buf();
+    fn create_async_writer_state(path: &Path) -> io::Result<AsyncWriterState> {
         let file_identity = Arc::new(SharedFileIdentity::default());
-        let thread_identity = Arc::clone(&file_identity);
+        let writer = RotatingFileWriter::open(path, Some(Arc::clone(&file_identity)))?;
+        Ok(Self::spawn_async_writer(
+            path.to_path_buf(),
+            writer,
+            file_identity,
+        ))
+    }
+
+    fn spawn_async_writer(
+        path: PathBuf,
+        mut writer: RotatingFileWriter,
+        file_identity: Arc<SharedFileIdentity>,
+    ) -> AsyncWriterState {
         let (sender, receiver) = bounded::<WriterMessage>(ASYNC_QUEUE_CAPACITY);
 
         let writer_handle = thread::spawn(move || {
-            let mut writer = match RotatingFileWriter::open(&path, Some(thread_identity)) {
-                Ok(writer) => writer,
-                Err(err) => {
-                    eprintln!("Failed to open log file: {}", err);
-                    return;
-                }
-            };
             let flush_interval = Duration::from_millis(ASYNC_FLUSH_INTERVAL_MS);
 
             loop {
@@ -603,11 +630,11 @@ impl FileSinkInner {
             }
         });
 
-        Ok(AsyncWriterState {
+        AsyncWriterState {
             sender: Some(sender),
             handle: Some(writer_handle),
             file_identity,
-        })
+        }
     }
 
     fn write_owned(&self, message: String) -> io::Result<()> {
@@ -777,7 +804,7 @@ impl FileSinkInner {
         async_state: &mut AsyncWriterState,
         current_pid: u32,
     ) -> io::Result<()> {
-        *async_state = Self::spawn_async_writer(&self.config.path)?;
+        *async_state = Self::create_async_writer_state(&self.config.path)?;
         self.creation_pid.store(current_pid, Ordering::Release);
         self.sync_rotation_state_from_path();
         Ok(())
@@ -933,6 +960,10 @@ impl FileSinkInner {
     /// Check if rotation is needed (lock-free hot path)
     #[inline]
     fn check_rotation_needed(&self) -> bool {
+        if self.pending_rotation_active.load(Ordering::Acquire) {
+            return true;
+        }
+
         if let Some(max_size) = self.config.max_size {
             let current_size = self.current_size.load(Ordering::Relaxed);
             if current_size >= max_size {
@@ -958,6 +989,46 @@ impl FileSinkInner {
         } else {
             false
         }
+    }
+
+    fn load_pending_rotation(&self) -> Option<PendingRotation> {
+        if !self.pending_rotation_active.load(Ordering::Acquire) {
+            return None;
+        }
+
+        self.pending_rotation
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    fn store_pending_rotation(&self, pending: PendingRotation) {
+        *self
+            .pending_rotation
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(pending);
+        self.pending_rotation_active.store(true, Ordering::Release);
+    }
+
+    fn clear_pending_rotation(&self) {
+        *self
+            .pending_rotation
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = None;
+        self.pending_rotation_active.store(false, Ordering::Release);
+    }
+
+    fn advance_rotation_time_boundary(&self, rotation_time: DateTime<Local>) {
+        *self
+            .current_file_time
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = rotation_time;
+        let next_boundary =
+            Self::calculate_next_rotation_boundary(&self.config.rotation, &rotation_time);
+        self.next_rotation_boundary.store(
+            next_boundary.map(|b| b.timestamp_millis()).unwrap_or(0),
+            Ordering::Relaxed,
+        );
     }
 
     fn reopen_backend_locked(&self, state: &mut FileSinkState) -> io::Result<()> {
@@ -993,6 +1064,30 @@ impl FileSinkInner {
         let rotation_lock_file = Self::open_rotation_lock_file(&self.config.path)?;
         let _rotation_lock = FileLockGuard::exclusive(&rotation_lock_file)?;
 
+        if let Some(mut pending) = self.load_pending_rotation() {
+            self.reopen_backend_locked(state)?;
+
+            if pending.needs_compression && pending.rotated_path.exists() {
+                if let Err(err) = self.compress_file(&pending.rotated_path) {
+                    self.store_pending_rotation(pending);
+                    return Err(err);
+                }
+                pending.needs_compression = false;
+            }
+
+            if pending.needs_retention {
+                if let Err(err) = self.apply_retention() {
+                    self.store_pending_rotation(pending);
+                    return Err(err);
+                }
+                pending.needs_retention = false;
+            }
+
+            self.clear_pending_rotation();
+            self.advance_rotation_time_boundary(pending.rotation_time);
+            return Ok(());
+        }
+
         self.sync_rotation_state_from_path();
         if !self.check_rotation_needed() {
             return self.reopen_backend_locked(state);
@@ -1000,48 +1095,50 @@ impl FileSinkInner {
 
         let now = Local::now();
         let rotated_path = self.generate_rotated_path(&now);
-        let mut rotation_error = None;
+        let mut rename_error = None;
 
         if self.config.path.exists()
             && let Err(err) = fs::rename(&self.config.path, &rotated_path)
             && err.kind() != io::ErrorKind::NotFound
         {
-            rotation_error = Some(err);
+            rename_error = Some(err);
         }
 
         let reopen_result = self.reopen_backend_locked(state);
         if let Err(err) = reopen_result {
-            return Err(rotation_error.unwrap_or(err));
+            return Err(rename_error.unwrap_or(err));
         }
 
-        *self
-            .current_file_time
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()) = now;
-        let next_boundary = Self::calculate_next_rotation_boundary(&self.config.rotation, &now);
-        self.next_rotation_boundary.store(
-            next_boundary.map(|b| b.timestamp_millis()).unwrap_or(0),
-            Ordering::Relaxed,
-        );
-
-        if rotation_error.is_none()
-            && rotated_path.exists()
-            && self.config.compression
-            && let Err(err) = self.compress_file(&rotated_path)
-        {
-            rotation_error = Some(err);
-        }
-
-        if rotation_error.is_none()
-            && let Err(err) = self.apply_retention()
-        {
-            rotation_error = Some(err);
-        }
-
-        if let Some(err) = rotation_error {
+        if let Some(err) = rename_error {
             return Err(err);
         }
 
+        let mut pending = PendingRotation {
+            rotated_path: rotated_path.clone(),
+            rotation_time: now,
+            needs_compression: self.config.compression && rotated_path.exists(),
+            needs_retention: self.config.retention_count.is_some()
+                || self.config.retention_days.is_some(),
+        };
+
+        if pending.needs_compression {
+            if let Err(err) = self.compress_file(&rotated_path) {
+                self.store_pending_rotation(pending);
+                return Err(err);
+            }
+            pending.needs_compression = false;
+        }
+
+        if pending.needs_retention {
+            if let Err(err) = self.apply_retention() {
+                self.store_pending_rotation(pending);
+                return Err(err);
+            }
+            pending.needs_retention = false;
+        }
+
+        self.clear_pending_rotation();
+        self.advance_rotation_time_boundary(now);
         Ok(())
     }
 
@@ -1328,6 +1425,15 @@ pub fn parse_retention(retention_str: &str) -> (Option<u32>, Option<u32>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn unique_temp_path(name: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("logust-{name}-{}-{nanos}", std::process::id()))
+    }
 
     #[test]
     fn test_parse_size() {
@@ -1350,5 +1456,52 @@ mod tests {
     fn test_parse_retention() {
         assert_eq!(parse_retention("10 days"), (Some(10), None));
         assert_eq!(parse_retention("5"), (None, Some(5)));
+    }
+
+    #[test]
+    fn test_pending_rotation_forces_retry_even_before_boundary() {
+        let path = unique_temp_path("pending-rotation").join("app.log");
+        let sink = FileSink::new(FileSinkConfig {
+            path: path.clone(),
+            rotation: Rotation::Hourly,
+            ..FileSinkConfig::default()
+        })
+        .unwrap();
+
+        let future_boundary = Local::now() + chrono::Duration::hours(1);
+        sink.inner
+            .next_rotation_boundary
+            .store(future_boundary.timestamp_millis(), Ordering::Relaxed);
+        sink.inner.store_pending_rotation(PendingRotation {
+            rotated_path: path.with_extension("rotated.log"),
+            rotation_time: Local::now(),
+            needs_compression: false,
+            needs_retention: true,
+        });
+
+        assert!(sink.inner.check_rotation_needed());
+
+        sink.inner.clear_pending_rotation();
+        let _ = fs::remove_file(&path);
+        if let Some(parent) = path.parent() {
+            let _ = fs::remove_dir(parent);
+        }
+    }
+
+    #[test]
+    fn test_async_writer_state_open_error_surfaces_immediately() {
+        let path = unique_temp_path("async-open-error");
+        fs::create_dir_all(&path).unwrap();
+
+        let err = match FileSinkInner::create_async_writer_state(&path) {
+            Ok(_) => panic!("async writer state unexpectedly opened a directory path"),
+            Err(err) => err,
+        };
+        assert!(matches!(
+            err.kind(),
+            io::ErrorKind::IsADirectory | io::ErrorKind::PermissionDenied
+        ));
+
+        fs::remove_dir(&path).unwrap();
     }
 }
