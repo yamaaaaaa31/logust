@@ -6,7 +6,9 @@ use std::os::fd::AsRawFd;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicI64, AtomicU32, AtomicU64, Ordering};
-use std::sync::{Arc, LazyLock, Mutex as StdMutex, OnceLock, Weak};
+use std::sync::{Arc, Mutex as StdMutex};
+#[cfg(unix)]
+use std::sync::{LazyLock, OnceLock, Weak};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -168,6 +170,8 @@ impl SharedFileIdentity {
 struct FileLockGuard<'a> {
     #[cfg(unix)]
     file: &'a File,
+    #[cfg(not(unix))]
+    _phantom: std::marker::PhantomData<&'a File>,
 }
 
 impl<'a> FileLockGuard<'a> {
@@ -181,7 +185,9 @@ impl<'a> FileLockGuard<'a> {
         #[cfg(not(unix))]
         {
             let _ = file;
-            Ok(Self {})
+            Ok(Self {
+                _phantom: std::marker::PhantomData,
+            })
         }
     }
 
@@ -195,7 +201,9 @@ impl<'a> FileLockGuard<'a> {
         #[cfg(not(unix))]
         {
             let _ = file;
-            Ok(Self {})
+            Ok(Self {
+                _phantom: std::marker::PhantomData,
+            })
         }
     }
 }
