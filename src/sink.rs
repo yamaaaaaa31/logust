@@ -1,5 +1,5 @@
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, LineWriter, Write};
+use std::io::{self, BufWriter, Write};
 #[cfg(unix)]
 use std::os::fd::AsRawFd;
 #[cfg(unix)]
@@ -242,24 +242,26 @@ impl SharedFileIdentity {
     }
 }
 
-struct FileLockGuard<'a> {
+struct FileLockGuard {
     #[cfg(any(unix, windows))]
-    file: &'a File,
+    file: File,
     #[cfg(not(any(unix, windows)))]
-    _phantom: std::marker::PhantomData<&'a File>,
+    _phantom: std::marker::PhantomData<()>,
 }
 
-impl<'a> FileLockGuard<'a> {
-    fn shared(file: &'a File) -> io::Result<Self> {
+impl FileLockGuard {
+    fn shared(file: &File) -> io::Result<Self> {
         #[cfg(unix)]
         {
-            flock_file(file, libc::LOCK_SH)?;
+            let file = file.try_clone()?;
+            flock_file(&file, libc::LOCK_SH)?;
             Ok(Self { file })
         }
 
         #[cfg(windows)]
         {
-            windows_lock_file(file, false)?;
+            let file = file.try_clone()?;
+            windows_lock_file(&file, false)?;
             Ok(Self { file })
         }
 
@@ -272,16 +274,18 @@ impl<'a> FileLockGuard<'a> {
         }
     }
 
-    fn exclusive(file: &'a File) -> io::Result<Self> {
+    fn exclusive(file: &File) -> io::Result<Self> {
         #[cfg(unix)]
         {
-            flock_file(file, libc::LOCK_EX)?;
+            let file = file.try_clone()?;
+            flock_file(&file, libc::LOCK_EX)?;
             Ok(Self { file })
         }
 
         #[cfg(windows)]
         {
-            windows_lock_file(file, true)?;
+            let file = file.try_clone()?;
+            windows_lock_file(&file, true)?;
             Ok(Self { file })
         }
 
@@ -295,13 +299,13 @@ impl<'a> FileLockGuard<'a> {
     }
 }
 
-impl Drop for FileLockGuard<'_> {
+impl Drop for FileLockGuard {
     fn drop(&mut self) {
         #[cfg(unix)]
-        let _ = flock_file(self.file, libc::LOCK_UN);
+        let _ = flock_file(&self.file, libc::LOCK_UN);
 
         #[cfg(windows)]
-        let _ = windows_unlock_file(self.file);
+        let _ = windows_unlock_file(&self.file);
     }
 }
 
@@ -360,10 +364,7 @@ fn windows_unlock_file(file: &File) -> io::Result<()> {
 }
 
 struct RotatingFileWriter {
-    // We intentionally flush on every newline so each write can observe
-    // cross-process rotation promptly via the current file identity.
-    // That trades away larger write batching, so keep this as `LineWriter`.
-    writer: LineWriter<File>,
+    writer: BufWriter<File>,
     lock_file: File,
     file_identity: Option<FileIdentity>,
     shared_identity: Option<Arc<SharedFileIdentity>>,
@@ -384,7 +385,7 @@ impl RotatingFileWriter {
         let file_identity = FileIdentity::from_file(&file).ok();
 
         let writer = Self {
-            writer: LineWriter::new(file),
+            writer: BufWriter::new(file),
             lock_file,
             file_identity,
             shared_identity,
@@ -394,16 +395,52 @@ impl RotatingFileWriter {
     }
 
     fn write_line(&mut self, path: &Path, message: &str) -> io::Result<()> {
-        let lock_file = self.lock_file.try_clone()?;
-        let _lock = FileLockGuard::shared(&lock_file)?;
-        self.reopen_if_rotated(path)?;
+        let _lock = self.acquire_shared_lock(path)?;
+        writeln!(self.writer, "{}", message)?;
+        self.writer.flush()
+    }
+
+    fn write_line_unlocked(&mut self, message: &str) -> io::Result<()> {
         writeln!(self.writer, "{}", message)
     }
 
-    fn flush(&mut self, path: &Path) -> io::Result<()> {
-        let lock_file = self.lock_file.try_clone()?;
-        let _lock = FileLockGuard::shared(&lock_file)?;
+    fn write_line_buffered(
+        &mut self,
+        path: &Path,
+        message: &str,
+        batch_lock: &mut Option<FileLockGuard>,
+    ) -> io::Result<()> {
+        if batch_lock.is_none() {
+            *batch_lock = Some(self.acquire_shared_lock(path)?);
+        }
+
+        writeln!(self.writer, "{}", message)
+    }
+
+    fn flush_buffered(
+        &mut self,
+        path: &Path,
+        batch_lock: &mut Option<FileLockGuard>,
+    ) -> io::Result<()> {
+        let _temporary_lock = if batch_lock.is_none() {
+            Some(self.acquire_shared_lock(path)?)
+        } else {
+            None
+        };
+
+        let result = self.writer.flush();
+        batch_lock.take();
+        result
+    }
+
+    fn acquire_shared_lock(&mut self, path: &Path) -> io::Result<FileLockGuard> {
+        let lock = FileLockGuard::shared(&self.lock_file)?;
         self.reopen_if_rotated(path)?;
+        Ok(lock)
+    }
+
+    fn flush(&mut self, path: &Path) -> io::Result<()> {
+        let _lock = self.acquire_shared_lock(path)?;
         self.writer.flush()
     }
 
@@ -514,7 +551,10 @@ impl FileSink {
         }
 
         let backend = if config.enqueue {
-            WriterBackend::Async(FileSinkInner::create_async_writer_state(&path)?)
+            WriterBackend::Async(FileSinkInner::create_async_writer_state(
+                &path,
+                FileSinkInner::rotation_coordination_enabled_for_config(&config),
+            )?)
         } else {
             WriterBackend::Sync(SyncWriterState {
                 writer: Some(FileSinkInner::open_sync_writer(&path)?),
@@ -564,6 +604,15 @@ impl FileSink {
 }
 
 impl FileSinkInner {
+    fn rotation_coordination_enabled_for_config(config: &FileSinkConfig) -> bool {
+        config.rotation != Rotation::Never || config.max_size.is_some()
+    }
+
+    fn rotation_coordination_enabled(&self) -> bool {
+        Self::rotation_coordination_enabled_for_config(&self.config)
+            || self.pending_rotation_active.load(Ordering::Acquire)
+    }
+
     fn format_lock_filename(path: &Path) -> PathBuf {
         let mut lock_path = path.as_os_str().to_os_string();
         lock_path.push(".lock");
@@ -588,13 +637,17 @@ impl FileSinkInner {
         RotatingFileWriter::open(path, None)
     }
 
-    fn create_async_writer_state(path: &Path) -> io::Result<AsyncWriterState> {
+    fn create_async_writer_state(
+        path: &Path,
+        coordinate_rotation: bool,
+    ) -> io::Result<AsyncWriterState> {
         let file_identity = Arc::new(SharedFileIdentity::default());
         let writer = RotatingFileWriter::open(path, Some(Arc::clone(&file_identity)))?;
         Ok(Self::spawn_async_writer(
             path.to_path_buf(),
             writer,
             file_identity,
+            coordinate_rotation,
         ))
     }
 
@@ -602,28 +655,48 @@ impl FileSinkInner {
         path: PathBuf,
         mut writer: RotatingFileWriter,
         file_identity: Arc<SharedFileIdentity>,
+        coordinate_rotation: bool,
     ) -> AsyncWriterState {
         let (sender, receiver) = bounded::<WriterMessage>(ASYNC_QUEUE_CAPACITY);
 
         let writer_handle = thread::spawn(move || {
             let flush_interval = Duration::from_millis(ASYNC_FLUSH_INTERVAL_MS);
+            let mut batch_lock = None;
 
             loop {
                 match receiver.recv_timeout(flush_interval) {
                     Ok(WriterMessage::Write(msg)) => {
-                        if let Err(err) = writer.write_line(&path, &msg) {
+                        let result = if coordinate_rotation {
+                            writer.write_line_buffered(&path, &msg, &mut batch_lock)
+                        } else {
+                            writer.write_line_unlocked(&msg)
+                        };
+
+                        if let Err(err) = result {
                             eprintln!("Failed to write to log: {}", err);
                         }
                     }
                     Ok(WriterMessage::Flush { ack }) => {
-                        let _ = writer.flush(&path);
+                        if coordinate_rotation {
+                            let _ = writer.flush_buffered(&path, &mut batch_lock);
+                        } else {
+                            let _ = writer.flush_without_lock();
+                        }
                         let _ = ack.send(());
                     }
                     Err(RecvTimeoutError::Timeout) => {
-                        let _ = writer.flush(&path);
+                        if coordinate_rotation && batch_lock.is_some() {
+                            let _ = writer.flush_buffered(&path, &mut batch_lock);
+                        } else if !coordinate_rotation {
+                            let _ = writer.flush_without_lock();
+                        }
                     }
                     Err(RecvTimeoutError::Disconnected) => {
-                        let _ = writer.flush(&path);
+                        if coordinate_rotation {
+                            let _ = writer.flush_buffered(&path, &mut batch_lock);
+                        } else {
+                            let _ = writer.flush_without_lock();
+                        }
                         break;
                     }
                 }
@@ -641,6 +714,7 @@ impl FileSinkInner {
         self.maybe_rotate()?;
 
         let msg_len = message.len() as u64 + 1;
+        let coordinate_rotation = self.rotation_coordination_enabled();
 
         let maybe_sender = {
             let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
@@ -659,7 +733,11 @@ impl FileSinkInner {
                         .writer
                         .as_mut()
                         .ok_or_else(|| io::Error::other("sync backend writer missing"))?;
-                    writer.write_line(&self.config.path, &message)?;
+                    if coordinate_rotation {
+                        writer.write_line(&self.config.path, &message)?;
+                    } else {
+                        writer.write_line_unlocked(&message)?;
+                    }
                     None
                 }
             }
@@ -675,6 +753,8 @@ impl FileSinkInner {
     }
 
     fn flush(&self) -> io::Result<()> {
+        let coordinate_rotation = self.rotation_coordination_enabled();
+
         let maybe_sender = {
             let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
             self.ensure_backend_ready_locked(&mut state)?;
@@ -689,7 +769,11 @@ impl FileSinkInner {
                 ),
                 WriterBackend::Sync(sync_state) => {
                     if let Some(writer) = sync_state.writer.as_mut() {
-                        writer.flush(&self.config.path)?;
+                        if coordinate_rotation {
+                            writer.flush(&self.config.path)?;
+                        } else {
+                            writer.flush_without_lock()?;
+                        }
                     }
                     None
                 }
@@ -749,6 +833,7 @@ impl FileSinkInner {
         let current_pid = std::process::id();
         let creation_pid = self.creation_pid.load(Ordering::Acquire);
         let pid_changed = current_pid != creation_pid;
+        let coordinate_rotation = self.rotation_coordination_enabled();
 
         if pid_changed {
             match &mut state.backend {
@@ -779,13 +864,15 @@ impl FileSinkInner {
             WriterBackend::Async(async_state) => {
                 if async_state.sender.is_none() || async_state.handle.is_none() {
                     self.restart_async_writer_locked(async_state, current_pid)?;
-                } else if self.path_identity_changed(async_state.file_identity.load())? {
+                } else if coordinate_rotation
+                    && self.path_identity_changed(async_state.file_identity.load())?
+                {
                     self.sync_rotation_state_from_path();
                 }
             }
             WriterBackend::Sync(sync_state) => {
                 if let Some(writer) = sync_state.writer.as_mut() {
-                    if writer.reopen_if_rotated(&self.config.path)? {
+                    if coordinate_rotation && writer.reopen_if_rotated(&self.config.path)? {
                         self.sync_rotation_state_from_path();
                     }
                 } else {
@@ -804,7 +891,10 @@ impl FileSinkInner {
         async_state: &mut AsyncWriterState,
         current_pid: u32,
     ) -> io::Result<()> {
-        *async_state = Self::create_async_writer_state(&self.config.path)?;
+        *async_state = Self::create_async_writer_state(
+            &self.config.path,
+            self.rotation_coordination_enabled(),
+        )?;
         self.creation_pid.store(current_pid, Ordering::Release);
         self.sync_rotation_state_from_path();
         Ok(())
@@ -1493,7 +1583,7 @@ mod tests {
         let path = unique_temp_path("async-open-error");
         fs::create_dir_all(&path).unwrap();
 
-        let err = match FileSinkInner::create_async_writer_state(&path) {
+        let err = match FileSinkInner::create_async_writer_state(&path, false) {
             Ok(_) => panic!("async writer state unexpectedly opened a directory path"),
             Err(err) => err,
         };
