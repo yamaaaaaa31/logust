@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-04-23
+
 ### Fixed
 - **`FileSink::drop` panic in forked children (`enqueue=True`)**: When a process using an `enqueue=True` file handler was forked (e.g. via `multiprocessing.Process`), the child inherited the parent's `JoinHandle` pointing at a background writer thread that does not survive `fork()`. Calling `logger.remove()` (or exit cleanup) in the child triggered `threads should not terminate unexpectedly`. `FileSink` now records its creation PID and skips the `JoinHandle::join` in non-original processes, preventing the panic. (#22)
 - **Fork-safe file sinks across parent/child processes**: On Unix, `FileSink` now registers async sinks in a global registry and uses a `pthread_atfork(prepare)` hook to pause writer threads before `fork()`, avoiding macOS `libdispatch` SIGTRAP from inheriting live threads. The parent resumes its async writer on the next use; forked children downgrade an inherited `enqueue=True` backend to a fresh synchronous `BufWriter` on their first write instead of reviving the parent's thread and channel, and `mem::forget` the inherited handle/sender/buffer so no cleanup ever runs against parent-owned state. Multiple forked processes can keep appending to the same file sink, and re-forking a child no longer reintroduces the original join panic. (#22)
@@ -114,7 +116,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 1.3x faster than Python standard logging
 - Lock-free fast path for filtered messages
 
-[Unreleased]: https://github.com/yamaaaaaa31/logust/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/yamaaaaaa31/logust/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/yamaaaaaa31/logust/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/yamaaaaaa31/logust/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/yamaaaaaa31/logust/releases/tag/v0.2.1
 [0.2.0]: https://github.com/yamaaaaaa31/logust/releases/tag/v0.2.0
