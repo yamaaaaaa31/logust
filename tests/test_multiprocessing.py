@@ -83,6 +83,30 @@ def _child_inherited_write_once(token: str) -> None:
     logger.complete()
 
 
+def _child_nested_fork_writer(
+    parent_token: str,
+    grandchild_token: str,
+) -> None:
+    """Run in a child process and trigger a nested fork once."""
+    logger = _active_fork_logger()
+    ctx = multiprocessing.get_context("fork")
+    grandchild = ctx.Process(
+        target=_child_inherited_write_once,
+        args=(grandchild_token,),
+    )
+    grandchild.start()
+    grandchild.join(timeout=30)
+
+    if grandchild.exitcode is None:
+        os._exit(1)
+
+    if grandchild.exitcode != 0:
+        os._exit(1)
+
+    logger.info(parent_token)
+    logger.complete()
+
+
 def _read_aggregated_log_lines(log_file: Path) -> list[str]:
     """Read the active log plus every rotated raw/gzip file for the same sink."""
     lines: list[str] = []
@@ -324,6 +348,9 @@ def _scenario_shared_enqueue_rotation_with_retention_has_no_loss() -> None:
         for stale_path in stale_files:
             assert not stale_path.exists(), f"retention did not remove {stale_path.name}"
 
+        lock_path = Path(f"{log_file}.lock")
+        assert lock_path.exists(), "retention must not remove lock file"
+
         _assert_exact_log_tokens(log_file, expected_tokens)
     finally:
         logger.remove(handler_id)
@@ -336,7 +363,10 @@ def _scenario_fork_while_other_thread_is_logging_does_not_deadlock() -> None:
     tmp_path = Path(tempfile.mkdtemp())
     log_file = tmp_path / "fork-race.log"
     stop_event = threading.Event()
-    started_event = threading.Event()
+    cycle_ready = threading.Event()
+    cycle_allow = threading.Event()
+    in_fork_window = threading.Event()
+    cycle_done = threading.Event()
     background_errors: list[BaseException] = []
     logger = Logger(PyLogger(LogLevel.Trace))
     logger.disable()
@@ -350,25 +380,48 @@ def _scenario_fork_while_other_thread_is_logging_does_not_deadlock() -> None:
 
     def _background_writer() -> None:
         try:
-            started_event.set()
             i = 0
             while not stop_event.is_set():
+                cycle_ready.set()
+                if not cycle_allow.wait(timeout=5):
+                    cycle_ready.clear()
+                    if stop_event.is_set():
+                        return
+                    continue
+                cycle_allow.clear()
+                cycle_ready.clear()
+
+                if stop_event.is_set():
+                    cycle_done.set()
+                    return
+
+                in_fork_window.set()
                 logger.info(f"background|{i:05d}|")
+                in_fork_window.clear()
+                cycle_done.set()
                 i += 1
         except BaseException as exc:
             background_errors.append(exc)
 
     thread = threading.Thread(target=_background_writer, daemon=True)
     thread.start()
-    assert started_event.wait(timeout=5), "background logging thread did not start"
 
     ctx = multiprocessing.get_context("fork")
     child_tokens = [f"fork-child-{idx}|000|" for idx in range(6)]
 
     try:
-        time.sleep(0.05)
-
         for idx in range(len(child_tokens)):
+            assert cycle_ready.wait(timeout=5), (
+                "background writer did not reach logging cycle"
+            )
+            cycle_ready.clear()
+            cycle_done.clear()
+            cycle_allow.set()
+
+            assert in_fork_window.wait(timeout=5), (
+                "background writer did not enter logging window before fork"
+            )
+
             process = ctx.Process(
                 target=_child_inherited_write_once,
                 args=(child_tokens[idx],),
@@ -379,8 +432,10 @@ def _scenario_fork_while_other_thread_is_logging_does_not_deadlock() -> None:
                 context="fork while background logging likely deadlocked in atfork",
             )
             assert exitcode == 0
+            assert cycle_done.wait(timeout=5), "background logging cycle did not complete"
 
         stop_event.set()
+        cycle_allow.set()
         thread.join(timeout=10)
         assert not thread.is_alive(), "background logging thread did not stop"
         assert not background_errors, f"background logging thread failed: {background_errors}"
@@ -391,7 +446,54 @@ def _scenario_fork_while_other_thread_is_logging_does_not_deadlock() -> None:
             assert lines.count(token) == 1, f"missing or duplicated child token {token!r}"
     finally:
         stop_event.set()
+        cycle_ready.set()
+        cycle_allow.set()
         thread.join(timeout=10)
+        logger.remove(handler_id)
+        _INHERITED_TEST_LOGGER = None
+
+
+def _scenario_nested_fork_logging_works() -> None:
+    global _INHERITED_TEST_LOGGER
+
+    tmp_path = Path(tempfile.mkdtemp())
+    log_file = tmp_path / "nested-fork.log"
+    logger = Logger(PyLogger(LogLevel.Trace))
+    logger.disable()
+    _INHERITED_TEST_LOGGER = logger
+    handler_id = logger.add(
+        log_file,
+        level=LogLevel.Trace,
+        format="{message}",
+        enqueue=True,
+    )
+
+    child_token = "nested-child"
+    grandchild_token = "nested-grandchild"
+    parent_token = "nested-parent"
+
+    try:
+        ctx = multiprocessing.get_context("fork")
+        process = ctx.Process(
+            target=_child_nested_fork_writer,
+            args=(child_token, grandchild_token),
+        )
+        process.start()
+        exitcode = _join_process_or_fail(
+            process,
+            context="nested fork child/grandchild logging likely failed",
+        )
+        assert exitcode == 0
+        logger.info(parent_token)
+
+        logger.complete()
+
+        lines = _read_aggregated_log_lines(log_file)
+        assert lines.count(parent_token) == 1
+        for token in (child_token, grandchild_token):
+            assert lines.count(token) == 1, f"missing token {token!r}"
+
+    finally:
         logger.remove(handler_id)
         _INHERITED_TEST_LOGGER = None
 
@@ -522,3 +624,6 @@ class TestMultiprocessingFork:
         self, tmp_path: Path
     ) -> None:
         _run_module_scenario("_scenario_fork_while_other_thread_is_logging_does_not_deadlock")
+
+    def test_nested_fork_can_log(self, tmp_path: Path) -> None:
+        _run_module_scenario("_scenario_nested_fork_logging_works")
