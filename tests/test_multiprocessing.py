@@ -57,6 +57,33 @@ def _child_inherited_write_batch(
     logust.logger.complete()
 
 
+def _join_process_or_fail(
+    process: multiprocessing.process.BaseProcess,
+    *,
+    timeout: float = 30,
+    context: str,
+) -> int:
+    """Join a child process and clean it up if it stops responding."""
+    process.join(timeout=timeout)
+
+    if process.is_alive():
+        process.terminate()
+        process.join(timeout=5)
+
+        if process.is_alive():
+            process.kill()
+            process.join(timeout=5)
+
+        pytest.fail(f"{context}: child process did not exit within {timeout} seconds")
+
+    if process.exitcode is None:
+        pytest.fail(
+            f"{context}: child exitcode stayed None after join(timeout={timeout})"
+        )
+
+    return process.exitcode
+
+
 @pytest.mark.skipif(
     "fork" not in multiprocessing.get_all_start_methods(),
     reason="fork start method not available on this platform",
@@ -69,10 +96,13 @@ class TestMultiprocessingFork:
         log_file = tmp_path / "child.log"
         p = ctx.Process(target=_child_remove, args=(str(log_file),))
         p.start()
-        p.join(timeout=30)
+        exitcode = _join_process_or_fail(
+            p,
+            context="FileSink::drop likely panicked on the inherited JoinHandle",
+        )
 
-        assert p.exitcode == 0, (
-            f"child exited with {p.exitcode} (expected 0); "
+        assert exitcode == 0, (
+            f"child exited with {exitcode} (expected 0); "
             "FileSink::drop likely panicked on the inherited JoinHandle"
         )
 
@@ -88,12 +118,48 @@ class TestMultiprocessingFork:
             ctx = multiprocessing.get_context("fork")
             p = ctx.Process(target=_child_inherited_remove)
             p.start()
-            p.join(timeout=30)
+            exitcode = _join_process_or_fail(
+                p,
+                context="inherited enqueue FileSink::drop likely panicked",
+            )
 
-            assert p.exitcode == 0, (
-                f"child exited with {p.exitcode} (expected 0); "
+            assert exitcode == 0, (
+                f"child exited with {exitcode} (expected 0); "
                 "inherited FileSink::drop likely panicked"
             )
+        finally:
+            logust.logger.remove(handler_id)
+
+    def test_child_drops_inherited_sync_sink_without_duplicate_flush(
+        self, tmp_path: Path
+    ) -> None:
+        """Forked child must not flush the parent's inherited sync buffer."""
+        import logust
+
+        log_file = tmp_path / "inherited-sync.log"
+        handler_id = logust.logger.add(
+            log_file, level=LogLevel.Trace, enqueue=False
+        )
+        try:
+            logust.logger.info("parent-sync-before-fork")
+
+            ctx = multiprocessing.get_context("fork")
+            p = ctx.Process(target=_child_inherited_remove)
+            p.start()
+            exitcode = _join_process_or_fail(
+                p,
+                context="inherited sync FileSink::drop likely flushed parent buffer",
+            )
+
+            assert exitcode == 0, (
+                f"child exited with {exitcode} (expected 0); "
+                "inherited sync FileSink::drop likely flushed parent buffer"
+            )
+
+            logust.logger.complete()
+
+            lines = log_file.read_text().splitlines()
+            assert sum("parent-sync-before-fork" in line for line in lines) == 1
         finally:
             logust.logger.remove(handler_id)
 
@@ -130,9 +196,12 @@ class TestMultiprocessingFork:
                 logust.logger.info(f"parent|{i:03d}|")
 
             for process in processes:
-                process.join(timeout=30)
-                assert process.exitcode == 0, (
-                    f"child exited with {process.exitcode} (expected 0); "
+                exitcode = _join_process_or_fail(
+                    process,
+                    context="forked writer restart likely failed",
+                )
+                assert exitcode == 0, (
+                    f"child exited with {exitcode} (expected 0); "
                     "forked writer restart likely failed"
                 )
 
