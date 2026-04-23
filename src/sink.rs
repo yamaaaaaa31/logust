@@ -7,10 +7,10 @@ use std::os::unix::fs::MetadataExt;
 #[cfg(windows)]
 use std::os::windows::io::AsRawHandle;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex as StdMutex};
 #[cfg(unix)]
 use std::sync::TryLockError;
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex as StdMutex};
 #[cfg(unix)]
 use std::sync::{LazyLock, OnceLock, Weak};
 use std::thread::{self, JoinHandle};
