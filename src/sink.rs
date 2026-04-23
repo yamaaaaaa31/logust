@@ -405,18 +405,23 @@ impl FileSink {
 }
 
 impl FileSinkInner {
+    fn format_lock_filename(path: &Path) -> PathBuf {
+        let mut lock_path = path.as_os_str().to_os_string();
+        lock_path.push(".lock");
+        PathBuf::from(lock_path)
+    }
+
     fn open_log_file(path: &Path) -> io::Result<File> {
         OpenOptions::new().create(true).append(true).open(path)
     }
 
     fn open_rotation_lock_file(path: &Path) -> io::Result<File> {
-        let mut lock_path = path.as_os_str().to_os_string();
-        lock_path.push(".lock");
+        let lock_path = Self::format_lock_filename(path);
         OpenOptions::new()
             .create(true)
             .read(true)
             .write(true)
-            .open(PathBuf::from(lock_path))
+            .open(lock_path)
     }
 
     fn open_sync_writer(path: &Path) -> io::Result<RotatingFileWriter> {
@@ -667,7 +672,9 @@ impl FileSinkInner {
 
     #[cfg(unix)]
     fn pause_for_fork_prepare(&self) {
-        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let Ok(mut state) = self.state.try_lock() else {
+            return;
+        };
         if let WriterBackend::Async(async_state) = &mut state.backend {
             let can_join = std::process::id() == self.creation_pid.load(Ordering::Acquire);
             Self::stop_async_writer_locked(async_state, can_join);
@@ -980,13 +987,16 @@ impl FileSinkInner {
             .file_name()
             .and_then(|f| f.to_str())
             .unwrap_or("");
+        let lock_filename = Self::format_lock_filename(&self.config.path);
 
         let mut rotated_files: Vec<(PathBuf, SystemTime)> = fs::read_dir(parent)?
             .filter_map(|e| e.ok())
             .filter_map(|e| {
                 let path = e.path();
                 let filename = path.file_name()?.to_str()?;
-                if filename.starts_with(stem) && filename != current_filename {
+                if path == lock_filename {
+                    None
+                } else if filename.starts_with(stem) && filename != current_filename {
                     let modified = fs::metadata(&path).ok()?.modified().ok()?;
                     Some((path, modified))
                 } else {
@@ -1089,9 +1099,12 @@ fn register_async_sink(sink: &Arc<FileSinkInner>) {
 
 #[cfg(unix)]
 extern "C" fn file_sink_atfork_prepare() {
-    let mut registry = ASYNC_SINK_REGISTRY
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    // Acquisition order: registry lock -> per-sink state lock.
+    // atfork prepare must never block; if either lock cannot be obtained,
+    // we skip pausing that sink and keep best-effort behavior.
+    let Ok(mut registry) = ASYNC_SINK_REGISTRY.try_lock() else {
+        return;
+    };
     registry.retain(|weak| {
         if let Some(sink) = weak.upgrade() {
             sink.pause_for_fork_prepare();
