@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex as StdMutex};
 #[cfg(unix)]
 use std::sync::{LazyLock, OnceLock, Weak};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Local, Timelike};
 use crossbeam_channel::{RecvTimeoutError, Sender, bounded};
@@ -661,10 +661,19 @@ impl FileSinkInner {
 
         let writer_handle = thread::spawn(move || {
             let flush_interval = Duration::from_millis(ASYNC_FLUSH_INTERVAL_MS);
+            let mut last_flush = Instant::now();
             let mut batch_lock = None;
 
             loop {
-                match receiver.recv_timeout(flush_interval) {
+                let timeout = if coordinate_rotation {
+                    flush_interval
+                        .checked_sub(last_flush.elapsed())
+                        .unwrap_or(Duration::ZERO)
+                } else {
+                    flush_interval
+                };
+
+                match receiver.recv_timeout(timeout) {
                     Ok(WriterMessage::Write(msg)) => {
                         let result = if coordinate_rotation {
                             writer.write_line_buffered(&path, &msg, &mut batch_lock)
@@ -675,19 +684,28 @@ impl FileSinkInner {
                         if let Err(err) = result {
                             eprintln!("Failed to write to log: {}", err);
                         }
+
+                        if coordinate_rotation && last_flush.elapsed() >= flush_interval {
+                            let _ = writer.flush_buffered(&path, &mut batch_lock);
+                            last_flush = Instant::now();
+                        }
                     }
                     Ok(WriterMessage::Flush { ack }) => {
                         if coordinate_rotation {
                             let _ = writer.flush_buffered(&path, &mut batch_lock);
+                            last_flush = Instant::now();
                         } else {
                             let _ = writer.flush_without_lock();
                         }
                         let _ = ack.send(());
                     }
                     Err(RecvTimeoutError::Timeout) => {
-                        if coordinate_rotation && batch_lock.is_some() {
-                            let _ = writer.flush_buffered(&path, &mut batch_lock);
-                        } else if !coordinate_rotation {
+                        if coordinate_rotation {
+                            if batch_lock.is_some() {
+                                let _ = writer.flush_buffered(&path, &mut batch_lock);
+                            }
+                            last_flush = Instant::now();
+                        } else {
                             let _ = writer.flush_without_lock();
                         }
                     }

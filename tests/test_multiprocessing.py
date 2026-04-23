@@ -107,6 +107,33 @@ def _child_nested_fork_writer(
     logger.complete()
 
 
+def _child_external_rotation_burst(
+    log_path: str,
+    start_event: multiprocessing.synchronize.Event,
+) -> None:
+    """Run in a child process and rotate the shared log path repeatedly."""
+    assert start_event.wait(timeout=10), "start_event was never set"
+
+    log_file = Path(log_path)
+    logger = Logger(PyLogger(LogLevel.Trace))
+    logger.disable()
+    handler_id = logger.add(
+        log_file,
+        level=LogLevel.Trace,
+        format="{message}",
+        rotation="4 KB",
+        enqueue=False,
+    )
+    payload = "r" * 8192
+
+    try:
+        for i in range(8):
+            logger.info(f"rotator|{i:03d}|{payload}")
+        logger.complete()
+    finally:
+        logger.remove(handler_id)
+
+
 def _read_aggregated_log_lines(log_file: Path) -> list[str]:
     """Read the active log plus every rotated raw/gzip file for the same sink."""
     lines: list[str] = []
@@ -489,6 +516,86 @@ def _scenario_nested_fork_logging_works() -> None:
         _INHERITED_TEST_LOGGER = None
 
 
+def _scenario_external_rotation_progresses_under_sustained_async_writes() -> None:
+    tmp_path = Path(tempfile.mkdtemp())
+    log_file = tmp_path / "stress.log"
+    logger = Logger(PyLogger(LogLevel.Trace))
+    logger.disable()
+    handler_id = logger.add(
+        log_file,
+        level=LogLevel.Trace,
+        format="{message}",
+        rotation="1 GB",
+        enqueue=True,
+    )
+    stop_event = threading.Event()
+    writer_primed = threading.Event()
+    background_errors: list[BaseException] = []
+
+    def _background_writer() -> None:
+        try:
+            payload = "p" * 1024
+            i = 0
+            while not stop_event.is_set():
+                logger.info(f"parent|{i:06d}|{payload}")
+                i += 1
+                if i == 20_000:
+                    writer_primed.set()
+        except BaseException as exc:
+            background_errors.append(exc)
+            writer_primed.set()
+
+    thread = threading.Thread(target=_background_writer, daemon=True)
+    thread.start()
+
+    ctx = multiprocessing.get_context("fork")
+    start_event = ctx.Event()
+    process = ctx.Process(
+        target=_child_external_rotation_burst,
+        args=(str(log_file), start_event),
+    )
+
+    try:
+        assert writer_primed.wait(timeout=10), (
+            "background writer did not prime the queue"
+        )
+        assert not background_errors, (
+            f"background logging thread failed: {background_errors}"
+        )
+
+        process.start()
+        start_event.set()
+        exitcode = _join_process_or_fail(
+            process,
+            timeout=10,
+            context="external rotator could not acquire LOCK_EX under sustained async writes",
+        )
+        assert exitcode == 0
+
+        stop_event.set()
+        thread.join(timeout=10)
+        assert not thread.is_alive(), "background logging thread did not stop"
+        assert not background_errors, (
+            f"background logging thread failed: {background_errors}"
+        )
+
+        logger.complete()
+
+        lines = _read_aggregated_log_lines(log_file)
+        for i in range(8):
+            token = f"rotator|{i:03d}|"
+            assert sum(token in line for line in lines) == 1, (
+                f"missing or duplicated rotation token {token!r}"
+            )
+    finally:
+        stop_event.set()
+        thread.join(timeout=10)
+        if process.is_alive():
+            process.terminate()
+            process.join(timeout=5)
+        logger.remove(handler_id)
+
+
 def _join_process_or_fail(
     process: multiprocessing.process.BaseProcess,
     *,
@@ -616,6 +723,14 @@ class TestMultiprocessingFork:
     ) -> None:
         _run_module_scenario(
             "_scenario_fork_while_other_thread_is_logging_does_not_deadlock",
+            timeout=45,
+        )
+
+    def test_external_rotation_progresses_under_sustained_async_writes(
+        self, tmp_path: Path
+    ) -> None:
+        _run_module_scenario(
+            "_scenario_external_rotation_progresses_under_sustained_async_writes",
             timeout=45,
         )
 
