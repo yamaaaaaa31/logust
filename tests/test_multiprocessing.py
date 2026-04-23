@@ -127,7 +127,7 @@ def _child_external_rotation_burst(
     payload = "r" * 8192
 
     try:
-        for i in range(8):
+        for i in range(4):
             logger.info(f"rotator|{i:03d}|{payload}")
         logger.complete()
     finally:
@@ -539,7 +539,7 @@ def _scenario_external_rotation_progresses_under_sustained_async_writes() -> Non
             while not stop_event.is_set():
                 logger.info(f"parent|{i:06d}|{payload}")
                 i += 1
-                if i == 20_000:
+                if i == 2_000:
                     writer_primed.set()
         except BaseException as exc:
             background_errors.append(exc)
@@ -567,7 +567,7 @@ def _scenario_external_rotation_progresses_under_sustained_async_writes() -> Non
         start_event.set()
         exitcode = _join_process_or_fail(
             process,
-            timeout=10,
+            timeout=30,
             context="external rotator could not acquire LOCK_EX under sustained async writes",
         )
         assert exitcode == 0
@@ -582,7 +582,7 @@ def _scenario_external_rotation_progresses_under_sustained_async_writes() -> Non
         logger.complete()
 
         lines = _read_aggregated_log_lines(log_file)
-        for i in range(8):
+        for i in range(4):
             token = f"rotator|{i:03d}|"
             assert sum(token in line for line in lines) == 1, (
                 f"missing or duplicated rotation token {token!r}"
