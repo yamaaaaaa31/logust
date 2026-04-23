@@ -280,7 +280,7 @@ impl RotatingFileWriter {
             self.writer.flush()?;
             let shared_identity = self.shared_identity.clone();
             *self = Self::open(path, shared_identity)?;
-            return Ok(true);
+            Ok(true)
         }
 
         #[cfg(not(unix))]
@@ -419,6 +419,7 @@ impl FileSinkInner {
         let lock_path = Self::format_lock_filename(path);
         OpenOptions::new()
             .create(true)
+            .truncate(false)
             .read(true)
             .write(true)
             .open(lock_path)
@@ -620,16 +621,13 @@ impl FileSinkInner {
                 }
             }
             WriterBackend::Sync(sync_state) => {
-                if sync_state.writer.is_none() {
+                if let Some(writer) = sync_state.writer.as_mut() {
+                    if writer.reopen_if_rotated(&self.config.path)? {
+                        self.sync_rotation_state_from_path();
+                    }
+                } else {
                     sync_state.writer = Some(Self::open_sync_writer(&self.config.path)?);
                     self.creation_pid.store(current_pid, Ordering::Release);
-                    self.sync_rotation_state_from_path();
-                } else if sync_state
-                    .writer
-                    .as_mut()
-                    .expect("sync backend writer missing")
-                    .reopen_if_rotated(&self.config.path)?
-                {
                     self.sync_rotation_state_from_path();
                 }
             }
