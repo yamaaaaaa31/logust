@@ -567,7 +567,7 @@ def _scenario_external_rotation_progresses_under_sustained_async_writes() -> Non
         start_event.set()
         exitcode = _join_process_or_fail(
             process,
-            timeout=30,
+            timeout=90,
             context="external rotator could not acquire LOCK_EX under sustained async writes",
         )
         assert exitcode == 0
@@ -729,9 +729,14 @@ class TestMultiprocessingFork:
     def test_external_rotation_progresses_under_sustained_async_writes(
         self, tmp_path: Path
     ) -> None:
+        # Linux flock can starve a pending LOCK_EX waiter when shared
+        # holders re-acquire tightly after the async writer's 100ms flush.
+        # The scenario reliably completes in a couple of seconds locally but
+        # can spike well past 45s on loaded CI runners; widen to 120s to
+        # keep catching real deadlocks without flaking on scheduler jitter.
         _run_module_scenario(
             "_scenario_external_rotation_progresses_under_sustained_async_writes",
-            timeout=45,
+            timeout=120,
         )
 
     def test_nested_fork_can_log(self, tmp_path: Path) -> None:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import functools
 import os
 import re
+import string
 import sys
 import threading
 import traceback
@@ -76,6 +77,50 @@ class CollectOptions:
 _FORMAT_TOKEN_PATTERN = re.compile(
     r"\{(" + "|".join(re.escape(t) for t in KNOWN_TOKENS) + r"|extra\[[^\]]+\])(?::[^}]+)?\}"
 )
+_FORMATTER = string.Formatter()
+
+
+def _format_field_root(field_name: str) -> str | None:
+    """Return the root kwarg name consumed by a format field."""
+    if not field_name:
+        return None
+
+    dot_index = field_name.find(".")
+    bracket_index = field_name.find("[")
+    split_indexes = [index for index in (dot_index, bracket_index) if index != -1]
+    root = field_name[: min(split_indexes)] if split_indexes else field_name
+    if not root or root.isdigit():
+        return None
+    return root or None
+
+
+def _collect_format_roots(format_string: str, consumed: set[str]) -> None:
+    """Collect root kwarg names referenced by a format string."""
+    for _, field_name, format_spec, _ in _FORMATTER.parse(format_string):
+        if field_name is not None:
+            root = _format_field_root(field_name)
+            if root is not None:
+                consumed.add(root)
+        if format_spec:
+            _collect_format_roots(format_spec, consumed)
+
+
+def _split_kwargs_for_format(message: Any, kwargs: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    """Format message with kwargs and return kwargs not consumed by placeholders.
+
+    Non-str messages are coerced via ``str()`` to match the no-kwargs path
+    (`_log_with_level` already wraps the message with ``str(...)`` before
+    passing it to the inner logger).
+
+    Returned per-call extra values are bound like ``bind()`` values and are
+    coerced to strings by the inner logger.
+    """
+    message_str = message if isinstance(message, str) else str(message)
+    consumed: set[str] = set()
+    _collect_format_roots(message_str, consumed)
+    formatted_message = message_str.format(**kwargs)
+    extra_kwargs = {key: value for key, value in kwargs.items() if key not in consumed}
+    return formatted_message, extra_kwargs
 
 
 def _collect_options_from_format(format_str: str) -> CollectOptions:
@@ -568,9 +613,18 @@ class Logger:
         message: str,
         exception: str | None,
         depth: int,
+        kwargs: dict[str, Any] | None = None,
     ) -> None:
         if level_value < self._inner.min_level:
             return
+
+        extra_kwargs: dict[str, Any] | None = None
+        if kwargs:
+            message, extra_kwargs = _split_kwargs_for_format(message, kwargs)
+            if not extra_kwargs:
+                extra_kwargs = None
+
+        inner = self._inner if extra_kwargs is None else self._inner.bind(extra_kwargs)
 
         # Compute effective requirements considering CollectOptions
         needs_caller, needs_thread, needs_process = self._compute_effective_requirements(
@@ -579,9 +633,9 @@ class Logger:
 
         if needs_caller is False and needs_thread is False and needs_process is False:
             if exception is None:
-                getattr(self._inner, level_name)(str(message))
+                getattr(inner, level_name)(str(message))
             else:
-                getattr(self._inner, level_name)(str(message), exception=exception)
+                getattr(inner, level_name)(str(message), exception=exception)
             return
 
         if needs_thread is False and needs_process is False:
@@ -596,11 +650,11 @@ class Logger:
                     needs_caller.file,  # type: ignore[union-attr]
                 )
             if exception is None:
-                getattr(self._inner, level_name)(
+                getattr(inner, level_name)(
                     str(message), name=name, function=function, line=line, file=file
                 )
             else:
-                getattr(self._inner, level_name)(
+                getattr(inner, level_name)(
                     str(message),
                     exception=exception,
                     name=name,
@@ -650,7 +704,7 @@ class Logger:
             p_name, p_id = None, None
 
         if exception is None:
-            getattr(self._inner, level_name)(
+            getattr(inner, level_name)(
                 str(message),
                 name=c_name,
                 function=c_function,
@@ -662,7 +716,7 @@ class Logger:
                 process_id=p_id,
             )
         else:
-            getattr(self._inner, level_name)(
+            getattr(inner, level_name)(
                 str(message),
                 exception=exception,
                 name=c_name,
@@ -679,49 +733,49 @@ class Logger:
         self, message: str, *, exception: str | None = None, _depth: int = 0, **kwargs: Any
     ) -> None:
         """Output TRACE level log message."""
-        self._log_with_level(5, "trace", message, exception, _depth + 1)
+        self._log_with_level(5, "trace", message, exception, _depth + 1, kwargs)
 
     def debug(
         self, message: str, *, exception: str | None = None, _depth: int = 0, **kwargs: Any
     ) -> None:
         """Output DEBUG level log message."""
-        self._log_with_level(10, "debug", message, exception, _depth + 1)
+        self._log_with_level(10, "debug", message, exception, _depth + 1, kwargs)
 
     def info(
         self, message: str, *, exception: str | None = None, _depth: int = 0, **kwargs: Any
     ) -> None:
         """Output INFO level log message."""
-        self._log_with_level(20, "info", message, exception, _depth + 1)
+        self._log_with_level(20, "info", message, exception, _depth + 1, kwargs)
 
     def success(
         self, message: str, *, exception: str | None = None, _depth: int = 0, **kwargs: Any
     ) -> None:
         """Output SUCCESS level log message."""
-        self._log_with_level(25, "success", message, exception, _depth + 1)
+        self._log_with_level(25, "success", message, exception, _depth + 1, kwargs)
 
     def warning(
         self, message: str, *, exception: str | None = None, _depth: int = 0, **kwargs: Any
     ) -> None:
         """Output WARNING level log message."""
-        self._log_with_level(30, "warning", message, exception, _depth + 1)
+        self._log_with_level(30, "warning", message, exception, _depth + 1, kwargs)
 
     def error(
         self, message: str, *, exception: str | None = None, _depth: int = 0, **kwargs: Any
     ) -> None:
         """Output ERROR level log message."""
-        self._log_with_level(40, "error", message, exception, _depth + 1)
+        self._log_with_level(40, "error", message, exception, _depth + 1, kwargs)
 
     def fail(
         self, message: str, *, exception: str | None = None, _depth: int = 0, **kwargs: Any
     ) -> None:
         """Output FAIL level log message."""
-        self._log_with_level(45, "fail", message, exception, _depth + 1)
+        self._log_with_level(45, "fail", message, exception, _depth + 1, kwargs)
 
     def critical(
         self, message: str, *, exception: str | None = None, _depth: int = 0, **kwargs: Any
     ) -> None:
         """Output CRITICAL level log message."""
-        self._log_with_level(50, "critical", message, exception, _depth + 1)
+        self._log_with_level(50, "critical", message, exception, _depth + 1, kwargs)
 
     def exception(self, message: str, *, _depth: int = 0, **kwargs: Any) -> None:
         """Log ERROR with current exception traceback.
@@ -797,22 +851,46 @@ class Logger:
             level_lower = level.lower()
             if level_lower in _LEVEL_VALUES:
                 self._log_with_level(
-                    _LEVEL_VALUES[level_lower], level_lower, message, exception, _depth + 1
+                    _LEVEL_VALUES[level_lower],
+                    level_lower,
+                    message,
+                    exception,
+                    _depth + 1,
+                    kwargs,
                 )
                 return
         elif isinstance(level, int) and level in _LEVEL_VALUE_MAP:
-            self._log_with_level(level, _LEVEL_VALUE_MAP[level], message, exception, _depth + 1)
+            self._log_with_level(
+                level, _LEVEL_VALUE_MAP[level], message, exception, _depth + 1, kwargs
+            )
             return
 
         resolved_emit = self._inner.try_resolve_emit_level_no(level)
-        eff = resolved_emit if resolved_emit is not None else _EMIT_NO_SUPERSET
-        needs_caller, needs_thread, needs_process = self._compute_effective_requirements(eff)
-
-        if needs_caller is False and needs_thread is False and needs_process is False:
+        if resolved_emit is None:
             if exception is None:
                 self._inner.log(level, str(message))
             else:
                 self._inner.log(level, str(message), exception=exception)
+            return
+        if resolved_emit < self._inner.min_level:
+            return
+
+        extra_kw: dict[str, Any] | None = None
+        if kwargs:
+            message, extra_kw = _split_kwargs_for_format(message, kwargs)
+            if not extra_kw:
+                extra_kw = None
+
+        needs_caller, needs_thread, needs_process = self._compute_effective_requirements(
+            resolved_emit
+        )
+        inner = self._inner if extra_kw is None else self._inner.bind(extra_kw)
+
+        if needs_caller is False and needs_thread is False and needs_process is False:
+            if exception is None:
+                inner.log(level, str(message))
+            else:
+                inner.log(level, str(message), exception=exception)
             return
 
         if needs_thread is False and needs_process is False:
@@ -828,11 +906,9 @@ class Logger:
                     needs_caller.file,  # type: ignore[union-attr]
                 )
             if exception is None:
-                self._inner.log(
-                    level, str(message), name=name, function=function, line=line, file=file
-                )
+                inner.log(level, str(message), name=name, function=function, line=line, file=file)
             else:
-                self._inner.log(
+                inner.log(
                     level,
                     str(message),
                     exception=exception,
@@ -880,7 +956,7 @@ class Logger:
             process_name, process_id = None, None
 
         if exception is None:
-            self._inner.log(
+            inner.log(
                 level,
                 str(message),
                 name=name_,
@@ -893,7 +969,7 @@ class Logger:
                 process_id=process_id,
             )
         else:
-            self._inner.log(
+            inner.log(
                 level,
                 str(message),
                 exception=exception,
