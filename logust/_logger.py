@@ -82,13 +82,15 @@ _FORMATTER = string.Formatter()
 
 def _format_field_root(field_name: str) -> str | None:
     """Return the root kwarg name consumed by a format field."""
-    if not field_name or field_name[0].isdigit():
+    if not field_name:
         return None
 
     dot_index = field_name.find(".")
     bracket_index = field_name.find("[")
     split_indexes = [index for index in (dot_index, bracket_index) if index != -1]
     root = field_name[: min(split_indexes)] if split_indexes else field_name
+    if not root or root.isdigit():
+        return None
     return root or None
 
 
@@ -104,7 +106,11 @@ def _collect_format_roots(format_string: str, consumed: set[str]) -> None:
 
 
 def _split_kwargs_for_format(message: str, kwargs: dict[str, Any]) -> tuple[str, dict[str, Any]]:
-    """Format message with kwargs and return kwargs not consumed by placeholders."""
+    """Format message with kwargs and return kwargs not consumed by placeholders.
+
+    Returned per-call extra values are bound like ``bind()`` values and are
+    coerced to strings by the inner logger.
+    """
     consumed: set[str] = set()
     _collect_format_roots(message, consumed)
     formatted_message = message.format(**kwargs)
@@ -602,10 +608,16 @@ class Logger:
         message: str,
         exception: str | None,
         depth: int,
-        extra_kwargs: dict[str, Any] | None = None,
+        kwargs: dict[str, Any] | None = None,
     ) -> None:
         if level_value < self._inner.min_level:
             return
+
+        extra_kwargs: dict[str, Any] | None = None
+        if kwargs:
+            message, extra_kwargs = _split_kwargs_for_format(message, kwargs)
+            if not extra_kwargs:
+                extra_kwargs = None
 
         inner = self._inner if extra_kwargs is None else self._inner.bind(extra_kwargs)
 
@@ -716,89 +728,49 @@ class Logger:
         self, message: str, *, exception: str | None = None, _depth: int = 0, **kwargs: Any
     ) -> None:
         """Output TRACE level log message."""
-        extra_kw: dict[str, Any] | None = None
-        if kwargs:
-            message, extra_kw = _split_kwargs_for_format(message, kwargs)
-            if not extra_kw:
-                extra_kw = None
-        self._log_with_level(5, "trace", message, exception, _depth + 1, extra_kw)
+        self._log_with_level(5, "trace", message, exception, _depth + 1, kwargs)
 
     def debug(
         self, message: str, *, exception: str | None = None, _depth: int = 0, **kwargs: Any
     ) -> None:
         """Output DEBUG level log message."""
-        extra_kw: dict[str, Any] | None = None
-        if kwargs:
-            message, extra_kw = _split_kwargs_for_format(message, kwargs)
-            if not extra_kw:
-                extra_kw = None
-        self._log_with_level(10, "debug", message, exception, _depth + 1, extra_kw)
+        self._log_with_level(10, "debug", message, exception, _depth + 1, kwargs)
 
     def info(
         self, message: str, *, exception: str | None = None, _depth: int = 0, **kwargs: Any
     ) -> None:
         """Output INFO level log message."""
-        extra_kw: dict[str, Any] | None = None
-        if kwargs:
-            message, extra_kw = _split_kwargs_for_format(message, kwargs)
-            if not extra_kw:
-                extra_kw = None
-        self._log_with_level(20, "info", message, exception, _depth + 1, extra_kw)
+        self._log_with_level(20, "info", message, exception, _depth + 1, kwargs)
 
     def success(
         self, message: str, *, exception: str | None = None, _depth: int = 0, **kwargs: Any
     ) -> None:
         """Output SUCCESS level log message."""
-        extra_kw: dict[str, Any] | None = None
-        if kwargs:
-            message, extra_kw = _split_kwargs_for_format(message, kwargs)
-            if not extra_kw:
-                extra_kw = None
-        self._log_with_level(25, "success", message, exception, _depth + 1, extra_kw)
+        self._log_with_level(25, "success", message, exception, _depth + 1, kwargs)
 
     def warning(
         self, message: str, *, exception: str | None = None, _depth: int = 0, **kwargs: Any
     ) -> None:
         """Output WARNING level log message."""
-        extra_kw: dict[str, Any] | None = None
-        if kwargs:
-            message, extra_kw = _split_kwargs_for_format(message, kwargs)
-            if not extra_kw:
-                extra_kw = None
-        self._log_with_level(30, "warning", message, exception, _depth + 1, extra_kw)
+        self._log_with_level(30, "warning", message, exception, _depth + 1, kwargs)
 
     def error(
         self, message: str, *, exception: str | None = None, _depth: int = 0, **kwargs: Any
     ) -> None:
         """Output ERROR level log message."""
-        extra_kw: dict[str, Any] | None = None
-        if kwargs:
-            message, extra_kw = _split_kwargs_for_format(message, kwargs)
-            if not extra_kw:
-                extra_kw = None
-        self._log_with_level(40, "error", message, exception, _depth + 1, extra_kw)
+        self._log_with_level(40, "error", message, exception, _depth + 1, kwargs)
 
     def fail(
         self, message: str, *, exception: str | None = None, _depth: int = 0, **kwargs: Any
     ) -> None:
         """Output FAIL level log message."""
-        extra_kw: dict[str, Any] | None = None
-        if kwargs:
-            message, extra_kw = _split_kwargs_for_format(message, kwargs)
-            if not extra_kw:
-                extra_kw = None
-        self._log_with_level(45, "fail", message, exception, _depth + 1, extra_kw)
+        self._log_with_level(45, "fail", message, exception, _depth + 1, kwargs)
 
     def critical(
         self, message: str, *, exception: str | None = None, _depth: int = 0, **kwargs: Any
     ) -> None:
         """Output CRITICAL level log message."""
-        extra_kw: dict[str, Any] | None = None
-        if kwargs:
-            message, extra_kw = _split_kwargs_for_format(message, kwargs)
-            if not extra_kw:
-                extra_kw = None
-        self._log_with_level(50, "critical", message, exception, _depth + 1, extra_kw)
+        self._log_with_level(50, "critical", message, exception, _depth + 1, kwargs)
 
     def exception(self, message: str, *, _depth: int = 0, **kwargs: Any) -> None:
         """Log ERROR with current exception traceback.
@@ -870,12 +842,6 @@ class Logger:
             >>> logger.log("INFO", "Using built-in level by name")
             >>> logger.log(20, "Using built-in level by number")
         """
-        extra_kw: dict[str, Any] | None = None
-        if kwargs:
-            message, extra_kw = _split_kwargs_for_format(message, kwargs)
-            if not extra_kw:
-                extra_kw = None
-
         if isinstance(level, str):
             level_lower = level.lower()
             if level_lower in _LEVEL_VALUES:
@@ -885,18 +851,34 @@ class Logger:
                     message,
                     exception,
                     _depth + 1,
-                    extra_kw,
+                    kwargs,
                 )
                 return
         elif isinstance(level, int) and level in _LEVEL_VALUE_MAP:
             self._log_with_level(
-                level, _LEVEL_VALUE_MAP[level], message, exception, _depth + 1, extra_kw
+                level, _LEVEL_VALUE_MAP[level], message, exception, _depth + 1, kwargs
             )
             return
 
         resolved_emit = self._inner.try_resolve_emit_level_no(level)
-        eff = resolved_emit if resolved_emit is not None else _EMIT_NO_SUPERSET
-        needs_caller, needs_thread, needs_process = self._compute_effective_requirements(eff)
+        if resolved_emit is None:
+            if exception is None:
+                self._inner.log(level, str(message))
+            else:
+                self._inner.log(level, str(message), exception=exception)
+            return
+        if resolved_emit < self._inner.min_level:
+            return
+
+        extra_kw: dict[str, Any] | None = None
+        if kwargs:
+            message, extra_kw = _split_kwargs_for_format(message, kwargs)
+            if not extra_kw:
+                extra_kw = None
+
+        needs_caller, needs_thread, needs_process = self._compute_effective_requirements(
+            resolved_emit
+        )
         inner = self._inner if extra_kw is None else self._inner.bind(extra_kw)
 
         if needs_caller is False and needs_thread is False and needs_process is False:

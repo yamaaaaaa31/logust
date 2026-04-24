@@ -26,6 +26,11 @@ def make_logger() -> tuple[Logger, list[dict[str, Any]]]:
     return logger, records
 
 
+class ExplodingFormat:
+    def __format__(self, format_spec: str) -> str:
+        raise AssertionError("message formatting should have been skipped")
+
+
 def test_message_with_braces_without_kwargs_remains_literal() -> None:
     logger, records = make_logger()
 
@@ -33,6 +38,16 @@ def test_message_with_braces_without_kwargs_remains_literal() -> None:
 
     assert len(records) == 1
     assert records[0]["message"] == "braces {unused}"
+    assert records[0]["extra"] == {}
+
+
+def test_positional_placeholder_without_kwargs_remains_literal() -> None:
+    logger, records = make_logger()
+
+    logger.info("{0}")
+
+    assert len(records) == 1
+    assert records[0]["message"] == "{0}"
     assert records[0]["extra"] == {}
 
 
@@ -56,6 +71,57 @@ def test_kwargs_consumed_by_format_are_not_extra() -> None:
     assert records[0]["extra"] == {}
 
 
+def test_attribute_access_consumes_root_kwarg() -> None:
+    logger, records = make_logger()
+    user = type("User", (), {"name": "a"})()
+
+    logger.info("{u.name}", u=user)
+
+    assert len(records) == 1
+    assert records[0]["message"] == "a"
+    assert records[0]["extra"] == {}
+
+
+def test_item_access_consumes_root_kwarg() -> None:
+    logger, records = make_logger()
+
+    logger.info("{d[k]}", d={"k": "v"})
+
+    assert len(records) == 1
+    assert records[0]["message"] == "v"
+    assert records[0]["extra"] == {}
+
+
+def test_nested_format_spec_consumes_value_and_spec_kwargs() -> None:
+    logger, records = make_logger()
+
+    logger.info("{x:{width}}", x=5, width=3)
+
+    assert len(records) == 1
+    assert records[0]["message"] == "  5"
+    assert records[0]["extra"] == {}
+
+
+def test_conversion_consumes_root_kwarg() -> None:
+    logger, records = make_logger()
+
+    logger.info("{x!r}", x="v")
+
+    assert len(records) == 1
+    assert records[0]["message"] == "'v'"
+    assert records[0]["extra"] == {}
+
+
+def test_numeric_prefixed_kwarg_is_not_treated_as_positional() -> None:
+    logger, records = make_logger()
+
+    logger.info("{0abc}", **{"0abc": "v"})
+
+    assert len(records) == 1
+    assert records[0]["message"] == "v"
+    assert records[0]["extra"] == {}
+
+
 def test_kwargs_can_format_message_and_fill_extra() -> None:
     logger, records = make_logger()
 
@@ -64,6 +130,16 @@ def test_kwargs_can_format_message_and_fill_extra() -> None:
     assert len(records) == 1
     assert records[0]["message"] == "1"
     assert records[0]["extra"] == {"b": "2"}
+
+
+def test_missing_placeholder_without_kwargs_remains_literal() -> None:
+    logger, records = make_logger()
+
+    logger.info("{missing}")
+
+    assert len(records) == 1
+    assert records[0]["message"] == "{missing}"
+    assert records[0]["extra"] == {}
 
 
 def test_missing_format_kwarg_raises_key_error() -> None:
@@ -106,6 +182,21 @@ def test_callable_sink_can_render_extra_by_key() -> None:
     logger.info("user {id} did {action}", id=42, action="login", session="abc")
 
     assert messages == ["INFO | user 42 did login | session=abc"]
+
+
+def test_disabled_levels_skip_kwargs_formatting() -> None:
+    inner = PyLogger(LogLevel.Warning)
+    logger = Logger(inner)
+    logger.disable()
+    records: list[dict[str, Any]] = []
+    logger.add_callback(records.append, level=LogLevel.Warning)
+    logger.level("VERBOSE_REVIEW", no=15)
+
+    logger.debug("{bad}", bad=ExplodingFormat())
+    logger.log("DEBUG", "{bad}", bad=ExplodingFormat())
+    logger.log("VERBOSE_REVIEW", "{bad}", bad=ExplodingFormat())
+
+    assert records == []
 
 
 def test_all_levels_support_kwargs_extra_smoke() -> None:
