@@ -105,15 +105,20 @@ def _collect_format_roots(format_string: str, consumed: set[str]) -> None:
             _collect_format_roots(format_spec, consumed)
 
 
-def _split_kwargs_for_format(message: str, kwargs: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+def _split_kwargs_for_format(message: Any, kwargs: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     """Format message with kwargs and return kwargs not consumed by placeholders.
+
+    Non-str messages are coerced via ``str()`` to match the no-kwargs path
+    (`_log_with_level` already wraps the message with ``str(...)`` before
+    passing it to the inner logger).
 
     Returned per-call extra values are bound like ``bind()`` values and are
     coerced to strings by the inner logger.
     """
+    message_str = message if isinstance(message, str) else str(message)
     consumed: set[str] = set()
-    _collect_format_roots(message, consumed)
-    formatted_message = message.format(**kwargs)
+    _collect_format_roots(message_str, consumed)
+    formatted_message = message_str.format(**kwargs)
     extra_kwargs = {key: value for key, value in kwargs.items() if key not in consumed}
     return formatted_message, extra_kwargs
 

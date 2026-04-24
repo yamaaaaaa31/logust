@@ -151,6 +151,18 @@ def test_missing_format_kwarg_raises_key_error() -> None:
     assert records == []
 
 
+def test_non_str_message_with_kwargs_is_coerced() -> None:
+    """Non-str messages must still work when kwargs are passed (parity with
+    the no-kwargs path which already wraps message with str())."""
+    logger, records = make_logger()
+
+    logger.info(42, note="life")  # type: ignore[arg-type]
+
+    assert len(records) == 1
+    assert records[0]["message"] == "42"
+    assert records[0]["extra"] == {"note": "life"}
+
+
 def test_bound_and_per_call_extra_are_merged() -> None:
     logger, records = make_logger()
 
