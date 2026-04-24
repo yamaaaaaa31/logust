@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Loguru-style kwargs-to-extra in log methods**: `logger.info("user {id}", id=1, action="x")` now formats the message with `str.format` and attaches any kwargs not consumed by the message placeholders to `record["extra"]` for that call only (no persistent bind). Works on `trace` / `debug` / `info` / `success` / `warning` / `error` / `fail` / `critical` / `log` / `exception`. When the level is disabled, `message.format(**kwargs)` is skipped entirely via the existing `min_level` early-return, so disabled-level calls never trigger format work or `__format__`-side effects. Field root detection treats `{0abc}` and other non-decimal roots as keyword references. Implementation is Python-only — no Rust or `.pyi` changes — and per-call extra values are coerced to strings via the same path as `bind()`.
+
 ## [0.3.1] - 2026-04-23
 
 ### Fixed
