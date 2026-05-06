@@ -86,6 +86,12 @@ def slow_operation():
 
 Automatic request/response logging for web applications:
 
+```bash
+pip install "logust[fastapi]"
+# or
+pip install "logust[starlette]"
+```
+
 ```python
 from fastapi import FastAPI
 from logust.contrib import RequestLoggerMiddleware
@@ -127,6 +133,89 @@ setup_fastapi(app, skip_routes=["/health"])
 # - Standard logging redirected to logust
 # - Request IDs in all log messages
 ```
+
+### Canonical Request Events
+
+Use canonical mode when you want one structured event per request instead of
+separate start and response text logs:
+
+```python
+from fastapi import FastAPI
+from logust import logger
+from logust.contrib import add_event_fields
+from logust.contrib.starlette import setup_fastapi
+
+app = FastAPI()
+
+logger.add("app.json", serialize=True)
+setup_fastapi(
+    app,
+    canonical=True,
+    sample_rate=0.02,
+    slow_ms=1000,
+    skip_routes=["/health"],
+)
+
+@app.post("/checkout")
+async def checkout(user_id: str):
+    add_event_fields(
+        {"user.id": user_id},
+        feature_checkout_v2=True,
+        payment_provider="stripe",
+    )
+    return {"ok": True}
+```
+
+Canonical mode emits `http.request` after the response has completed. The event
+contains request, response, timing, route, client IP, user agent, traceparent IDs,
+masked query/body fields, and any fields added with `add_event_fields()`. Incoming
+`x-request-id` values are preserved; otherwise Logust generates a short
+`uuid4`-based request ID.
+
+```json
+{
+  "message": "http.request",
+  "extra": {
+    "event": "http.request",
+    "request_id": "req-123",
+    "method": "POST",
+    "path": "/checkout",
+    "route": "/checkout",
+    "status_code": 200,
+    "duration_ms": 34.2,
+    "outcome": "success",
+    "user.id": "u_123",
+    "feature_checkout_v2": true
+  }
+}
+```
+
+Tail sampling is applied when `canonical=True`:
+
+- `sample_rate` keeps that fraction of normal successful requests. Values must
+  be between `0.0` and `1.0`.
+- `slow_ms` always keeps requests at or above the duration threshold. Values
+  must be greater than or equal to `0`.
+- `always_keep_errors=True` always keeps 5xx and exception events.
+- `sampler=` accepts a `TailSampler` or predicate for custom retention rules.
+  When provided, it replaces `sample_rate`, `slow_ms`, and `always_keep_errors`.
+
+```python
+from logust.contrib import TailSampler
+
+setup_fastapi(
+    app,
+    canonical=True,
+    sampler=TailSampler(
+        rate=0.01,
+        slow_ms=750,
+        keep_if=lambda event: event.get("tenant") == "enterprise",
+    ),
+)
+```
+
+For the full event contract, sampler rules, and a runnable FastAPI app, see
+[Canonical Events](canonical-events.md).
 
 ### Request ID Access
 
@@ -202,8 +291,9 @@ Output:
 The base `logust.contrib` module has no extra dependencies. For web framework integrations:
 
 ```bash
-# For FastAPI/Starlette middleware
-pip install starlette
+# For FastAPI middleware
+pip install "logust[fastapi]"
 # or
-pip install fastapi
+# For Starlette middleware
+pip install "logust[starlette]"
 ```

@@ -88,6 +88,32 @@ jobs:
           files: ./coverage.xml
           fail_ci_if_error: false
 
+  web-integration-test:
+    name: Web Integration Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Install dependencies and build
+        run: |
+          uv venv
+          uv pip install maturin pytest httpx fastapi starlette uuid-utils
+          uv run maturin develop
+
+      - name: Run web integration tests
+        run: uv run pytest tests/test_web_integration.py -v
+
   lint:
     name: Python Lint
     runs-on: ubuntu-latest

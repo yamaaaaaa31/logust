@@ -41,6 +41,10 @@ Integrations (logust.contrib):
     >>> @log_fn
     ... def my_function(): ...
 
+    >>> # Canonical request event fields
+    >>> from logust.contrib import add_event_fields
+    >>> add_event_fields(user_id="123")
+
     >>> # FastAPI/Starlette middleware
     >>> from logust.contrib import RequestLoggerMiddleware
     >>> app.add_middleware(RequestLoggerMiddleware)

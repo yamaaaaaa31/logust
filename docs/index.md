@@ -54,6 +54,7 @@ logust.error("Error message")
 - **File Management** - Size/time-based rotation, retention policies, gzip compression
 - **JSON Support** - Built-in serialization for structured logging
 - **Context Binding** - Attach metadata to log records with `bind()`
+- **Canonical Events** - Emit one request-scoped wide event with tail sampling
 - **Exception Handling** - Automatic traceback capture with `catch()` decorator
 
 ## From Hello to Production
@@ -87,4 +88,6 @@ logust.error("Error message")
 - [Quick Start](getting-started/quick-start.md) - Learn the basics
 - [File Output](guide/file-output.md) - Rotation, retention, compression
 - [Formatting](guide/formatting.md) - Custom formats and JSON
+- [Integrations](guide/integrations.md) - Standard logging, decorators, FastAPI
+- [Canonical Events](guide/canonical-events.md) - Request-scoped events and tail sampling
 - [Comparison](comparison.md) - Logust vs loguru vs logging

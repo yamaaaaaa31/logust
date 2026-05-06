@@ -22,6 +22,16 @@ Get Logust from PyPI in seconds, or build from source for local Rust changes.
     uv add logust
     ```
 
+=== "FastAPI"
+    ```bash
+    pip install "logust[fastapi]"
+    ```
+
+=== "Starlette"
+    ```bash
+    pip install "logust[starlette]"
+    ```
+
 === "source"
     ```bash
     git clone https://github.com/yamaaaaaa31/logust.git

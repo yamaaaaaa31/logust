@@ -1,161 +1,156 @@
 #!/usr/bin/env python3
-"""FastAPI integration example - Using Logust with FastAPI applications.
+"""FastAPI canonical request logging with Logust.
 
-This example demonstrates how to integrate Logust with FastAPI for
-request logging, error handling, and structured logging in web applications.
+This example uses Logust's built-in FastAPI/Starlette middleware to emit one
+structured ``http.request`` event after each request completes.
 
 Requirements:
-    pip install fastapi uvicorn
+    pip install "logust[fastapi]" uvicorn
 
-Run this example:
-    python 08_fastapi_integration.py
+Run:
+    python examples/08_fastapi_integration.py
 
-Then visit:
-    http://localhost:8000/
-    http://localhost:8000/users/123
-    http://localhost:8000/error
+Try:
+    curl -H "x-request-id: req-demo" "http://localhost:8000/users/123?plan=pro"
+    curl -X POST "http://localhost:8000/checkout?user_id=u_123"
+    curl "http://localhost:8000/error"
+
+Logs:
+    logs/app.json
 """
 
+from __future__ import annotations
+
 import sys
-import uuid
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from pathlib import Path
+from time import sleep
 from typing import Any
 
 from logust import logger
+from logust.contrib import TailSampler, add_event_fields, log_fn
 
-# Check if FastAPI is installed
 try:
-    from fastapi import FastAPI, HTTPException, Request
-    from fastapi.responses import JSONResponse
+    from fastapi import FastAPI, HTTPException
+
+    from logust.contrib.starlette import get_request_id, setup_fastapi
 except ImportError:
-    print("FastAPI is not installed. Install it with:")
-    print("  pip install fastapi uvicorn")
+    print("FastAPI support is not installed. Install it with:")
+    print('  pip install "logust[fastapi]" uvicorn')
     sys.exit(1)
 
 
-# Configure Logust for production-like setup
-def setup_logging() -> None:
-    """Configure logging for the FastAPI application."""
-    # JSON logs for production (comment out for development)
-    # logger.add("logs/app.json", serialize=True, rotation="100 MB", retention="30 days")
+LOG_DIR = Path("logs")
+JSON_LOG = LOG_DIR / "app.json"
 
-    # Error-only file
-    # logger.add("logs/errors.log", level="ERROR", rotation="50 MB")
 
-    # Set appropriate level
-    logger.set_level("DEBUG")
+def configure_logging() -> None:
+    """Configure Logust sinks for the demo app."""
+    LOG_DIR.mkdir(exist_ok=True)
 
-    logger.info("Logging configured for FastAPI application")
+    logger.set_level("INFO")
+    logger.add(
+        JSON_LOG,
+        serialize=True,
+        rotation="100 MB",
+        retention="7 days",
+        enqueue=True,
+    )
+    logger.info("FastAPI logging configured", log_file=str(JSON_LOG))
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    """Application lifespan handler."""
-    setup_logging()
-    logger.info("FastAPI application starting up")
+async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
+    configure_logging()
+    logger.info("Application startup")
     yield
-    logger.info("FastAPI application shutting down")
-    logger.complete()  # Flush all pending logs
+    logger.info("Application shutdown")
+    logger.complete()
 
 
-app = FastAPI(
-    title="Logust FastAPI Example",
-    lifespan=lifespan,
+app = FastAPI(title="Logust FastAPI Canonical Events", lifespan=lifespan)
+
+setup_fastapi(
+    app,
+    canonical=True,
+    skip_routes=["/health"],
+    sampler=TailSampler(
+        rate=0.25,
+        slow_ms=750,
+        keep_if=lambda event: event.get("tenant") == "enterprise",
+    ),
 )
 
 
-# Middleware for request logging
-@app.middleware("http")
-async def log_requests(request: Request, call_next: Any) -> Any:
-    """Middleware to log all HTTP requests."""
-    # Generate unique request ID
-    request_id = str(uuid.uuid4())[:8]
-
-    # Create request-specific logger
-    request_logger = logger.bind(
-        request_id=request_id,
-        method=request.method,
-        path=request.url.path,
-        client_ip=request.client.host if request.client else "unknown",
-    )
-
-    request_logger.info("Request started")
-
-    try:
-        response = await call_next(request)
-        request_logger.bind(status_code=response.status_code).info("Request completed")
-        return response
-    except Exception as e:
-        request_logger.opt(exception=True).error(f"Request failed: {e}")
-        raise
+@log_fn
+def load_user_from_db(user_id: int) -> dict[str, Any]:
+    """Pretend to load a user from storage."""
+    if user_id == 500:
+        sleep(0.8)
+    return {
+        "id": user_id,
+        "name": f"User {user_id}",
+        "plan": "enterprise" if user_id == 42 else "free",
+    }
 
 
-# Exception handler for unhandled exceptions
-@app.exception_handler(Exception)
-async def global_exception_handler(request: Request, exc: Exception) -> JSONResponse:
-    """Handle all unhandled exceptions."""
-    logger.opt(exception=True).error(f"Unhandled exception: {exc}")
-    return JSONResponse(
-        status_code=500,
-        content={"detail": "Internal server error"},
-    )
-
-
-# Routes
 @app.get("/")
 async def root() -> dict[str, str]:
-    """Root endpoint."""
-    logger.debug("Root endpoint accessed")
-    return {"message": "Welcome to Logust + FastAPI!"}
+    add_event_fields(endpoint="root")
+    return {
+        "message": "Logust FastAPI example",
+        "request_id": get_request_id(),
+    }
 
 
 @app.get("/users/{user_id}")
-async def get_user(user_id: int) -> dict[str, Any]:
-    """Get user by ID with context logging."""
-    user_logger = logger.bind(user_id=user_id)
+async def get_user(user_id: int, plan: str | None = None) -> dict[str, Any]:
+    user = load_user_from_db(user_id)
+    tenant = plan or user["plan"]
 
-    user_logger.debug("Fetching user from database")
+    add_event_fields(
+        {
+            "user.id": str(user_id),
+            "tenant": tenant,
+            "feature.canonical_events": True,
+        }
+    )
 
-    # Simulate user lookup
-    if user_id == 0:
-        user_logger.warning("Invalid user ID requested")
-        raise HTTPException(status_code=400, detail="Invalid user ID")
+    if user_id <= 0:
+        add_event_fields(validation_error="invalid_user_id")
+        raise HTTPException(status_code=400, detail="user_id must be positive")
 
-    if user_id > 1000:
-        user_logger.info("User not found")
-        raise HTTPException(status_code=404, detail="User not found")
-
-    user_logger.success("User retrieved successfully")
-    return {"user_id": user_id, "name": f"User {user_id}", "email": f"user{user_id}@example.com"}
+    return {
+        "request_id": get_request_id(),
+        "user": user,
+    }
 
 
-@app.post("/orders")
-async def create_order(request: Request) -> dict[str, Any]:
-    """Create an order with detailed logging."""
-    order_id = str(uuid.uuid4())[:8]
-
-    with logger.contextualize(order_id=order_id):
-        logger.info("Order creation started")
-        logger.debug("Validating order data")
-        logger.debug("Checking inventory")
-        logger.info("Order created successfully")
-
-    return {"order_id": order_id, "status": "created"}
+@app.post("/checkout")
+async def checkout(user_id: str, amount: float = 49.99) -> dict[str, Any]:
+    add_event_fields(
+        {
+            "event.domain": "checkout",
+            "user.id": user_id,
+            "payment.amount": amount,
+            "payment.currency": "USD",
+        },
+        feature_checkout_v2=True,
+    )
+    logger.info("Checkout accepted", user_id=user_id, amount=amount)
+    return {"ok": True, "request_id": get_request_id()}
 
 
 @app.get("/error")
 async def trigger_error() -> None:
-    """Endpoint that triggers an error for testing."""
-    logger.warning("About to trigger an intentional error")
-    raise ValueError("This is an intentional error for testing")
+    add_event_fields(endpoint="error_demo")
+    raise RuntimeError("intentional demo error")
 
 
 @app.get("/health")
-async def health_check() -> dict[str, str]:
-    """Health check endpoint."""
-    logger.trace("Health check called")
-    return {"status": "healthy"}
+async def health() -> dict[str, str]:
+    return {"status": "ok"}
 
 
 if __name__ == "__main__":
@@ -166,14 +161,7 @@ if __name__ == "__main__":
         print("  pip install uvicorn")
         sys.exit(1)
 
-    print("\nStarting FastAPI server with Logust logging...")
-    print("Visit http://localhost:8000 in your browser")
-    print("Try these endpoints:")
-    print("  GET  /           - Root endpoint")
-    print("  GET  /users/123  - Get user")
-    print("  POST /orders     - Create order")
-    print("  GET  /error      - Trigger error")
-    print("  GET  /health     - Health check")
-    print("\nPress Ctrl+C to stop\n")
-
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    print("Starting Logust FastAPI example on http://localhost:8000")
+    print(f"JSON logs will be written to {JSON_LOG}")
+    print("Press Ctrl+C to stop")
+    uvicorn.run(app, host="127.0.0.1", port=8000)

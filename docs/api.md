@@ -7,6 +7,8 @@ Quick reference for the public API. For examples, see the Guide.
 - **Logger**: Log methods, handlers, levels, context, options, callbacks
 - **LogLevel**: Enum values for severity
 - **Parsing**: `parse()` and `parse_json()` helpers
+- **Contrib**: standard logging interception, decorators, canonical events,
+  FastAPI/Starlette middleware
 
 ## Logger
 
@@ -173,6 +175,93 @@ LogLevel.Error      # 40
 LogLevel.Fail       # 45
 LogLevel.Critical   # 50
 ```
+
+---
+
+## Contrib
+
+Utilities in `logust.contrib` are optional helpers built on top of the core
+logger.
+
+### Standard logging interception
+
+```python
+from logust.contrib import InterceptHandler, intercept_logging
+
+intercept_logging()
+```
+
+### Function timing
+
+```python
+from logust.contrib import debug_fn, log_fn
+
+@log_fn
+def work():
+    pass
+
+@debug_fn
+async def async_work():
+    pass
+```
+
+### Canonical event helpers
+
+```python
+from logust.contrib import (
+    TailSampler,
+    add_event_fields,
+    canonical_event,
+    clear_event_fields,
+    get_current_event,
+    get_event_fields,
+)
+
+with canonical_event({"event": "job"}) as event:
+    add_event_fields(job_id="job_123")
+```
+
+`add_event_fields(fields=None, **kwargs)` returns `True` when an event is active
+and `False` outside a canonical event context.
+
+`TailSampler` accepts:
+
+```python
+TailSampler(
+    rate=1.0,                  # 0.0 to 1.0
+    always_keep_errors=True,
+    slow_ms=None,              # non-negative milliseconds
+    keep_if=None,              # predicate(event) -> bool
+)
+```
+
+### FastAPI / Starlette
+
+Install web extras before importing the middleware:
+
+```bash
+pip install "logust[fastapi]"
+# or
+pip install "logust[starlette]"
+```
+
+```python
+from logust.contrib.starlette import (
+    RequestLoggerMiddleware,
+    get_request_id,
+    setup_fastapi,
+)
+
+setup_fastapi(
+    app,
+    canonical=True,
+    sample_rate=0.05,
+    slow_ms=1000,
+    skip_routes=["/health"],
+)
+```
+
+For the full event contract, see [Canonical Events](guide/canonical-events.md).
 
 ---
 

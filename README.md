@@ -22,6 +22,7 @@ A fast, Rust-powered Python logging library inspired by [loguru](https://github.
 - **Custom Levels** - Define your own log levels with colors and icons
 - **Color Markup** - Inline `<red>color</red>` tags in log messages
 - **Async Writing** - Optional thread-safe async file writes with `enqueue=True`
+- **Canonical Events** - Request-scoped wide events with built-in tail sampling
 - **Free-Threaded Python** - Release automation builds wheels for CPython 3.13t and 3.14t on Linux and macOS
 - **Zero-Config Integrations** - Built-in support for standard logging, FastAPI, and function timing
 
@@ -457,6 +458,14 @@ async def fetch_user(user_id):
 
 ### FastAPI / Starlette Middleware
 
+Install the matching extra for web middleware:
+
+```bash
+pip install "logust[fastapi]"
+# or
+pip install "logust[starlette]"
+```
+
 ```python
 from fastapi import FastAPI
 from logust.contrib.starlette import setup_fastapi
@@ -469,6 +478,45 @@ setup_fastapi(app, skip_routes=["/health"])
 # - Request IDs in all logs
 # - Standard logging redirected to logust
 ```
+
+### Canonical Request Events
+
+Emit one wide event at request completion, then keep high-value events with tail sampling:
+
+```python
+from fastapi import FastAPI
+from logust.contrib import add_event_fields
+from logust.contrib.starlette import setup_fastapi
+
+app = FastAPI()
+
+setup_fastapi(
+    app,
+    canonical=True,
+    sample_rate=0.02,
+    slow_ms=1000,
+    skip_routes=["/health"],
+)
+
+@app.post("/checkout")
+async def checkout(user_id: str):
+    add_event_fields({"user.id": user_id}, feature_checkout_v2=True)
+    return {"ok": True}
+```
+
+The middleware logs a single `http.request` event with request, response, timing,
+trace context, and any fields added during the request. Errors and slow requests
+are kept even when normal successful traffic is sampled. JSON sinks preserve
+numeric, boolean, list, dict, and null extra values as native JSON types. Incoming
+`x-request-id` values are preserved; otherwise Logust generates a short
+`uuid4`-based request ID.
+`sample_rate` must be between `0.0` and `1.0`, and `slow_ms` must be non-negative.
+
+See [docs/guide/canonical-events.md](docs/guide/canonical-events.md) and
+[examples/08_fastapi_integration.py](examples/08_fastapi_integration.py) for the
+full contract and a runnable FastAPI app.
+
+More runnable examples are listed in [examples/README.md](examples/README.md).
 
 ## Complete API Reference
 
