@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from logust import Logger, LogLevel
 from logust._logust import PyLogger
@@ -94,15 +95,22 @@ class TestConfigureExtra:
 class TestConfigurePatcher:
     """Test configure() with patcher."""
 
-    def test_configure_patcher(self, logger_with_file: tuple[Logger, Path]) -> None:
+    def test_configure_patcher(self) -> None:
         """Test using patcher functions."""
-        logger, log_file = logger_with_file
+        inner = PyLogger(LogLevel.Trace)
+        logger = Logger(inner)
+        logger.disable()
+        records: list[dict[str, Any]] = []
+        logger.add_callback(records.append)
 
+        def add_configured_tag(record: dict[str, Any]) -> None:
+            record["extra"]["configured"] = "yes"
+
+        logger.configure(patcher=add_configured_tag)
         logger.info("Patched message")
-        logger.complete()
 
-        content = log_file.read_text()
-        assert "Patched message" in content
+        assert records[0]["message"] == "Patched message"
+        assert records[0]["extra"]["configured"] == "yes"
 
 
 class TestConfigureComplete:

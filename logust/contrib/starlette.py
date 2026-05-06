@@ -200,7 +200,7 @@ class RequestLoggerMiddleware(BaseHTTPMiddleware):  # type: ignore[misc]
         ]
 
         if request.query_params:
-            parts.append(f"query={dict(request.query_params)}")
+            parts.append(f"query={self._format_query_params(request.query_params)}")
         if body:
             parts.append(f"body={body}")
 
@@ -255,17 +255,11 @@ class RequestLoggerMiddleware(BaseHTTPMiddleware):  # type: ignore[misc]
             if not body_bytes:
                 return ""
 
-            body_str: str
-            if len(body_bytes) > self._max_body_size:
-                body_str = (
-                    body_bytes[: self._max_body_size].decode("utf-8", errors="ignore") + "..."
-                )
-            else:
-                body_str = body_bytes.decode("utf-8", errors="ignore")
+            body_str = body_bytes.decode("utf-8", errors="ignore")
 
             if self._mask_sensitive_data:
-                return self._mask_sensitive(body_str)
-            return body_str
+                body_str = self._mask_sensitive(body_str)
+            return self._truncate_body(body_str)
 
         except Exception:
             return "<body_error>"
@@ -280,6 +274,35 @@ class RequestLoggerMiddleware(BaseHTTPMiddleware):  # type: ignore[misc]
             return json.dumps(masked)
         except (json.JSONDecodeError, TypeError):
             return body
+
+    def _truncate_body(self, body: str) -> str:
+        """Truncate a decoded and masked body for logging."""
+        if len(body) <= self._max_body_size:
+            return body
+        return body[: self._max_body_size] + "..."
+
+    def _format_query_params(self, query_params: Any) -> dict[str, Any]:
+        """Return query params with sensitive values masked."""
+        try:
+            items = query_params.multi_items()
+        except AttributeError:
+            items = query_params.items()
+
+        formatted: dict[str, Any] = {}
+        for key, value in items:
+            key_str = str(key)
+            value_to_log = (
+                "***" if self._mask_sensitive_data and self._is_sensitive_key(key_str) else value
+            )
+            if key_str in formatted:
+                existing = formatted[key_str]
+                if isinstance(existing, list):
+                    existing.append(value_to_log)
+                else:
+                    formatted[key_str] = [existing, value_to_log]
+            else:
+                formatted[key_str] = value_to_log
+        return formatted
 
     def _mask_dict(self, obj: Any) -> Any:
         """Recursively mask sensitive fields in a dict."""

@@ -9,7 +9,7 @@ import string
 import sys
 import threading
 import traceback
-from collections.abc import Callable, Generator
+from collections.abc import Callable, Generator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, TextIO
@@ -291,6 +291,7 @@ class Logger:
         self,
         inner: PyLogger,
         patchers: list[Callable[[dict[str, Any]], None]] | None = None,
+        context: dict[str, Any] | None = None,
         collect_options: dict[int, CollectOptions] | None = None,
         callback_ids: set[int] | None = None,
         filter_ids: set[int] | None = None,
@@ -324,6 +325,7 @@ class Logger:
     ) -> None:
         self._inner = inner
         self._patchers = patchers if patchers is not None else []
+        self._context = dict(context or {})
         # Handler ID -> CollectOptions mapping (shared between bound loggers)
         # Use explicit None check to preserve empty containers (empty dict/set are falsy)
         self._collect_options: dict[int, CollectOptions] = (
@@ -606,6 +608,59 @@ class Logger:
         cache_dict[eff_emit] = result
         return result
 
+    def _apply_patchers(
+        self,
+        *,
+        level_name: str,
+        level_no: int,
+        message: Any,
+        exception: str | None,
+        extra: dict[str, Any] | None,
+    ) -> tuple[str, str | None, dict[str, Any] | None]:
+        """Apply registered patchers before the record reaches handlers."""
+        message_str = message if isinstance(message, str) else str(message)
+        if not self._patchers:
+            return message_str, exception, extra
+
+        base_extra = dict(self._context)
+        if extra:
+            base_extra.update(extra)
+        original_extra_keys = {str(key) for key in base_extra}
+
+        record: dict[str, Any] = {
+            "level": level_name.upper(),
+            "level_no": level_no,
+            "message": message_str,
+            "timestamp": "",
+            "exception": exception,
+            "extra": base_extra,
+        }
+
+        for patcher in self._patchers:
+            patcher(record)
+
+        patched_exception = record.get("exception", exception)
+        patched_extra = record.get("extra", extra or {})
+
+        extra_out: dict[str, Any] | None
+        if patched_extra is None:
+            extra_out = None
+        elif isinstance(patched_extra, Mapping):
+            extra_out = {str(key): value for key, value in patched_extra.items()}
+            # Rust context is additive; blank removed keys so patchers can hide bound values.
+            for key in original_extra_keys - extra_out.keys():
+                extra_out[key] = ""
+            if not extra_out:
+                extra_out = None
+        else:
+            extra_out = extra
+
+        return (
+            str(record.get("message", message_str)),
+            None if patched_exception is None else str(patched_exception),
+            extra_out,
+        )
+
     def _log_with_level(
         self,
         level_value: int,
@@ -623,6 +678,14 @@ class Logger:
             message, extra_kwargs = _split_kwargs_for_format(message, kwargs)
             if not extra_kwargs:
                 extra_kwargs = None
+
+        message, exception, extra_kwargs = self._apply_patchers(
+            level_name=level_name,
+            level_no=level_value,
+            message=message,
+            exception=exception,
+            extra=extra_kwargs,
+        )
 
         inner = self._inner if extra_kwargs is None else self._inner.bind(extra_kwargs)
 
@@ -867,10 +930,19 @@ class Logger:
 
         resolved_emit = self._inner.try_resolve_emit_level_no(level)
         if resolved_emit is None:
+            extra_kw: dict[str, Any] | None = None
+            message, exception, extra_kw = self._apply_patchers(
+                level_name=str(level),
+                level_no=0,
+                message=message,
+                exception=exception,
+                extra=extra_kw,
+            )
+            inner = self._inner if extra_kw is None else self._inner.bind(extra_kw)
             if exception is None:
-                self._inner.log(level, str(message))
+                inner.log(level, str(message))
             else:
-                self._inner.log(level, str(message), exception=exception)
+                inner.log(level, str(message), exception=exception)
             return
         if resolved_emit < self._inner.min_level:
             return
@@ -880,6 +952,14 @@ class Logger:
             message, extra_kw = _split_kwargs_for_format(message, kwargs)
             if not extra_kw:
                 extra_kw = None
+
+        message, exception, extra_kw = self._apply_patchers(
+            level_name=str(level),
+            level_no=resolved_emit,
+            message=message,
+            exception=exception,
+            extra=extra_kw,
+        )
 
         needs_caller, needs_thread, needs_process = self._compute_effective_requirements(
             resolved_emit
@@ -1296,9 +1376,11 @@ class Logger:
             # Output includes extra context in JSON mode
         """
         new_inner = self._inner.bind(kwargs)
+        new_context = {**self._context, **kwargs}
         return Logger(
             new_inner,
             patchers=self._patchers.copy(),
+            context=new_context,
             collect_options=self._collect_options,
             callback_ids=self._callback_ids,
             filter_ids=self._filter_ids,
@@ -1324,11 +1406,14 @@ class Logger:
         """
         bound = self.bind(**kwargs)
         original = self._inner
+        original_context = self._context
         self._inner = bound._inner
+        self._context = bound._context
         try:
             yield self
         finally:
             self._inner = original
+            self._context = original_context
 
     def catch(
         self,
@@ -1453,6 +1538,7 @@ class Logger:
         return Logger(
             self._inner,
             patchers=new_patchers,
+            context=self._context,
             collect_options=self._collect_options,
             callback_ids=self._callback_ids,
             filter_ids=self._filter_ids,
@@ -1541,6 +1627,7 @@ class Logger:
         if extra:
             new_inner = self._inner.bind(extra)
             self._inner = new_inner
+            self._context.update(extra)
 
         if patcher:
             self._patchers.append(patcher)

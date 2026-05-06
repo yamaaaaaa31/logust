@@ -1319,6 +1319,12 @@ impl FileSinkInner {
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("log");
+        let extension = self
+            .config
+            .path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("log");
 
         let current_filename = self
             .config
@@ -1335,7 +1341,9 @@ impl FileSinkInner {
                 let filename = path.file_name()?.to_str()?;
                 if path == lock_filename {
                     None
-                } else if filename.starts_with(stem) && filename != current_filename {
+                } else if filename != current_filename
+                    && Self::is_generated_rotated_log_filename(filename, stem, extension)
+                {
                     let modified = fs::metadata(&path).ok()?.modified().ok()?;
                     Some((path, modified))
                 } else {
@@ -1365,6 +1373,49 @@ impl FileSinkInner {
         }
 
         Ok(())
+    }
+
+    fn is_generated_rotated_log_filename(filename: &str, stem: &str, extension: &str) -> bool {
+        let prefix = format!("{stem}.");
+        let Some(rest) = filename.strip_prefix(&prefix) else {
+            return false;
+        };
+
+        let suffix = format!(".{extension}");
+        let gzip_suffix = format!(".{extension}.gz");
+        let rotation_id = if let Some(value) = rest.strip_suffix(&gzip_suffix) {
+            value
+        } else if let Some(value) = rest.strip_suffix(&suffix) {
+            value
+        } else {
+            return false;
+        };
+
+        let Some((timestamp, pid)) = rotation_id.rsplit_once(".pid") else {
+            return false;
+        };
+        if pid.is_empty() || !pid.chars().all(|c| c.is_ascii_digit()) {
+            return false;
+        }
+
+        let Some((datetime, micros)) = timestamp.rsplit_once('_') else {
+            return false;
+        };
+        if micros.len() != 6 || !micros.chars().all(|c| c.is_ascii_digit()) {
+            return false;
+        }
+
+        let bytes = datetime.as_bytes();
+        bytes.len() == 19
+            && bytes[4] == b'-'
+            && bytes[7] == b'-'
+            && bytes[10] == b'_'
+            && bytes[13] == b'-'
+            && bytes[16] == b'-'
+            && bytes
+                .iter()
+                .enumerate()
+                .all(|(idx, byte)| matches!(idx, 4 | 7 | 10 | 13 | 16) || byte.is_ascii_digit())
     }
 }
 
@@ -1564,6 +1615,72 @@ mod tests {
     fn test_parse_retention() {
         assert_eq!(parse_retention("10 days"), (Some(10), None));
         assert_eq!(parse_retention("5"), (None, Some(5)));
+    }
+
+    #[test]
+    fn test_rotated_log_filename_matching_is_strict() {
+        assert!(FileSinkInner::is_generated_rotated_log_filename(
+            "app.2000-01-01_00-00-00_000000.pid0.log",
+            "app",
+            "log"
+        ));
+        assert!(FileSinkInner::is_generated_rotated_log_filename(
+            "app.2000-01-01_00-00-00_000000.pid123.log.gz",
+            "app",
+            "log"
+        ));
+        assert!(!FileSinkInner::is_generated_rotated_log_filename(
+            "app.keep", "app", "log"
+        ));
+        assert!(!FileSinkInner::is_generated_rotated_log_filename(
+            "app.2000-01-01_00-00-00_000000.pid0.log.bak",
+            "app",
+            "log"
+        ));
+        assert!(!FileSinkInner::is_generated_rotated_log_filename(
+            "application.2000-01-01_00-00-00_000000.pid0.log",
+            "app",
+            "log"
+        ));
+    }
+
+    #[test]
+    fn test_retention_preserves_same_stem_unrelated_files() {
+        let dir = unique_temp_path("retention-preserve-unrelated");
+        fs::create_dir_all(&dir).unwrap();
+
+        let path = dir.join("app.log");
+        let unrelated = dir.join("app.keep");
+        let unrelated_backup = dir.join("app.2000-01-01_00-00-00_000000.pid0.log.bak");
+        let stale_rotated = dir.join("app.2000-01-01_00-00-00_000000.pid0.log");
+        fs::write(&unrelated, "keep").unwrap();
+        fs::write(&unrelated_backup, "keep").unwrap();
+        fs::write(&stale_rotated, "stale").unwrap();
+
+        let sink = FileSink::new(FileSinkConfig {
+            path: path.clone(),
+            max_size: Some(1),
+            retention_count: Some(0),
+            ..FileSinkConfig::default()
+        })
+        .unwrap();
+
+        sink.write("first").unwrap();
+        sink.write("second").unwrap();
+        sink.flush().unwrap();
+
+        assert!(unrelated.exists(), "retention deleted a same-stem sibling");
+        assert!(
+            unrelated_backup.exists(),
+            "retention deleted a non-generated backup"
+        );
+        assert!(
+            !stale_rotated.exists(),
+            "retention should still delete generated rotated logs"
+        );
+
+        drop(sink);
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
