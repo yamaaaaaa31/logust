@@ -6,7 +6,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use chrono::{DateTime, Local};
 use pyo3::prelude::*;
-use pyo3::types::{PyBool, PyDict, PyFloat, PyInt, PyList, PyString, PyTuple};
+use pyo3::sync::PyOnceLock;
+use pyo3::types::{
+    PyBool, PyByteArray, PyBytes, PyDate, PyDateTime, PyDict, PyFloat, PyFrozenSet, PyInt, PyList,
+    PySet, PyString, PyTime, PyTuple, PyType,
+};
 use serde::{Serialize, Serializer};
 use serde_json::{Map, Number, Value};
 
@@ -34,13 +38,16 @@ pub type ExtraMap = HashMap<String, ExtraValue>;
 /// on cyclic data structures (e.g. ORM back-references, dict containing itself).
 const MAX_JSON_DEPTH: usize = 32;
 
+static ENUM_TYPE: PyOnceLock<Py<PyType>> = PyOnceLock::new();
+
 /// Extra context value with text rendering compatibility and typed JSON output.
 ///
 /// Two views are stored side-by-side:
 /// * `text` keeps loguru-compatible `str(value)` output for format-string
 ///   `{extra[key]}` rendering and Python callbacks (`record["extra"][key]`).
-/// * `json` carries the original Python type (int, float, bool, list, dict,
-///   None) so JSON sinks emit native types instead of strings.
+/// * `json` carries the original Python type (int, float, bool, bytes,
+///   datetime, list, dict, set, enum values, None) so JSON sinks emit native
+///   types instead of strings.
 #[derive(Clone, Debug)]
 pub struct ExtraValue {
     text: String,
@@ -186,6 +193,21 @@ fn py_to_json_value(value: &Bound<'_, PyAny>, depth: usize) -> PyResult<Value> {
     if value.cast::<PyFloat>().is_ok() {
         return py_float_to_json(value);
     }
+    if let Ok(bytes) = value.cast::<PyBytes>() {
+        return Ok(bytes_to_utf8_json(bytes.as_bytes()));
+    }
+    if let Ok(bytearray) = value.cast::<PyByteArray>() {
+        return Ok(bytes_to_utf8_json(&bytearray.to_vec()));
+    }
+    if value.cast::<PyDateTime>().is_ok() {
+        return py_isoformat_to_json(value);
+    }
+    if value.cast::<PyDate>().is_ok() {
+        return py_isoformat_to_json(value);
+    }
+    if value.cast::<PyTime>().is_ok() {
+        return py_isoformat_to_json(value);
+    }
     if let Ok(list) = value.cast::<PyList>() {
         return py_seq_to_json(list.iter(), list.len(), depth + 1);
     }
@@ -195,8 +217,21 @@ fn py_to_json_value(value: &Bound<'_, PyAny>, depth: usize) -> PyResult<Value> {
     if let Ok(dict) = value.cast::<PyDict>() {
         return py_dict_to_json(dict, depth + 1);
     }
+    if let Ok(set) = value.cast::<PySet>() {
+        return py_seq_to_json(set.iter(), set.len(), depth + 1);
+    }
+    if let Ok(frozenset) = value.cast::<PyFrozenSet>() {
+        return py_seq_to_json(frozenset.iter(), frozenset.len(), depth + 1);
+    }
+    if let Some(enum_value) = py_enum_to_json(value, depth + 1)? {
+        return Ok(enum_value);
+    }
 
     Ok(Value::String(value.str()?.to_string()))
+}
+
+fn bytes_to_utf8_json(bytes: &[u8]) -> Value {
+    Value::String(String::from_utf8_lossy(bytes).into_owned())
 }
 
 fn py_int_to_json(value: &Bound<'_, PyAny>) -> PyResult<Value> {
@@ -214,6 +249,21 @@ fn py_float_to_json(value: &Bound<'_, PyAny>) -> PyResult<Value> {
     Ok(Number::from_f64(n)
         .map(Value::Number)
         .unwrap_or_else(|| Value::String(value.str().map(|s| s.to_string()).unwrap_or_default())))
+}
+
+fn py_isoformat_to_json(value: &Bound<'_, PyAny>) -> PyResult<Value> {
+    Ok(Value::String(
+        value.call_method0("isoformat")?.extract::<String>()?,
+    ))
+}
+
+fn py_enum_to_json(value: &Bound<'_, PyAny>, depth: usize) -> PyResult<Option<Value>> {
+    let enum_type = ENUM_TYPE.import(value.py(), "enum", "Enum")?;
+    if value.is_instance(enum_type)? {
+        let enum_value = value.getattr("value")?;
+        return Ok(Some(py_to_json_value(&enum_value, depth)?));
+    }
+    Ok(None)
 }
 
 fn py_seq_to_json<'py>(
