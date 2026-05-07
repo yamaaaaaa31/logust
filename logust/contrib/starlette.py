@@ -124,9 +124,13 @@ class RequestLoggerMiddleware(BaseHTTPMiddleware):  # type: ignore[misc]
             skip_regexes: List of regex patterns to skip logging for.
             include_request_body: Whether to log request bodies.
             max_body_size: Maximum body size to log (truncates larger bodies).
+                Must be greater than or equal to 0.
             mask_sensitive_data: Whether to mask sensitive fields in body.
             logger: Custom logust logger instance. If None, uses default.
         """
+        if max_body_size < 0:
+            raise ValueError("max_body_size must be greater than or equal to 0")
+
         self._skip_routes = set(skip_routes) if skip_routes else set()
         self._skip_regexes = [re.compile(regex) for regex in (skip_regexes or [])]
         self._include_request_body = include_request_body
@@ -162,7 +166,7 @@ class RequestLoggerMiddleware(BaseHTTPMiddleware):  # type: ignore[misc]
 
     async def _log_request(self, request: Request, call_next: Callable[[Request], Any]) -> Response:
         """Log the request and response with timing."""
-        request_id = str(uuid.uuid4())[:8]
+        request_id = self._get_request_id(request)
         _request_id.set(request_id)
 
         start_time = time.perf_counter()
@@ -226,6 +230,14 @@ class RequestLoggerMiddleware(BaseHTTPMiddleware):  # type: ignore[misc]
             self.logger.warning(message)
         else:
             self.logger.info(message)
+
+    @staticmethod
+    def _get_request_id(request: Request) -> str:
+        """Honor an incoming x-request-id header, otherwise generate a new id."""
+        incoming_id = request.headers.get("x-request-id")
+        if incoming_id:
+            return str(incoming_id)
+        return str(uuid.uuid4())[:8]
 
     @staticmethod
     def _get_client_ip(request: Request) -> str:
