@@ -130,6 +130,21 @@ Output:
 }
 ```
 
+`serialize=True` keeps common extra values typed in JSON while preserving
+`str(value)` output for `{extra[key]}` format tokens and Python callbacks.
+
+| Python extra type | JSON output |
+|-------------------|-------------|
+| `None`, `bool`, `str`, `int`, `float` | Native JSON null, boolean, string, or number |
+| `list`, `tuple`, `set`, `frozenset` | JSON array |
+| `dict` | JSON object with stringified keys |
+| `bytes`, `bytearray` | UTF-8 string with invalid bytes replaced |
+| `datetime`, `date`, `time` | `.isoformat()` string |
+| `Enum` | `.value`, converted with the same rules |
+
+Other objects, including `Decimal`, `UUID`, `Path`, and `complex`, fall back to
+`str(value)` in JSON.
+
 ## Color markup
 
 Add colors to console output using markup:

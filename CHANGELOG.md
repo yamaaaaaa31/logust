@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **JSON extra values handle more Python types**: `serialize=True` now emits `bytes` / `bytearray` extras as UTF-8 strings with replacement for invalid bytes, `set` / `frozenset` extras as arrays, `datetime` / `date` / `time` extras as `.isoformat()` strings, and `Enum` extras via their `.value` converted with the same rules. Text formatting (`{extra[key]}`) and Python callback records still use the existing `str(value)` view. Other object types such as `Decimal`, `UUID`, `Path`, and `complex` continue to fall back to `str(value)` in JSON.
+
 ## [0.3.2] - 2026-05-07
 
 ### Added
