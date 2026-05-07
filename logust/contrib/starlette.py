@@ -21,7 +21,7 @@ import re
 import time
 import uuid
 from collections.abc import Callable, Mapping, Sequence
-from contextlib import nullcontext
+from contextlib import AbstractContextManager, nullcontext
 from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any, ClassVar
 
@@ -203,6 +203,7 @@ class RequestLoggerMiddleware(BaseHTTPMiddleware):  # type: ignore[misc]
         if self._include_request_body and request.method in self._BODY_METHODS:
             body_log = await self._get_request_body(request)
 
+        event_context: AbstractContextManager[dict[str, Any] | None]
         if self._canonical:
             base_event = self._build_base_event(request, request_id, client_ip, body_log)
             event_context = canonical_event(base_event)
