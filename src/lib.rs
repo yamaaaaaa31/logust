@@ -15,7 +15,7 @@ use pyo3::types::{PyDict, PyTuple};
 pub use format::{FormatConfig, LOGGER_START_TIME, TokenRequirements, format_elapsed};
 pub use handler::{
     CallerInfo, ConsoleHandler, ExtraMap, ExtraValue, FileHandler, HandlerEntry, HandlerType,
-    LogRecord, ProcessInfo, ThreadInfo, empty_context,
+    LogRecord, ProcessInfo, ThreadInfo, empty_context, serde_json_to_py,
 };
 pub use level::{LevelInfo, LogLevel, get_level_by_no, get_level_info, register_level};
 pub use sink::{FileSink, FileSinkConfig, Rotation};
@@ -113,9 +113,18 @@ impl FormattedSinkRequirements {
     }
 }
 
-/// Raw callbacks receive a full record dict; formatted sinks receive a minimal dict for templates.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RecordExtraView {
+    Text,
+    Json,
+}
+
+/// Raw callbacks receive a full record dict; serialized sinks receive a full record
+/// dict whose nested `extra` mapping uses typed JSON values; formatted sinks receive
+/// a minimal dict for templates.
 pub enum CallbackKind {
     Raw,
+    Serialized,
     FormattedLight(FormattedSinkRequirements),
 }
 
@@ -147,7 +156,7 @@ fn merge_token_requirements_for_emit_no(
             continue;
         }
         match &entry.kind {
-            CallbackKind::Raw => {
+            CallbackKind::Raw | CallbackKind::Serialized => {
                 any_raw = true;
             }
             CallbackKind::FormattedLight(req) => {
@@ -561,6 +570,22 @@ impl PyLogger {
             callback,
             level: level.unwrap_or(LogLevel::Debug),
             kind: CallbackKind::Raw,
+        };
+        self.callbacks.write().push(entry);
+        self.update_min_level_cache();
+        self.update_requirements_cache();
+        id
+    }
+
+    /// Add a serialized callable sink callback (full record dict with typed JSON extras).
+    #[pyo3(signature = (callback, level=None))]
+    fn add_serialized_callback(&self, callback: Py<PyAny>, level: Option<LogLevel>) -> u64 {
+        let id = handler::next_handler_id();
+        let entry = CallbackEntry {
+            id,
+            callback,
+            level: level.unwrap_or(LogLevel::Debug),
+            kind: CallbackKind::Serialized,
         };
         self.callbacks.write().push(entry);
         self.update_min_level_cache();
@@ -1057,13 +1082,27 @@ impl PyLogger {
 
         if needs_gil {
             Python::attach(|py| {
-                let need_full_dict = has_eligible_filtered_handler
+                let need_text_full_dict = has_eligible_filtered_handler
                     || callbacks
                         .iter()
-                        .any(|e| level >= e.level && matches!(e.kind, CallbackKind::Raw));
+                        .any(|e| level >= e.level && matches!(&e.kind, CallbackKind::Raw));
+                let need_json_full_dict = callbacks
+                    .iter()
+                    .any(|e| level >= e.level && matches!(&e.kind, CallbackKind::Serialized));
 
-                let shared_full: Option<Bound<'_, PyDict>> = if need_full_dict {
-                    Some(Self::build_record_dict(py, level, &record))
+                let shared_text_full: Option<Bound<'_, PyDict>> = if need_text_full_dict {
+                    Some(
+                        Self::build_record_dict(py, level, &record, RecordExtraView::Text)
+                            .expect("build_record_dict"),
+                    )
+                } else {
+                    None
+                };
+                let shared_json_full: Option<Bound<'_, PyDict>> = if need_json_full_dict {
+                    Some(
+                        Self::build_record_dict(py, level, &record, RecordExtraView::Json)
+                            .expect("build_record_dict"),
+                    )
                 } else {
                     None
                 };
@@ -1074,9 +1113,15 @@ impl PyLogger {
                     }
                     match &entry.kind {
                         CallbackKind::Raw => {
-                            let full = shared_full
+                            let full = shared_text_full
                                 .as_ref()
                                 .expect("raw callback implies full dict was built");
+                            let _ = entry.callback.call1(py, (full.clone(),));
+                        }
+                        CallbackKind::Serialized => {
+                            let full = shared_json_full
+                                .as_ref()
+                                .expect("serialized callback implies full dict was built");
                             let _ = entry.callback.call1(py, (full.clone(),));
                         }
                         CallbackKind::FormattedLight(req) => {
@@ -1092,7 +1137,7 @@ impl PyLogger {
                         continue;
                     }
                     if let Some(ref filter) = entry.filter {
-                        let full = shared_full
+                        let full = shared_text_full
                             .as_ref()
                             .expect("handler filter implies full dict was built");
                         let passes = filter
@@ -1119,15 +1164,15 @@ impl PyLogger {
         py: Python<'py>,
         level: LogLevel,
         record: &LogRecord,
-    ) -> Bound<'py, PyDict> {
+        extra_view: RecordExtraView,
+    ) -> PyResult<Bound<'py, PyDict>> {
         let dict = PyDict::new(py);
 
         // Extra FIRST (flat expansion for backward compat)
         // This allows built-in fields to take precedence and prevents spoofing
         let extra_dict = PyDict::new(py);
         for (key, value) in record.extra.iter() {
-            let _ = dict.set_item(key.as_str(), value.as_str());
-            let _ = extra_dict.set_item(key.as_str(), value.as_str());
+            Self::set_record_extra_item(py, &dict, &extra_dict, key.as_str(), value, extra_view)?;
         }
 
         // Basic fields (override any extra with same name)
@@ -1162,7 +1207,28 @@ impl PyLogger {
             let _ = dict.set_item(intern!(py, "exception"), exc.as_str());
         }
 
-        dict
+        Ok(dict)
+    }
+
+    fn set_record_extra_item<'py>(
+        py: Python<'py>,
+        dict: &Bound<'py, PyDict>,
+        extra_dict: &Bound<'py, PyDict>,
+        key: &str,
+        value: &ExtraValue,
+        extra_view: RecordExtraView,
+    ) -> PyResult<()> {
+        let _ = dict.set_item(key, value.as_str());
+        match extra_view {
+            RecordExtraView::Text => {
+                extra_dict.set_item(key, value.as_str())?;
+            }
+            RecordExtraView::Json => {
+                let py_value = serde_json_to_py(py, value.as_json())?;
+                extra_dict.set_item(key, py_value)?;
+            }
+        }
+        Ok(())
     }
 
     /// Minimal Python dict for formatted callable sinks (matches `ParsedCallableTemplate.format` keys).
@@ -1299,11 +1365,42 @@ impl PyLogger {
 
         if needs_gil {
             Python::attach(|py| {
-                let dict = Self::build_custom_record_dict(py, &record);
+                let need_text_full_dict = has_eligible_filtered_handler
+                    || callbacks.iter().any(|e| {
+                        level_no >= e.level as u32 && !matches!(&e.kind, CallbackKind::Serialized)
+                    });
+                let need_json_full_dict = callbacks.iter().any(|e| {
+                    level_no >= e.level as u32 && matches!(&e.kind, CallbackKind::Serialized)
+                });
+
+                let shared_text_full: Option<Bound<'_, PyDict>> = if need_text_full_dict {
+                    Some(
+                        Self::build_custom_record_dict(py, &record, RecordExtraView::Text)
+                            .expect("build_custom_record_dict"),
+                    )
+                } else {
+                    None
+                };
+                let shared_json_full: Option<Bound<'_, PyDict>> = if need_json_full_dict {
+                    Some(
+                        Self::build_custom_record_dict(py, &record, RecordExtraView::Json)
+                            .expect("build_custom_record_dict"),
+                    )
+                } else {
+                    None
+                };
 
                 for entry in callbacks.iter() {
                     if level_no >= entry.level as u32 {
-                        let _ = entry.callback.call1(py, (dict.clone(),));
+                        let full = match &entry.kind {
+                            CallbackKind::Serialized => shared_json_full
+                                .as_ref()
+                                .expect("serialized callback implies full dict was built"),
+                            _ => shared_text_full
+                                .as_ref()
+                                .expect("callback implies full dict was built"),
+                        };
+                        let _ = entry.callback.call1(py, (full.clone(),));
                     }
                 }
 
@@ -1312,8 +1409,11 @@ impl PyLogger {
                         continue;
                     }
                     if let Some(ref filter) = entry.filter {
+                        let full = shared_text_full
+                            .as_ref()
+                            .expect("handler filter implies full dict was built");
                         let passes = filter
-                            .call1(py, (dict.clone(),))
+                            .call1(py, (full.clone(),))
                             .and_then(|result| result.is_truthy(py))
                             .unwrap_or(true);
                         if !passes {
@@ -1332,7 +1432,11 @@ impl PyLogger {
 
     /// Build a Python dict from custom level record for callbacks/filters
     #[inline]
-    fn build_custom_record_dict<'py>(py: Python<'py>, record: &LogRecord) -> Bound<'py, PyDict> {
+    fn build_custom_record_dict<'py>(
+        py: Python<'py>,
+        record: &LogRecord,
+        extra_view: RecordExtraView,
+    ) -> PyResult<Bound<'py, PyDict>> {
         let dict = PyDict::new(py);
         // Using intern!() to cache key strings for better performance
         if let Some(ref info) = record.level_info {
@@ -1344,8 +1448,7 @@ impl PyLogger {
 
         let extra_dict = PyDict::new(py);
         for (key, value) in record.extra.iter() {
-            let _ = dict.set_item(key.as_str(), value.as_str());
-            let _ = extra_dict.set_item(key.as_str(), value.as_str());
+            Self::set_record_extra_item(py, &dict, &extra_dict, key.as_str(), value, extra_view)?;
         }
 
         let _ = dict.set_item(intern!(py, "name"), &record.caller.name);
@@ -1365,7 +1468,7 @@ impl PyLogger {
         if let Some(ref exc) = record.exception {
             let _ = dict.set_item(intern!(py, "exception"), exc.as_str());
         }
-        dict
+        Ok(dict)
     }
 }
 

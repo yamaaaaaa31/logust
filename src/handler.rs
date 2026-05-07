@@ -1,10 +1,11 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::io;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use chrono::{DateTime, Local};
+use pyo3::IntoPyObjectExt;
 use pyo3::prelude::*;
 use pyo3::sync::PyOnceLock;
 use pyo3::types::{
@@ -56,9 +57,9 @@ pub struct ExtraValue {
 
 /// Classification of a Python value for fast-path `ExtraValue` construction.
 ///
-/// Each variant carries the already-extracted Rust value so the match in
-/// `ExtraValue::from_py` can build both the text and json views without
-/// re-dispatching on the Python type.
+/// Each variant carries the already-extracted Rust value so
+/// `ExtraValue::from_py` can build the JSON view without re-dispatching on the
+/// Python type.
 enum FastKind {
     None,
     Bool(bool),
@@ -101,30 +102,33 @@ impl FastKind {
 
 impl ExtraValue {
     pub fn from_py(value: &Bound<'_, PyAny>) -> PyResult<Self> {
-        match FastKind::classify(value)? {
+        let kind = FastKind::classify(value)?;
+        let text = value.str()?.to_string();
+
+        match kind {
             FastKind::None => Ok(Self {
-                text: "None".to_string(),
+                text,
                 json: Value::Null,
             }),
             FastKind::Bool(b) => Ok(Self {
-                text: if b { "True" } else { "False" }.to_string(),
+                text,
                 json: Value::Bool(b),
             }),
             FastKind::Str(s) => Ok(Self {
-                json: Value::String(s.clone()),
-                text: s,
+                text,
+                json: Value::String(s),
             }),
             FastKind::I64(n) => Ok(Self {
-                text: n.to_string(),
+                text,
                 json: Value::Number(Number::from(n)),
             }),
             FastKind::U64(n) => Ok(Self {
-                text: n.to_string(),
+                text,
                 json: Value::Number(Number::from(n)),
             }),
             FastKind::Slow => {
-                let text = value.str()?.to_string();
-                let json = py_to_json_value(value, 0)?;
+                let mut seen = HashSet::new();
+                let json = py_to_json_value(value, 0, &mut seen)?;
                 Ok(Self { text, json })
             }
         }
@@ -171,9 +175,53 @@ impl Serialize for ExtraValue {
     }
 }
 
-fn py_to_json_value(value: &Bound<'_, PyAny>, depth: usize) -> PyResult<Value> {
+pub fn serde_json_to_py(py: Python<'_>, value: &Value) -> PyResult<Py<PyAny>> {
+    match value {
+        Value::Null => Ok(py.None()),
+        Value::Bool(b) => (*b).into_py_any(py),
+        Value::Number(number) => {
+            if let Some(n) = number.as_i64() {
+                return n.into_py_any(py);
+            }
+            if let Some(n) = number.as_u64() {
+                return n.into_py_any(py);
+            }
+            if let Some(n) = number.as_f64() {
+                return n.into_py_any(py);
+            }
+            Err(pyo3::exceptions::PyValueError::new_err(
+                "unsupported JSON number",
+            ))
+        }
+        Value::String(s) => s.as_str().into_py_any(py),
+        Value::Array(values) => {
+            let list = PyList::empty(py);
+            for item in values {
+                list.append(serde_json_to_py(py, item)?)?;
+            }
+            Ok(list.into_any().unbind())
+        }
+        Value::Object(values) => {
+            let dict = PyDict::new(py);
+            for (key, item) in values {
+                dict.set_item(key, serde_json_to_py(py, item)?)?;
+            }
+            Ok(dict.into_any().unbind())
+        }
+    }
+}
+
+fn recursion_limit_value() -> Value {
+    Value::String("<recursion limit reached>".to_string())
+}
+
+fn py_to_json_value(
+    value: &Bound<'_, PyAny>,
+    depth: usize,
+    seen: &mut HashSet<usize>,
+) -> PyResult<Value> {
     if depth >= MAX_JSON_DEPTH {
-        return Ok(Value::String("<recursion limit reached>".to_string()));
+        return Ok(recursion_limit_value());
     }
 
     if value.is_none() {
@@ -209,25 +257,48 @@ fn py_to_json_value(value: &Bound<'_, PyAny>, depth: usize) -> PyResult<Value> {
         return py_isoformat_to_json(value);
     }
     if let Ok(list) = value.cast::<PyList>() {
-        return py_seq_to_json(list.iter(), list.len(), depth + 1);
+        return py_container_to_json(value, seen, |seen| {
+            py_seq_to_json(list.iter(), list.len(), depth + 1, seen)
+        });
     }
     if let Ok(tuple) = value.cast::<PyTuple>() {
-        return py_seq_to_json(tuple.iter(), tuple.len(), depth + 1);
+        return py_container_to_json(value, seen, |seen| {
+            py_seq_to_json(tuple.iter(), tuple.len(), depth + 1, seen)
+        });
     }
     if let Ok(dict) = value.cast::<PyDict>() {
-        return py_dict_to_json(dict, depth + 1);
+        return py_container_to_json(value, seen, |seen| py_dict_to_json(dict, depth + 1, seen));
     }
     if let Ok(set) = value.cast::<PySet>() {
-        return py_seq_to_json(set.iter(), set.len(), depth + 1);
+        return py_container_to_json(value, seen, |seen| {
+            py_seq_to_json(set.iter(), set.len(), depth + 1, seen)
+        });
     }
     if let Ok(frozenset) = value.cast::<PyFrozenSet>() {
-        return py_seq_to_json(frozenset.iter(), frozenset.len(), depth + 1);
+        return py_container_to_json(value, seen, |seen| {
+            py_seq_to_json(frozenset.iter(), frozenset.len(), depth + 1, seen)
+        });
     }
-    if let Some(enum_value) = py_enum_to_json(value, depth + 1)? {
+    if let Some(enum_value) = py_enum_to_json(value, depth + 1, seen)? {
         return Ok(enum_value);
     }
 
     Ok(Value::String(value.str()?.to_string()))
+}
+
+fn py_container_to_json(
+    value: &Bound<'_, PyAny>,
+    seen: &mut HashSet<usize>,
+    convert: impl FnOnce(&mut HashSet<usize>) -> PyResult<Value>,
+) -> PyResult<Value> {
+    let identity = value.as_ptr() as usize;
+    if !seen.insert(identity) {
+        return Ok(recursion_limit_value());
+    }
+
+    let result = convert(seen);
+    seen.remove(&identity);
+    result
 }
 
 fn bytes_to_utf8_json(bytes: &[u8]) -> Value {
@@ -257,11 +328,15 @@ fn py_isoformat_to_json(value: &Bound<'_, PyAny>) -> PyResult<Value> {
     ))
 }
 
-fn py_enum_to_json(value: &Bound<'_, PyAny>, depth: usize) -> PyResult<Option<Value>> {
+fn py_enum_to_json(
+    value: &Bound<'_, PyAny>,
+    depth: usize,
+    seen: &mut HashSet<usize>,
+) -> PyResult<Option<Value>> {
     let enum_type = ENUM_TYPE.import(value.py(), "enum", "Enum")?;
     if value.is_instance(enum_type)? {
         let enum_value = value.getattr("value")?;
-        return Ok(Some(py_to_json_value(&enum_value, depth)?));
+        return Ok(Some(py_to_json_value(&enum_value, depth, seen)?));
     }
     Ok(None)
 }
@@ -270,18 +345,26 @@ fn py_seq_to_json<'py>(
     iter: impl Iterator<Item = Bound<'py, PyAny>>,
     capacity: usize,
     depth: usize,
+    seen: &mut HashSet<usize>,
 ) -> PyResult<Value> {
     let mut values = Vec::with_capacity(capacity);
     for item in iter {
-        values.push(py_to_json_value(&item, depth)?);
+        values.push(py_to_json_value(&item, depth, seen)?);
     }
     Ok(Value::Array(values))
 }
 
-fn py_dict_to_json(dict: &Bound<'_, PyDict>, depth: usize) -> PyResult<Value> {
+fn py_dict_to_json(
+    dict: &Bound<'_, PyDict>,
+    depth: usize,
+    seen: &mut HashSet<usize>,
+) -> PyResult<Value> {
     let mut map = Map::with_capacity(dict.len());
     for (key, value) in dict.iter() {
-        map.insert(key.str()?.to_string(), py_to_json_value(&value, depth)?);
+        map.insert(
+            key.str()?.to_string(),
+            py_to_json_value(&value, depth, seen)?,
+        );
     }
     Ok(Value::Object(map))
 }

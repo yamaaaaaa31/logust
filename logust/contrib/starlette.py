@@ -65,7 +65,7 @@ def get_request_id() -> str:
     return _request_id.get()
 
 
-class RequestLoggerMiddleware(BaseHTTPMiddleware):
+class RequestLoggerMiddleware(BaseHTTPMiddleware):  # type: ignore[misc,unused-ignore]
     """Middleware that logs HTTP requests and responses.
 
     Features:
