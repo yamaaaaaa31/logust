@@ -25,7 +25,7 @@ def _json_extra(tmp_path: Path, filename: str, **extra: Any) -> dict[str, Any]:
     logger.info("typed", **extra)
     logger.complete()
 
-    return json.loads(log_file.read_text())["extra"]
+    return json.loads(log_file.read_text(encoding="utf-8"))["extra"]
 
 
 def test_json_file_preserves_extra_value_types(tmp_path: Path) -> None:
@@ -47,7 +47,7 @@ def test_json_file_preserves_extra_value_types(tmp_path: Path) -> None:
     )
     logger.complete()
 
-    record = json.loads(log_file.read_text())
+    record = json.loads(log_file.read_text(encoding="utf-8"))
     assert record["message"] == "typed"
     assert record["extra"] == {
         "status_code": 201,
@@ -82,7 +82,7 @@ def test_string_passthrough_in_json(tmp_path: Path) -> None:
     logger.info("hi", user="alice", path="/api/v1")
     logger.complete()
 
-    record = json.loads(log_file.read_text())
+    record = json.loads(log_file.read_text(encoding="utf-8"))
     assert record["extra"] == {"user": "alice", "path": "/api/v1"}
 
 
@@ -97,7 +97,7 @@ def test_bool_distinct_from_int_in_json(tmp_path: Path) -> None:
     logger.info("flags", enabled=True, disabled=False, count=1)
     logger.complete()
 
-    raw = log_file.read_text()
+    raw = log_file.read_text(encoding="utf-8")
     record = json.loads(raw)
     assert record["extra"]["enabled"] is True
     assert record["extra"]["disabled"] is False
@@ -125,7 +125,7 @@ def test_deeply_nested_dict_in_json(tmp_path: Path) -> None:
     )
     logger.complete()
 
-    record = json.loads(log_file.read_text())
+    record = json.loads(log_file.read_text(encoding="utf-8"))
     assert record["extra"]["meta"]["user"]["id"] == 7
     assert record["extra"]["meta"]["user"]["tags"] == ["admin", "ops"]
     assert record["extra"]["meta"]["trace"]["span"]["depth"] == 3
@@ -141,7 +141,7 @@ def test_tuple_serializes_as_array(tmp_path: Path) -> None:
     logger.info("t", coords=(1, 2, 3))
     logger.complete()
 
-    record = json.loads(log_file.read_text())
+    record = json.loads(log_file.read_text(encoding="utf-8"))
     assert record["extra"]["coords"] == [1, 2, 3]
 
 
@@ -290,8 +290,8 @@ def test_text_view_unchanged_for_enum(tmp_path: Path) -> None:
     logger.info("enum", status=Status.OK)
     logger.complete()
 
-    assert text_file.read_text().strip() == "Status.OK|enum"
-    record = json.loads(json_file.read_text())
+    assert text_file.read_text(encoding="utf-8").strip() == "Status.OK|enum"
+    record = json.loads(json_file.read_text(encoding="utf-8"))
     assert record["extra"]["status"] == "ok"
 
 
@@ -320,8 +320,8 @@ def test_text_view_unchanged_for_datetime(tmp_path: Path) -> None:
     logger.info("dt", when=datetime(2026, 5, 7, 0, 0, 0))
     logger.complete()
 
-    assert text_file.read_text().strip() == "2026-05-07 00:00:00|dt"
-    record = json.loads(json_file.read_text())
+    assert text_file.read_text(encoding="utf-8").strip() == "2026-05-07 00:00:00|dt"
+    record = json.loads(json_file.read_text(encoding="utf-8"))
     assert record["extra"]["when"] == "2026-05-07T00:00:00"
 
 
@@ -337,7 +337,7 @@ def test_big_int_falls_back_to_string(tmp_path: Path) -> None:
     logger.info("big", n=big)
     logger.complete()
 
-    record = json.loads(log_file.read_text())
+    record = json.loads(log_file.read_text(encoding="utf-8"))
     assert record["extra"]["n"] == str(big)
 
 
@@ -354,27 +354,28 @@ def test_nan_and_inf_fall_back_to_string(tmp_path: Path) -> None:
     logger.info("special", nan=nan, inf=inf)
     logger.complete()
 
-    record = json.loads(log_file.read_text())
+    record = json.loads(log_file.read_text(encoding="utf-8"))
     assert record["extra"]["nan"] == "nan"
     assert record["extra"]["inf"] == "inf"
 
 
 def test_documented_fallthrough_types_remain_strings(tmp_path: Path) -> None:
     request_id = UUID("12345678-1234-5678-1234-567812345678")
+    path = Path("/tmp/logust")
 
     extra = _json_extra(
         tmp_path,
         "fallthrough.json",
         amount=Decimal("1.50"),
         request_id=request_id,
-        path=Path("/tmp/logust"),
+        path=path,
         z=1 + 2j,
     )
 
     assert extra == {
         "amount": "1.50",
         "request_id": str(request_id),
-        "path": "/tmp/logust",
+        "path": str(path),
         "z": "(1+2j)",
     }
 
@@ -393,7 +394,7 @@ def test_recursive_structure_does_not_crash(tmp_path: Path) -> None:
     logger.info("cycle", data=cyclic)
     logger.complete()
 
-    raw = log_file.read_text()
+    raw = log_file.read_text(encoding="utf-8")
     # Whatever the strategy, the file must be valid JSON and contain the sentinel.
     record = json.loads(raw)
     assert "<recursion limit reached>" in raw
@@ -411,5 +412,5 @@ def test_extra_format_token_renders_as_string(tmp_path: Path) -> None:
     logger.info("done", count=42, ok=True)
     logger.complete()
 
-    text = log_file.read_text().strip()
+    text = log_file.read_text(encoding="utf-8").strip()
     assert text == "42|True|done"
