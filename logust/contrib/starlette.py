@@ -3,7 +3,7 @@
 This module provides middleware for automatic request/response logging
 in Starlette and FastAPI applications.
 
-Requires: starlette (pip install starlette or pip install fastapi)
+Requires: starlette (pip install "logust[starlette]" or "logust[fastapi]")
 
 Example:
     >>> from fastapi import FastAPI
@@ -31,7 +31,8 @@ try:
     from starlette.types import ASGIApp
 except ImportError as e:
     raise ImportError(
-        "Starlette is required for this module. Install it with: pip install starlette"
+        'Starlette is required for this module. Install it with: pip install "logust[starlette]"'
+        ' or pip install "logust[fastapi]"'
     ) from e
 
 if TYPE_CHECKING:

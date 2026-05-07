@@ -35,6 +35,24 @@ Get Logust from PyPI in seconds, or build from source for local Rust changes.
         Source builds require Rust stable and a working cargo toolchain.
         On Windows, activate with `.venv\\Scripts\\activate`.
 
+## Optional extras
+
+Install web framework integrations on demand:
+
+=== "Starlette"
+    ```bash
+    pip install "logust[starlette]"
+    ```
+
+=== "FastAPI"
+    ```bash
+    pip install "logust[fastapi]"
+    ```
+
+These extras install the web framework alongside Logust so
+`logust.contrib.starlette` and the `RequestLoggerMiddleware` work out of the
+box.
+
 ## Verify
 
 ```bash
