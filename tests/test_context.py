@@ -115,9 +115,11 @@ class TestContextualize:
 class TestPatch:
     """Test patch() method for record modification."""
 
-    def test_patch_basic(self, logger_with_file: tuple[Logger, Path]) -> None:
+    def test_patch_basic(self, fresh_logger: Logger) -> None:
         """Test basic patcher function."""
-        logger, log_file = logger_with_file
+        logger = fresh_logger
+        records: list[dict[str, Any]] = []
+        logger.add_callback(records.append)
 
         def add_tag(record: dict[str, Any]) -> None:
             if "extra" not in record:
@@ -126,14 +128,15 @@ class TestPatch:
 
         patched = logger.patch(add_tag)
         patched.info("Patched message")
-        logger.complete()
 
-        content = log_file.read_text()
-        assert "Patched message" in content
+        assert records[0]["message"] == "Patched message"
+        assert records[0]["extra"]["tag"] == "patched"
 
-    def test_patch_chain(self, logger_with_file: tuple[Logger, Path]) -> None:
+    def test_patch_chain(self, fresh_logger: Logger) -> None:
         """Test chaining multiple patchers."""
-        logger, log_file = logger_with_file
+        logger = fresh_logger
+        records: list[dict[str, Any]] = []
+        logger.add_callback(records.append)
 
         def add_first(record: dict[str, Any]) -> None:
             if "extra" not in record:
@@ -147,10 +150,83 @@ class TestPatch:
 
         patched = logger.patch(add_first).patch(add_second)
         patched.info("Multi-patched")
-        logger.complete()
 
-        content = log_file.read_text()
-        assert "Multi-patched" in content
+        assert records[0]["message"] == "Multi-patched"
+        assert records[0]["extra"]["first"] == "1"
+        assert records[0]["extra"]["second"] == "2"
+
+    def test_patch_applies_before_filtered_handlers(self, fresh_logger: Logger) -> None:
+        """Patchers should run before handlers inspect the record."""
+        logger = fresh_logger
+        messages: list[str] = []
+
+        def allow_patched(record: dict[str, Any]) -> bool:
+            return record.get("extra", {}).get("tag") == "allow"
+
+        logger.add(messages.append, format="{message}", filter=allow_patched)
+
+        def add_tag(record: dict[str, Any]) -> None:
+            record["extra"]["tag"] = "allow"
+
+        logger.patch(add_tag).info("Allowed by patcher")
+
+        assert messages == ["Allowed by patcher"]
+
+    def test_patch_can_redact_bound_extra(self, fresh_logger: Logger) -> None:
+        """Patchers should be able to inspect and update bound context."""
+        logger = fresh_logger
+        records: list[dict[str, Any]] = []
+        logger.add_callback(records.append)
+
+        def redact_token(record: dict[str, Any]) -> None:
+            if record["extra"].get("access_token") == "SECRET":
+                record["extra"]["access_token"] = "***"
+
+        logger.bind(access_token="SECRET").patch(redact_token).info("redacted")
+
+        assert records[0]["extra"]["access_token"] == "***"
+
+    def test_patch_can_redact_contextualized_extra(self, fresh_logger: Logger) -> None:
+        """Temporary context should be visible to patchers."""
+        logger = fresh_logger
+        records: list[dict[str, Any]] = []
+        logger.add_callback(records.append)
+
+        def redact_token(record: dict[str, Any]) -> None:
+            if record["extra"].get("access_token") == "SECRET":
+                record["extra"]["access_token"] = "***"
+
+        patched = logger.patch(redact_token)
+        with patched.contextualize(access_token="SECRET"):
+            patched.info("redacted")
+
+        assert records[0]["extra"]["access_token"] == "***"
+
+    def test_patch_normalizes_extra_keys(self, fresh_logger: Logger) -> None:
+        """Patch-created extra keys should be safe for the Rust binder."""
+        logger = fresh_logger
+        records: list[dict[str, Any]] = []
+        logger.add_callback(records.append)
+
+        def add_numeric_key(record: dict[str, Any]) -> None:
+            record["extra"][123] = "numeric"
+
+        logger.patch(add_numeric_key).info("normalized")
+
+        assert records[0]["extra"]["123"] == "numeric"
+
+    def test_patch_can_hide_bound_extra_key(self, fresh_logger: Logger) -> None:
+        """Removing a patched extra key should hide the bound value from handlers."""
+        logger = fresh_logger
+        records: list[dict[str, Any]] = []
+        logger.add_callback(records.append)
+
+        def remove_token(record: dict[str, Any]) -> None:
+            record["extra"].pop("access_token", None)
+
+        logger.bind(access_token="SECRET").patch(remove_token).info("removed")
+
+        assert records[0]["extra"]["access_token"] == ""
 
     def test_patch_preserves_original(self, logger_with_file: tuple[Logger, Path]) -> None:
         """Test that patch() returns new logger."""
