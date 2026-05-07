@@ -1,10 +1,14 @@
 use std::collections::HashMap;
+use std::fmt;
 use std::io;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use chrono::{DateTime, Local};
 use pyo3::prelude::*;
+use pyo3::types::{PyBool, PyDict, PyFloat, PyInt, PyList, PyString, PyTuple};
+use serde::{Serialize, Serializer};
+use serde_json::{Map, Number, Value};
 
 use crate::format::{FormatConfig, TokenRequirements};
 use crate::level::{LevelInfo, LogLevel};
@@ -20,12 +24,125 @@ pub fn next_handler_id() -> u64 {
 }
 
 /// Empty context singleton to avoid allocations
-static EMPTY_CONTEXT: std::sync::LazyLock<Arc<HashMap<String, String>>> =
+static EMPTY_CONTEXT: std::sync::LazyLock<Arc<ExtraMap>> =
     std::sync::LazyLock::new(|| Arc::new(HashMap::new()));
+
+pub type ExtraMap = HashMap<String, ExtraValue>;
+
+/// Extra context value with text rendering compatibility and typed JSON output.
+#[derive(Clone, Debug)]
+pub struct ExtraValue {
+    text: String,
+    json: Value,
+}
+
+impl ExtraValue {
+    pub fn new(text: String, json: Value) -> Self {
+        Self { text, json }
+    }
+
+    pub fn from_py(value: &Bound<'_, PyAny>) -> PyResult<Self> {
+        let text = value.str()?.to_string();
+        let json = py_to_json_value(value)?;
+        Ok(Self { text, json })
+    }
+
+    #[inline]
+    pub fn as_str(&self) -> &str {
+        &self.text
+    }
+}
+
+impl From<String> for ExtraValue {
+    fn from(value: String) -> Self {
+        Self {
+            text: value.clone(),
+            json: Value::String(value),
+        }
+    }
+}
+
+impl From<&str> for ExtraValue {
+    fn from(value: &str) -> Self {
+        Self::from(value.to_string())
+    }
+}
+
+impl fmt::Display for ExtraValue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.text)
+    }
+}
+
+impl Serialize for ExtraValue {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.json.serialize(serializer)
+    }
+}
+
+fn py_to_json_value(value: &Bound<'_, PyAny>) -> PyResult<Value> {
+    if value.is_none() {
+        return Ok(Value::Null);
+    }
+
+    if value.cast::<PyBool>().is_ok() {
+        return Ok(Value::Bool(value.extract::<bool>()?));
+    }
+
+    if value.cast::<PyString>().is_ok() {
+        return Ok(Value::String(value.extract::<String>()?));
+    }
+
+    if value.cast::<PyInt>().is_ok() {
+        if let Ok(n) = value.extract::<i64>() {
+            return Ok(Value::Number(Number::from(n)));
+        }
+        if let Ok(n) = value.extract::<u64>() {
+            return Ok(Value::Number(Number::from(n)));
+        }
+        return Ok(Value::String(value.str()?.to_string()));
+    }
+
+    if value.cast::<PyFloat>().is_ok() {
+        let n = value.extract::<f64>()?;
+        return Ok(Number::from_f64(n).map(Value::Number).unwrap_or_else(|| {
+            Value::String(value.str().map(|s| s.to_string()).unwrap_or_default())
+        }));
+    }
+
+    if let Ok(list) = value.cast::<PyList>() {
+        let mut values = Vec::with_capacity(list.len());
+        for item in list.iter() {
+            values.push(py_to_json_value(&item)?);
+        }
+        return Ok(Value::Array(values));
+    }
+
+    if let Ok(tuple) = value.cast::<PyTuple>() {
+        let mut values = Vec::with_capacity(tuple.len());
+        for item in tuple.iter() {
+            values.push(py_to_json_value(&item)?);
+        }
+        return Ok(Value::Array(values));
+    }
+
+    if let Ok(dict) = value.cast::<PyDict>() {
+        let mut map = Map::with_capacity(dict.len());
+        for (key, value) in dict.iter() {
+            map.insert(key.str()?.to_string(), py_to_json_value(&value)?);
+        }
+        return Ok(Value::Object(map));
+    }
+
+    Ok(Value::String(value.str()?.to_string()))
+}
 
 /// Get empty context (zero-cost)
 #[inline]
-pub fn empty_context() -> Arc<HashMap<String, String>> {
+pub fn empty_context() -> Arc<ExtraMap> {
     Arc::clone(&EMPTY_CONTEXT)
 }
 
@@ -79,7 +196,7 @@ pub struct LogRecord {
     pub level: LogLevel,
     pub level_info: Option<LevelInfo>,
     pub message: String,
-    pub extra: Arc<HashMap<String, String>>,
+    pub extra: Arc<ExtraMap>,
     pub exception: Option<String>,
     pub caller: CallerInfo,
     pub thread: ThreadInfo,
@@ -103,11 +220,7 @@ impl LogRecord {
     }
 
     /// Create a new log record with extra context (Arc reference - zero-copy)
-    pub fn with_extra(
-        level: LogLevel,
-        message: String,
-        extra: Arc<HashMap<String, String>>,
-    ) -> Self {
+    pub fn with_extra(level: LogLevel, message: String, extra: Arc<ExtraMap>) -> Self {
         LogRecord {
             timestamp: Local::now(),
             level,
@@ -125,7 +238,7 @@ impl LogRecord {
     pub fn with_caller(
         level: LogLevel,
         message: String,
-        extra: Arc<HashMap<String, String>>,
+        extra: Arc<ExtraMap>,
         exception: Option<String>,
         caller: CallerInfo,
     ) -> Self {
@@ -146,7 +259,7 @@ impl LogRecord {
     pub fn with_all(
         level: LogLevel,
         message: String,
-        extra: Arc<HashMap<String, String>>,
+        extra: Arc<ExtraMap>,
         exception: Option<String>,
         caller: CallerInfo,
         thread: ThreadInfo,
@@ -169,7 +282,7 @@ impl LogRecord {
     pub fn with_exception(
         level: LogLevel,
         message: String,
-        extra: Arc<HashMap<String, String>>,
+        extra: Arc<ExtraMap>,
         exception: Option<String>,
     ) -> Self {
         LogRecord {
@@ -189,7 +302,7 @@ impl LogRecord {
     pub fn with_custom_level(
         level_info: LevelInfo,
         message: String,
-        extra: Arc<HashMap<String, String>>,
+        extra: Arc<ExtraMap>,
         exception: Option<String>,
     ) -> Self {
         LogRecord {
@@ -209,7 +322,7 @@ impl LogRecord {
     pub fn with_custom_level_and_caller(
         level_info: LevelInfo,
         message: String,
-        extra: Arc<HashMap<String, String>>,
+        extra: Arc<ExtraMap>,
         exception: Option<String>,
         caller: CallerInfo,
     ) -> Self {
@@ -230,7 +343,7 @@ impl LogRecord {
     pub fn with_custom_level_full(
         level_info: LevelInfo,
         message: String,
-        extra: Arc<HashMap<String, String>>,
+        extra: Arc<ExtraMap>,
         exception: Option<String>,
         caller: CallerInfo,
         thread: ThreadInfo,
