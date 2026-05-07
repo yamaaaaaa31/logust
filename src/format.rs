@@ -6,7 +6,7 @@ use chrono::{DateTime, Local};
 use colored::Color;
 use serde::Serialize;
 
-use crate::handler::LogRecord;
+use crate::handler::{ExtraMap, LogRecord};
 use crate::level::LogLevel;
 
 /// Logger initialization time for elapsed calculation
@@ -431,7 +431,7 @@ impl FormatConfig {
         timestamp: &DateTime<Local>,
         level: LogLevel,
         message: &str,
-        extra: &HashMap<String, String>,
+        extra: &ExtraMap,
         exception: &Option<String>,
         colorize: bool,
     ) -> String {
@@ -523,7 +523,7 @@ impl FormatConfig {
                 }
                 FormatToken::Extra(key) => {
                     if let Some(value) = record.extra.get(key) {
-                        result.push_str(value);
+                        result.push_str(value.as_str());
                     }
                 }
                 FormatToken::Name => {
@@ -612,7 +612,7 @@ impl FormatConfig {
             #[serde(skip_serializing_if = "is_zero")]
             line: u32,
             #[serde(skip_serializing_if = "HashMap::is_empty")]
-            extra: &'a HashMap<String, String>,
+            extra: &'a ExtraMap,
             #[serde(skip_serializing_if = "Option::is_none")]
             exception: &'a Option<String>,
         }
@@ -641,7 +641,7 @@ impl FormatConfig {
         timestamp: &DateTime<Local>,
         level: LogLevel,
         message: &str,
-        extra: &HashMap<String, String>,
+        extra: &ExtraMap,
         exception: &Option<String>,
         colorize: bool,
     ) -> String {
@@ -706,7 +706,7 @@ impl FormatConfig {
                 }
                 FormatToken::Extra(key) => {
                     if let Some(value) = extra.get(key) {
-                        result.push_str(value);
+                        result.push_str(value.as_str());
                     }
                 }
                 // These tokens are not available in this context (no caller/thread/process info)
@@ -735,7 +735,7 @@ impl FormatConfig {
         timestamp: &DateTime<Local>,
         level: LogLevel,
         message: &str,
-        extra: &HashMap<String, String>,
+        extra: &ExtraMap,
         exception: &Option<String>,
     ) -> String {
         #[derive(Serialize)]
@@ -744,7 +744,7 @@ impl FormatConfig {
             level: &'a str,
             message: &'a str,
             #[serde(skip_serializing_if = "HashMap::is_empty")]
-            extra: &'a HashMap<String, String>,
+            extra: &'a ExtraMap,
             #[serde(skip_serializing_if = "Option::is_none")]
             exception: &'a Option<String>,
         }
@@ -766,7 +766,7 @@ mod tests {
     use super::*;
 
     use crate::handler::empty_context;
-    use crate::handler::{CallerInfo, LogRecord, ProcessInfo, ThreadInfo};
+    use crate::handler::{CallerInfo, ExtraValue, LogRecord, ProcessInfo, ThreadInfo};
     use crate::level::LevelInfo;
 
     #[test]
@@ -814,7 +814,7 @@ mod tests {
             FormatConfig::new(Some("{message} - user={extra[user_id]}".to_string()), false);
         let now = Local::now();
         let mut extra = HashMap::new();
-        extra.insert("user_id".to_string(), "123".to_string());
+        extra.insert("user_id".to_string(), ExtraValue::from("123"));
 
         let result = config.format(&now, LogLevel::Info, "login", &extra, &None, false);
         assert_eq!(result, "login - user=123");

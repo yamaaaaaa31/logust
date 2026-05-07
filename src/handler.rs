@@ -1,10 +1,14 @@
 use std::collections::HashMap;
+use std::fmt;
 use std::io;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use chrono::{DateTime, Local};
 use pyo3::prelude::*;
+use pyo3::types::{PyBool, PyDict, PyFloat, PyInt, PyList, PyString, PyTuple};
+use serde::{Serialize, Serializer};
+use serde_json::{Map, Number, Value};
 
 use crate::format::{FormatConfig, TokenRequirements};
 use crate::level::{LevelInfo, LogLevel};
@@ -20,12 +24,221 @@ pub fn next_handler_id() -> u64 {
 }
 
 /// Empty context singleton to avoid allocations
-static EMPTY_CONTEXT: std::sync::LazyLock<Arc<HashMap<String, String>>> =
+static EMPTY_CONTEXT: std::sync::LazyLock<Arc<ExtraMap>> =
     std::sync::LazyLock::new(|| Arc::new(HashMap::new()));
+
+pub type ExtraMap = HashMap<String, ExtraValue>;
+
+/// Maximum recursion depth when converting Python containers to JSON values.
+/// Anything deeper is replaced with a sentinel string to avoid stack overflow
+/// on cyclic data structures (e.g. ORM back-references, dict containing itself).
+const MAX_JSON_DEPTH: usize = 32;
+
+/// Extra context value with text rendering compatibility and typed JSON output.
+///
+/// Two views are stored side-by-side:
+/// * `text` keeps loguru-compatible `str(value)` output for format-string
+///   `{extra[key]}` rendering and Python callbacks (`record["extra"][key]`).
+/// * `json` carries the original Python type (int, float, bool, list, dict,
+///   None) so JSON sinks emit native types instead of strings.
+#[derive(Clone, Debug)]
+pub struct ExtraValue {
+    text: String,
+    json: Value,
+}
+
+/// Classification of a Python value for fast-path `ExtraValue` construction.
+///
+/// Each variant carries the already-extracted Rust value so the match in
+/// `ExtraValue::from_py` can build both the text and json views without
+/// re-dispatching on the Python type.
+enum FastKind {
+    None,
+    Bool(bool),
+    Str(String),
+    I64(i64),
+    U64(u64),
+    /// No fast path applies — caller must use `value.str()` + full JSON dispatch.
+    Slow,
+}
+
+impl FastKind {
+    /// Try to classify `value` into a primitive variant; otherwise return `Slow`.
+    ///
+    /// Order matters: `PyBool` must be tested before `PyInt` because Python
+    /// `bool` subclasses `int`, and `True` would otherwise serialize as `1`.
+    #[inline(always)]
+    fn classify(value: &Bound<'_, PyAny>) -> PyResult<Self> {
+        if value.is_none() {
+            return Ok(Self::None);
+        }
+        if value.cast::<PyBool>().is_ok() {
+            return Ok(Self::Bool(value.extract()?));
+        }
+        if let Ok(s) = value.cast::<PyString>() {
+            return Ok(Self::Str(s.to_str()?.to_owned()));
+        }
+        if value.cast::<PyInt>().is_ok() {
+            if let Ok(n) = value.extract::<i64>() {
+                return Ok(Self::I64(n));
+            }
+            if let Ok(n) = value.extract::<u64>() {
+                return Ok(Self::U64(n));
+            }
+            // Big int: fall through to slow path so text/json agree on the
+            // string fallback.
+        }
+        Ok(Self::Slow)
+    }
+}
+
+impl ExtraValue {
+    pub fn from_py(value: &Bound<'_, PyAny>) -> PyResult<Self> {
+        match FastKind::classify(value)? {
+            FastKind::None => Ok(Self {
+                text: "None".to_string(),
+                json: Value::Null,
+            }),
+            FastKind::Bool(b) => Ok(Self {
+                text: if b { "True" } else { "False" }.to_string(),
+                json: Value::Bool(b),
+            }),
+            FastKind::Str(s) => Ok(Self {
+                json: Value::String(s.clone()),
+                text: s,
+            }),
+            FastKind::I64(n) => Ok(Self {
+                text: n.to_string(),
+                json: Value::Number(Number::from(n)),
+            }),
+            FastKind::U64(n) => Ok(Self {
+                text: n.to_string(),
+                json: Value::Number(Number::from(n)),
+            }),
+            FastKind::Slow => {
+                let text = value.str()?.to_string();
+                let json = py_to_json_value(value, 0)?;
+                Ok(Self { text, json })
+            }
+        }
+    }
+
+    #[inline]
+    pub fn as_str(&self) -> &str {
+        &self.text
+    }
+
+    #[inline]
+    pub fn as_json(&self) -> &Value {
+        &self.json
+    }
+}
+
+impl From<String> for ExtraValue {
+    fn from(value: String) -> Self {
+        Self {
+            text: value.clone(),
+            json: Value::String(value),
+        }
+    }
+}
+
+impl From<&str> for ExtraValue {
+    fn from(value: &str) -> Self {
+        Self::from(value.to_string())
+    }
+}
+
+impl fmt::Display for ExtraValue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.text)
+    }
+}
+
+impl Serialize for ExtraValue {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.json.serialize(serializer)
+    }
+}
+
+fn py_to_json_value(value: &Bound<'_, PyAny>, depth: usize) -> PyResult<Value> {
+    if depth >= MAX_JSON_DEPTH {
+        return Ok(Value::String("<recursion limit reached>".to_string()));
+    }
+
+    if value.is_none() {
+        return Ok(Value::Null);
+    }
+    // PyBool must be checked before PyInt because `bool` is a subclass of `int`
+    // in Python — otherwise `True` would serialize as `1`.
+    if value.cast::<PyBool>().is_ok() {
+        return Ok(Value::Bool(value.extract::<bool>()?));
+    }
+    if value.cast::<PyString>().is_ok() {
+        return Ok(Value::String(value.extract::<String>()?));
+    }
+    if value.cast::<PyInt>().is_ok() {
+        return py_int_to_json(value);
+    }
+    if value.cast::<PyFloat>().is_ok() {
+        return py_float_to_json(value);
+    }
+    if let Ok(list) = value.cast::<PyList>() {
+        return py_seq_to_json(list.iter(), list.len(), depth + 1);
+    }
+    if let Ok(tuple) = value.cast::<PyTuple>() {
+        return py_seq_to_json(tuple.iter(), tuple.len(), depth + 1);
+    }
+    if let Ok(dict) = value.cast::<PyDict>() {
+        return py_dict_to_json(dict, depth + 1);
+    }
+
+    Ok(Value::String(value.str()?.to_string()))
+}
+
+fn py_int_to_json(value: &Bound<'_, PyAny>) -> PyResult<Value> {
+    if let Ok(n) = value.extract::<i64>() {
+        return Ok(Value::Number(Number::from(n)));
+    }
+    if let Ok(n) = value.extract::<u64>() {
+        return Ok(Value::Number(Number::from(n)));
+    }
+    Ok(Value::String(value.str()?.to_string()))
+}
+
+fn py_float_to_json(value: &Bound<'_, PyAny>) -> PyResult<Value> {
+    let n = value.extract::<f64>()?;
+    Ok(Number::from_f64(n)
+        .map(Value::Number)
+        .unwrap_or_else(|| Value::String(value.str().map(|s| s.to_string()).unwrap_or_default())))
+}
+
+fn py_seq_to_json<'py>(
+    iter: impl Iterator<Item = Bound<'py, PyAny>>,
+    capacity: usize,
+    depth: usize,
+) -> PyResult<Value> {
+    let mut values = Vec::with_capacity(capacity);
+    for item in iter {
+        values.push(py_to_json_value(&item, depth)?);
+    }
+    Ok(Value::Array(values))
+}
+
+fn py_dict_to_json(dict: &Bound<'_, PyDict>, depth: usize) -> PyResult<Value> {
+    let mut map = Map::with_capacity(dict.len());
+    for (key, value) in dict.iter() {
+        map.insert(key.str()?.to_string(), py_to_json_value(&value, depth)?);
+    }
+    Ok(Value::Object(map))
+}
 
 /// Get empty context (zero-cost)
 #[inline]
-pub fn empty_context() -> Arc<HashMap<String, String>> {
+pub fn empty_context() -> Arc<ExtraMap> {
     Arc::clone(&EMPTY_CONTEXT)
 }
 
@@ -79,7 +292,7 @@ pub struct LogRecord {
     pub level: LogLevel,
     pub level_info: Option<LevelInfo>,
     pub message: String,
-    pub extra: Arc<HashMap<String, String>>,
+    pub extra: Arc<ExtraMap>,
     pub exception: Option<String>,
     pub caller: CallerInfo,
     pub thread: ThreadInfo,
@@ -103,11 +316,7 @@ impl LogRecord {
     }
 
     /// Create a new log record with extra context (Arc reference - zero-copy)
-    pub fn with_extra(
-        level: LogLevel,
-        message: String,
-        extra: Arc<HashMap<String, String>>,
-    ) -> Self {
+    pub fn with_extra(level: LogLevel, message: String, extra: Arc<ExtraMap>) -> Self {
         LogRecord {
             timestamp: Local::now(),
             level,
@@ -125,7 +334,7 @@ impl LogRecord {
     pub fn with_caller(
         level: LogLevel,
         message: String,
-        extra: Arc<HashMap<String, String>>,
+        extra: Arc<ExtraMap>,
         exception: Option<String>,
         caller: CallerInfo,
     ) -> Self {
@@ -146,7 +355,7 @@ impl LogRecord {
     pub fn with_all(
         level: LogLevel,
         message: String,
-        extra: Arc<HashMap<String, String>>,
+        extra: Arc<ExtraMap>,
         exception: Option<String>,
         caller: CallerInfo,
         thread: ThreadInfo,
@@ -169,7 +378,7 @@ impl LogRecord {
     pub fn with_exception(
         level: LogLevel,
         message: String,
-        extra: Arc<HashMap<String, String>>,
+        extra: Arc<ExtraMap>,
         exception: Option<String>,
     ) -> Self {
         LogRecord {
@@ -189,7 +398,7 @@ impl LogRecord {
     pub fn with_custom_level(
         level_info: LevelInfo,
         message: String,
-        extra: Arc<HashMap<String, String>>,
+        extra: Arc<ExtraMap>,
         exception: Option<String>,
     ) -> Self {
         LogRecord {
@@ -209,7 +418,7 @@ impl LogRecord {
     pub fn with_custom_level_and_caller(
         level_info: LevelInfo,
         message: String,
-        extra: Arc<HashMap<String, String>>,
+        extra: Arc<ExtraMap>,
         exception: Option<String>,
         caller: CallerInfo,
     ) -> Self {
@@ -230,7 +439,7 @@ impl LogRecord {
     pub fn with_custom_level_full(
         level_info: LevelInfo,
         message: String,
-        extra: Arc<HashMap<String, String>>,
+        extra: Arc<ExtraMap>,
         exception: Option<String>,
         caller: CallerInfo,
         thread: ThreadInfo,

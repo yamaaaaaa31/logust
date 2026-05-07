@@ -14,8 +14,8 @@ use pyo3::types::{PyDict, PyTuple};
 
 pub use format::{FormatConfig, LOGGER_START_TIME, TokenRequirements, format_elapsed};
 pub use handler::{
-    CallerInfo, ConsoleHandler, FileHandler, HandlerEntry, HandlerType, LogRecord, ProcessInfo,
-    ThreadInfo, empty_context,
+    CallerInfo, ConsoleHandler, ExtraMap, ExtraValue, FileHandler, HandlerEntry, HandlerType,
+    LogRecord, ProcessInfo, ThreadInfo, empty_context,
 };
 pub use level::{LevelInfo, LogLevel, get_level_by_no, get_level_info, register_level};
 pub use sink::{FileSink, FileSinkConfig, Rotation};
@@ -189,7 +189,7 @@ pub struct PyLogger {
     /// All handlers (console + files)
     handlers: Arc<RwLock<Vec<HandlerEntry>>>,
     /// Bound context (extra fields) - immutable after creation for zero-copy sharing
-    context: Arc<HashMap<String, String>>,
+    context: Arc<ExtraMap>,
     /// Registered callbacks
     callbacks: Arc<RwLock<Vec<CallbackEntry>>>,
     /// Cached minimum log level across all handlers and callbacks (shared via Arc)
@@ -352,8 +352,7 @@ impl PyLogger {
                 let mut ctx = (*self.context).clone();
                 for (key, value) in dict.iter() {
                     let key_str: String = key.extract()?;
-                    let value_str: String = value.str()?.to_string();
-                    ctx.insert(key_str, value_str);
+                    ctx.insert(key_str, ExtraValue::from_py(&value)?);
                 }
                 Arc::new(ctx)
             }
