@@ -57,6 +57,47 @@ impl ExtraValue {
     }
 
     pub fn from_py(value: &Bound<'_, PyAny>) -> PyResult<Self> {
+        // Fast paths for the common primitive cases. Each branch produces both
+        // views without going through `value.str()` + a separate dispatch pass.
+        // Order matters: PyBool must be tested before PyInt because `bool` is
+        // a subclass of `int` in Python.
+        if value.is_none() {
+            return Ok(Self {
+                text: "None".to_string(),
+                json: Value::Null,
+            });
+        }
+        if value.cast::<PyBool>().is_ok() {
+            let b = value.extract::<bool>()?;
+            return Ok(Self {
+                text: if b { "True".to_string() } else { "False".to_string() },
+                json: Value::Bool(b),
+            });
+        }
+        if let Ok(s) = value.downcast::<PyString>() {
+            let owned = s.to_str()?.to_owned();
+            return Ok(Self {
+                json: Value::String(owned.clone()),
+                text: owned,
+            });
+        }
+        if value.cast::<PyInt>().is_ok() {
+            if let Ok(n) = value.extract::<i64>() {
+                return Ok(Self {
+                    text: n.to_string(),
+                    json: Value::Number(Number::from(n)),
+                });
+            }
+            if let Ok(n) = value.extract::<u64>() {
+                return Ok(Self {
+                    text: n.to_string(),
+                    json: Value::Number(Number::from(n)),
+                });
+            }
+            // Big int: fall through to slow path so text/json agree on the
+            // string fallback.
+        }
+
         let text = value.str()?.to_string();
         let json = py_to_json_value(value, 0)?;
         Ok(Self { text, json })
