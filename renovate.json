@@ -25,22 +25,29 @@
     {
       "description": "Python dev tools",
       "matchManagers": ["pep621"],
-      "matchPackagePatterns": ["^mypy", "^ruff", "^pytest", "^prek"],
       "groupName": "python-dev",
       "addLabels": ["python"],
       "commitMessagePrefix": "chore(deps):",
       "automerge": true,
-      "matchUpdateTypes": ["minor", "patch"]
+      "matchUpdateTypes": ["minor", "patch"],
+      "matchPackageNames": [
+        "/^mypy/",
+        "/^ruff/",
+        "/^pytest/",
+        "/^prek/"
+      ]
     },
     {
       "description": "Python docs tools",
       "matchManagers": ["pep621"],
-      "matchPackagePatterns": ["^mkdocs"],
       "groupName": "python-docs",
       "addLabels": ["python"],
       "commitMessagePrefix": "chore(deps):",
       "automerge": true,
-      "matchUpdateTypes": ["minor", "patch"]
+      "matchUpdateTypes": ["minor", "patch"],
+      "matchPackageNames": [
+        "/^mkdocs/"
+      ]
     },
     {
       "description": "GitHub Actions - automerge minor/patch",
