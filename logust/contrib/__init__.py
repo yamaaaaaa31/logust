@@ -4,6 +4,7 @@ This module provides zero-config utilities that make logust even easier to use:
 
 - InterceptHandler: Redirect standard logging to logust
 - log_fn / debug_fn: Function timing decorators
+- add_event_fields / TailSampler: Canonical event helpers
 - Starlette/FastAPI middleware (optional)
 
 Example:
@@ -21,11 +22,25 @@ Example:
 from __future__ import annotations
 
 from .decorators import debug_fn, log_fn
+from .events import (
+    TailSampler,
+    add_event_fields,
+    canonical_event,
+    clear_event_fields,
+    get_current_event,
+    get_event_fields,
+)
 from .logging_handler import InterceptHandler, intercept_logging
 
 __all__ = [
     "InterceptHandler",
+    "TailSampler",
+    "add_event_fields",
+    "canonical_event",
+    "clear_event_fields",
     "debug_fn",
+    "get_current_event",
+    "get_event_fields",
     "intercept_logging",
     "log_fn",
 ]

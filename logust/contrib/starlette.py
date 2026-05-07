@@ -20,7 +20,8 @@ from __future__ import annotations
 import re
 import time
 import uuid
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from contextlib import AbstractContextManager, nullcontext
 from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any, ClassVar
 
@@ -37,6 +38,11 @@ except ImportError as e:
 
 if TYPE_CHECKING:
     from logust import Logger
+
+    from .events import TailSampler
+
+from .events import TailSampler as _TailSampler
+from .events import canonical_event
 
 _request_id: ContextVar[str] = ContextVar("logust_request_id", default="")
 
@@ -88,6 +94,9 @@ class RequestLoggerMiddleware(BaseHTTPMiddleware):  # type: ignore[misc]
         ...     max_body_size=1000,
         ...     mask_sensitive_data=True,
         ... )
+        >>>
+        >>> # One structured event per request with tail sampling
+        >>> app.add_middleware(RequestLoggerMiddleware, canonical=True, sample_rate=0.05)
     """
 
     _SENSITIVE_KEYS: ClassVar[set[str]] = {
@@ -116,6 +125,11 @@ class RequestLoggerMiddleware(BaseHTTPMiddleware):  # type: ignore[misc]
         max_body_size: int = 1000,
         mask_sensitive_data: bool = True,
         logger: Logger | None = None,
+        canonical: bool = False,
+        sample_rate: float = 1.0,
+        slow_ms: float | None = None,
+        always_keep_errors: bool = True,
+        sampler: TailSampler | Callable[[Mapping[str, Any]], bool] | None = None,
     ) -> None:
         """Initialize the middleware.
 
@@ -128,6 +142,16 @@ class RequestLoggerMiddleware(BaseHTTPMiddleware):  # type: ignore[misc]
                 Must be greater than or equal to 0.
             mask_sensitive_data: Whether to mask sensitive fields in body.
             logger: Custom logust logger instance. If None, uses default.
+            canonical: Emit one canonical event at request completion instead
+                of start/response text logs.
+            sample_rate: Fraction of normal canonical events to keep. Must be
+                between 0.0 and 1.0.
+            slow_ms: Always keep canonical events at or above this duration.
+                Must be greater than or equal to 0 when provided.
+            always_keep_errors: Always keep 5xx and exception events.
+            sampler: Custom sampler. Accepts either TailSampler or a predicate
+                returning True when the canonical event should be logged. When
+                provided, it replaces sample_rate/slow_ms/always_keep_errors.
         """
         if max_body_size < 0:
             raise ValueError("max_body_size must be greater than or equal to 0")
@@ -138,6 +162,8 @@ class RequestLoggerMiddleware(BaseHTTPMiddleware):  # type: ignore[misc]
         self._max_body_size = max_body_size
         self._mask_sensitive_data = mask_sensitive_data
         self._logger = logger
+        self._canonical = canonical
+        self._sampler = _build_sampler(sample_rate, slow_ms, always_keep_errors, sampler)
         super().__init__(app)
 
     @property
@@ -168,7 +194,7 @@ class RequestLoggerMiddleware(BaseHTTPMiddleware):  # type: ignore[misc]
     async def _log_request(self, request: Request, call_next: Callable[[Request], Any]) -> Response:
         """Log the request and response with timing."""
         request_id = self._get_request_id(request)
-        _request_id.set(request_id)
+        request_id_token = _request_id.set(request_id)
 
         start_time = time.perf_counter()
         client_ip = self._get_client_ip(request)
@@ -177,23 +203,181 @@ class RequestLoggerMiddleware(BaseHTTPMiddleware):  # type: ignore[misc]
         if self._include_request_body and request.method in self._BODY_METHODS:
             body_log = await self._get_request_body(request)
 
-        with self.logger.contextualize(request_id=request_id, path=request.url.path):
-            self._log_request_start(request, client_ip, body_log)
+        event_context: AbstractContextManager[dict[str, Any] | None]
+        if self._canonical:
+            base_event = self._build_base_event(request, request_id, client_ip, body_log)
+            event_context = canonical_event(base_event)
+        else:
+            event_context = nullcontext(None)
 
-            try:
-                response = await call_next(request)
-            except Exception as e:
+        try:
+            with event_context as event:
+                with self.logger.contextualize(request_id=request_id, path=request.url.path):
+                    if not self._canonical:
+                        self._log_request_start(request, client_ip, body_log)
+
+                    try:
+                        response = await call_next(request)
+                    except Exception as e:
+                        elapsed = time.perf_counter() - start_time
+                        if event is not None:
+                            event.update(
+                                self._build_error_event(
+                                    request,
+                                    elapsed,
+                                    client_ip,
+                                    e,
+                                )
+                            )
+                            self._emit_canonical_event(event)
+                        else:
+                            self.logger.error(
+                                f"Request failed: {request.method} {request.url.path} "
+                                f"error={e.__class__.__name__} time={elapsed:.4f}s ip={client_ip}"
+                            )
+                        raise
+
                 elapsed = time.perf_counter() - start_time
-                self.logger.error(
-                    f"Request failed: {request.method} {request.url.path} "
-                    f"error={e.__class__.__name__} time={elapsed:.4f}s ip={client_ip}"
-                )
-                raise
+                if event is not None:
+                    event.update(self._build_response_event(request, response, elapsed))
+                    self._emit_canonical_event(event)
+                else:
+                    self._log_response(request, response, elapsed, client_ip)
 
-            elapsed = time.perf_counter() - start_time
-            self._log_response(request, response, elapsed, client_ip)
+                return response
+        finally:
+            _request_id.reset(request_id_token)
 
-            return response
+    def _build_base_event(
+        self,
+        request: Request,
+        request_id: str,
+        client_ip: str,
+        body: str,
+    ) -> dict[str, Any]:
+        """Build canonical fields known at request start."""
+        event: dict[str, Any] = {
+            "event": "http.request",
+            "request_id": request_id,
+            "method": request.method,
+            "path": request.url.path,
+            "route": self._get_route_path(request),
+            "client_ip": client_ip,
+        }
+
+        user_agent = request.headers.get("user-agent")
+        if user_agent:
+            event["user_agent"] = user_agent
+
+        trace_id, span_id = self._get_trace_context(request)
+        if trace_id:
+            event["trace_id"] = trace_id
+        if span_id:
+            event["span_id"] = span_id
+
+        if request.query_params:
+            event["query"] = self._format_query_params(request.query_params)
+        if body:
+            event["request_body"] = body
+
+        return event
+
+    def _build_response_event(
+        self,
+        request: Request,
+        response: Response,
+        elapsed: float,
+    ) -> dict[str, Any]:
+        """Build canonical fields known at response completion."""
+        status_code = response.status_code
+        return {
+            "route": self._get_route_path(request),
+            "status_code": status_code,
+            "duration_ms": round(elapsed * 1000, 3),
+            "outcome": self._outcome_for_status(status_code),
+        }
+
+    def _build_error_event(
+        self,
+        request: Request,
+        elapsed: float,
+        client_ip: str,
+        error: Exception,
+    ) -> dict[str, Any]:
+        """Build canonical fields for an exception path."""
+        return {
+            "status_code": 500,
+            "duration_ms": round(elapsed * 1000, 3),
+            "outcome": "error",
+            "error.type": error.__class__.__name__,
+            "error.message": str(error),
+            "method": request.method,
+            "path": request.url.path,
+            "route": self._get_route_path(request),
+            "client_ip": client_ip,
+        }
+
+    def _emit_canonical_event(self, event: dict[str, Any]) -> None:
+        """Emit a completed canonical event if the sampler keeps it."""
+        if not self._should_keep_event(event):
+            return
+
+        status_code = event.get("status_code", 0)
+        if isinstance(status_code, str):
+            try:
+                status_code = int(status_code)
+            except ValueError:
+                status_code = 0
+
+        if status_code >= 500 or event.get("outcome") == "error":
+            self.logger.error("http.request", **event)
+        elif status_code >= 400:
+            self.logger.warning("http.request", **event)
+        else:
+            self.logger.info("http.request", **event)
+
+    def _should_keep_event(self, event: dict[str, Any]) -> bool:
+        """Return whether the canonical event should be logged."""
+        if isinstance(self._sampler, _TailSampler):
+            return self._sampler.should_keep(event)
+        return bool(self._sampler(event))
+
+    @staticmethod
+    def _get_route_path(request: Request) -> str:
+        """Return the framework route template when available."""
+        scope = getattr(request, "scope", None)
+        if isinstance(scope, dict):
+            route = scope.get("route")
+            route_path = getattr(route, "path", None)
+            if isinstance(route_path, str) and route_path:
+                return route_path
+        return str(request.url.path)
+
+    @staticmethod
+    def _get_trace_context(request: Request) -> tuple[str | None, str | None]:
+        """Extract W3C traceparent IDs when available."""
+        traceparent = request.headers.get("traceparent")
+        if not traceparent:
+            return None, None
+
+        parts = traceparent.split("-")
+        if len(parts) < 4:
+            return None, None
+
+        trace_id = parts[1]
+        span_id = parts[2]
+        if len(trace_id) != 32 or len(span_id) != 16:
+            return None, None
+        return trace_id, span_id
+
+    @staticmethod
+    def _outcome_for_status(status_code: int) -> str:
+        """Return a compact outcome value for a response status."""
+        if status_code >= 500:
+            return "error"
+        if status_code >= 400:
+            return "client_error"
+        return "success"
 
     def _log_request_start(self, request: Request, client_ip: str, body: str) -> None:
         """Log the start of a request."""
@@ -341,11 +525,17 @@ def setup_fastapi(
     skip_regexes: Sequence[str] | None = None,
     include_request_body: bool = False,
     intercept_logging: bool = True,
+    canonical: bool = False,
+    sample_rate: float = 1.0,
+    slow_ms: float | None = None,
+    always_keep_errors: bool = True,
+    sampler: TailSampler | Callable[[Mapping[str, Any]], bool] | None = None,
 ) -> None:
     """One-liner setup for FastAPI applications.
 
     This function sets up:
     - RequestLoggerMiddleware for request/response logging
+    - Optional canonical request events with tail sampling
     - Standard logging interception (optional)
     - Request ID contextualization
 
@@ -355,6 +545,14 @@ def setup_fastapi(
         skip_regexes: Regex patterns to skip logging for.
         include_request_body: Whether to log request bodies.
         intercept_logging: Whether to redirect standard logging to logust.
+        canonical: Emit one canonical event per request.
+        sample_rate: Fraction of normal canonical events to keep. Must be
+            between 0.0 and 1.0.
+        slow_ms: Always keep canonical events at or above this duration. Must be
+            greater than or equal to 0 when provided.
+        always_keep_errors: Always keep 5xx and exception events.
+        sampler: Custom canonical event sampler. When provided, it replaces
+            sample_rate/slow_ms/always_keep_errors.
 
     Example:
         >>> from fastapi import FastAPI
@@ -373,9 +571,34 @@ def setup_fastapi(
         skip_routes=skip_routes,
         skip_regexes=skip_regexes,
         include_request_body=include_request_body,
+        canonical=canonical,
+        sample_rate=sample_rate,
+        slow_ms=slow_ms,
+        always_keep_errors=always_keep_errors,
+        sampler=sampler,
     )
 
     if intercept_logging:
         from .logging_handler import intercept_logging as do_intercept
 
         do_intercept()
+
+
+def _build_sampler(
+    sample_rate: float,
+    slow_ms: float | None,
+    always_keep_errors: bool,
+    sampler: TailSampler | Callable[[Mapping[str, Any]], bool] | None,
+) -> TailSampler | Callable[[Mapping[str, Any]], bool]:
+    """Normalize canonical sampling configuration."""
+    if sampler is None:
+        return _TailSampler(
+            rate=sample_rate,
+            slow_ms=slow_ms,
+            always_keep_errors=always_keep_errors,
+        )
+    if isinstance(sampler, _TailSampler):
+        return sampler
+    if not callable(sampler):
+        raise TypeError("sampler must be a TailSampler or callable")
+    return sampler

@@ -68,6 +68,7 @@ nav:
       - Context Binding: guide/context.md
       - Exception Handling: guide/exceptions.md
       - Integrations: guide/integrations.md
+      - Canonical Events: guide/canonical-events.md
   - API Reference: api.md
   - Comparison: comparison.md
 
