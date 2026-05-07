@@ -1,14 +1,18 @@
 name: Deploy Docs
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - 'docs/**'
-      - 'mkdocs.yml'
-      - '.github/workflows/docs.yml'
+  release:
+    types: [published]
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version label (e.g. 0.3.2). Leave empty to deploy "dev".'
+        required: false
+        default: ''
+      set_latest:
+        description: 'Update the "latest" alias to this version.'
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -18,6 +22,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: Configure Git
         run: |
@@ -33,12 +39,39 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-mkdocs-material
+          key: ${{ runner.os }}-pip-mkdocs-material-mike
           restore-keys: |
             ${{ runner.os }}-pip-
 
       - name: Install dependencies
-        run: pip install mkdocs-material mkdocstrings[python] mkdocs-minify-plugin
+        run: pip install mkdocs-material mkdocstrings[python] mkdocs-minify-plugin mike
 
-      - name: Deploy to GitHub Pages
-        run: mkdocs gh-deploy --force
+      - name: Resolve version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            tag="${{ github.event.release.tag_name }}"
+            version="${tag#v}"
+            echo "version=$version" >> "$GITHUB_OUTPUT"
+            echo "alias=latest" >> "$GITHUB_OUTPUT"
+          else
+            version="${{ inputs.version }}"
+            if [ -z "$version" ]; then
+              version="dev"
+            fi
+            echo "version=$version" >> "$GITHUB_OUTPUT"
+            if [ "${{ inputs.set_latest }}" = "true" ]; then
+              echo "alias=latest" >> "$GITHUB_OUTPUT"
+            else
+              echo "alias=" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+
+      - name: Deploy with mike
+        run: |
+          if [ -n "${{ steps.version.outputs.alias }}" ]; then
+            mike deploy --push --update-aliases "${{ steps.version.outputs.version }}" "${{ steps.version.outputs.alias }}"
+            mike set-default --push "${{ steps.version.outputs.alias }}"
+          else
+            mike deploy --push "${{ steps.version.outputs.version }}"
+          fi
