@@ -568,6 +568,47 @@ def test_repeated_backreferences_stop_at_container_identity(tmp_path: Path) -> N
     assert record["extra"]["data"] == {"a": sentinel, "b": sentinel}
 
 
+def test_self_referential_list_uses_sentinel(tmp_path: Path) -> None:
+    inner = PyLogger(LogLevel.Trace)
+    logger = Logger(inner)
+    logger.disable()
+    log_file = tmp_path / "list-cycle.json"
+    logger.add(log_file, serialize=True)
+
+    cyclic: list[Any] = []
+    cyclic.append(cyclic)
+
+    start = perf_counter()
+    logger.info("cycle", data=cyclic)
+    logger.complete()
+    elapsed = perf_counter() - start
+
+    record = json.loads(log_file.read_text(encoding="utf-8"))
+    assert elapsed < 2.0
+    assert record["extra"]["data"] == ["<recursion limit reached>"]
+
+
+def test_cross_container_cycle_uses_sentinel(tmp_path: Path) -> None:
+    inner = PyLogger(LogLevel.Trace)
+    logger = Logger(inner)
+    logger.disable()
+    log_file = tmp_path / "cross-cycle.json"
+    logger.add(log_file, serialize=True)
+
+    a: dict[str, Any] = {}
+    b: list[Any] = [a]
+    a["b"] = b
+
+    start = perf_counter()
+    logger.info("cycle", data=a)
+    logger.complete()
+    elapsed = perf_counter() - start
+
+    record = json.loads(log_file.read_text(encoding="utf-8"))
+    assert elapsed < 2.0
+    assert record["extra"]["data"] == {"b": ["<recursion limit reached>"]}
+
+
 def test_extra_format_token_renders_as_string(tmp_path: Path) -> None:
     """``{extra[key]}`` in format templates must keep stringified output."""
     inner = PyLogger(LogLevel.Trace)

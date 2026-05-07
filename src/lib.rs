@@ -1091,18 +1091,12 @@ impl PyLogger {
                     .any(|e| level >= e.level && matches!(&e.kind, CallbackKind::Serialized));
 
                 let shared_text_full: Option<Bound<'_, PyDict>> = if need_text_full_dict {
-                    Some(
-                        Self::build_record_dict(py, level, &record, RecordExtraView::Text)
-                            .expect("build_record_dict"),
-                    )
+                    Self::build_record_dict(py, level, &record, RecordExtraView::Text).ok()
                 } else {
                     None
                 };
                 let shared_json_full: Option<Bound<'_, PyDict>> = if need_json_full_dict {
-                    Some(
-                        Self::build_record_dict(py, level, &record, RecordExtraView::Json)
-                            .expect("build_record_dict"),
-                    )
+                    Self::build_record_dict(py, level, &record, RecordExtraView::Json).ok()
                 } else {
                     None
                 };
@@ -1113,21 +1107,20 @@ impl PyLogger {
                     }
                     match &entry.kind {
                         CallbackKind::Raw => {
-                            let full = shared_text_full
-                                .as_ref()
-                                .expect("raw callback implies full dict was built");
-                            let _ = entry.callback.call1(py, (full.clone(),));
+                            if let Some(full) = shared_text_full.as_ref() {
+                                let _ = entry.callback.call1(py, (full.clone(),));
+                            }
                         }
                         CallbackKind::Serialized => {
-                            let full = shared_json_full
-                                .as_ref()
-                                .expect("serialized callback implies full dict was built");
-                            let _ = entry.callback.call1(py, (full.clone(),));
+                            if let Some(full) = shared_json_full.as_ref() {
+                                let _ = entry.callback.call1(py, (full.clone(),));
+                            }
                         }
                         CallbackKind::FormattedLight(req) => {
-                            let mini = Self::build_mini_record_dict(py, level, &record, req)
-                                .expect("build_mini_record_dict");
-                            let _ = entry.callback.call1(py, (mini,));
+                            if let Ok(mini) = Self::build_mini_record_dict(py, level, &record, req)
+                            {
+                                let _ = entry.callback.call1(py, (mini,));
+                            }
                         }
                     }
                 }
@@ -1136,10 +1129,9 @@ impl PyLogger {
                     if level < entry.handler.level() {
                         continue;
                     }
-                    if let Some(ref filter) = entry.filter {
-                        let full = shared_text_full
-                            .as_ref()
-                            .expect("handler filter implies full dict was built");
+                    if let Some(ref filter) = entry.filter
+                        && let Some(full) = shared_text_full.as_ref()
+                    {
                         let passes = filter
                             .call1(py, (full.clone(),))
                             .and_then(|result| result.is_truthy(py))
@@ -1374,18 +1366,12 @@ impl PyLogger {
                 });
 
                 let shared_text_full: Option<Bound<'_, PyDict>> = if need_text_full_dict {
-                    Some(
-                        Self::build_custom_record_dict(py, &record, RecordExtraView::Text)
-                            .expect("build_custom_record_dict"),
-                    )
+                    Self::build_custom_record_dict(py, &record, RecordExtraView::Text).ok()
                 } else {
                     None
                 };
                 let shared_json_full: Option<Bound<'_, PyDict>> = if need_json_full_dict {
-                    Some(
-                        Self::build_custom_record_dict(py, &record, RecordExtraView::Json)
-                            .expect("build_custom_record_dict"),
-                    )
+                    Self::build_custom_record_dict(py, &record, RecordExtraView::Json).ok()
                 } else {
                     None
                 };
@@ -1393,14 +1379,12 @@ impl PyLogger {
                 for entry in callbacks.iter() {
                     if level_no >= entry.level as u32 {
                         let full = match &entry.kind {
-                            CallbackKind::Serialized => shared_json_full
-                                .as_ref()
-                                .expect("serialized callback implies full dict was built"),
-                            _ => shared_text_full
-                                .as_ref()
-                                .expect("callback implies full dict was built"),
+                            CallbackKind::Serialized => shared_json_full.as_ref(),
+                            _ => shared_text_full.as_ref(),
                         };
-                        let _ = entry.callback.call1(py, (full.clone(),));
+                        if let Some(full) = full {
+                            let _ = entry.callback.call1(py, (full.clone(),));
+                        }
                     }
                 }
 
@@ -1408,10 +1392,9 @@ impl PyLogger {
                     if level_no < entry.handler.level() as u32 {
                         continue;
                     }
-                    if let Some(ref filter) = entry.filter {
-                        let full = shared_text_full
-                            .as_ref()
-                            .expect("handler filter implies full dict was built");
+                    if let Some(ref filter) = entry.filter
+                        && let Some(full) = shared_text_full.as_ref()
+                    {
                         let passes = filter
                             .call1(py, (full.clone(),))
                             .and_then(|result| result.is_truthy(py))
