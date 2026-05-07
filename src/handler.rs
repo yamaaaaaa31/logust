@@ -47,60 +47,80 @@ pub struct ExtraValue {
     json: Value,
 }
 
-impl ExtraValue {
-    /// Construct an `ExtraValue` from explicit text and JSON views.
-    ///
-    /// Crate-internal — outside callers should use `from_py` or `From<&str>`
-    /// to keep `text` and `json` in sync.
-    pub(crate) fn new(text: String, json: Value) -> Self {
-        Self { text, json }
-    }
+/// Classification of a Python value for fast-path `ExtraValue` construction.
+///
+/// Each variant carries the already-extracted Rust value so the match in
+/// `ExtraValue::from_py` can build both the text and json views without
+/// re-dispatching on the Python type.
+enum FastKind {
+    None,
+    Bool(bool),
+    Str(String),
+    I64(i64),
+    U64(u64),
+    /// No fast path applies — caller must use `value.str()` + full JSON dispatch.
+    Slow,
+}
 
-    pub fn from_py(value: &Bound<'_, PyAny>) -> PyResult<Self> {
-        // Fast paths for the common primitive cases. Each branch produces both
-        // views without going through `value.str()` + a separate dispatch pass.
-        // Order matters: PyBool must be tested before PyInt because `bool` is
-        // a subclass of `int` in Python.
+impl FastKind {
+    /// Try to classify `value` into a primitive variant; otherwise return `Slow`.
+    ///
+    /// Order matters: `PyBool` must be tested before `PyInt` because Python
+    /// `bool` subclasses `int`, and `True` would otherwise serialize as `1`.
+    #[inline(always)]
+    fn classify(value: &Bound<'_, PyAny>) -> PyResult<Self> {
         if value.is_none() {
-            return Ok(Self {
-                text: "None".to_string(),
-                json: Value::Null,
-            });
+            return Ok(Self::None);
         }
         if value.cast::<PyBool>().is_ok() {
-            let b = value.extract::<bool>()?;
-            return Ok(Self {
-                text: if b { "True".to_string() } else { "False".to_string() },
-                json: Value::Bool(b),
-            });
+            return Ok(Self::Bool(value.extract()?));
         }
-        if let Ok(s) = value.downcast::<PyString>() {
-            let owned = s.to_str()?.to_owned();
-            return Ok(Self {
-                json: Value::String(owned.clone()),
-                text: owned,
-            });
+        if let Ok(s) = value.cast::<PyString>() {
+            return Ok(Self::Str(s.to_str()?.to_owned()));
         }
         if value.cast::<PyInt>().is_ok() {
             if let Ok(n) = value.extract::<i64>() {
-                return Ok(Self {
-                    text: n.to_string(),
-                    json: Value::Number(Number::from(n)),
-                });
+                return Ok(Self::I64(n));
             }
             if let Ok(n) = value.extract::<u64>() {
-                return Ok(Self {
-                    text: n.to_string(),
-                    json: Value::Number(Number::from(n)),
-                });
+                return Ok(Self::U64(n));
             }
             // Big int: fall through to slow path so text/json agree on the
             // string fallback.
         }
+        Ok(Self::Slow)
+    }
+}
 
-        let text = value.str()?.to_string();
-        let json = py_to_json_value(value, 0)?;
-        Ok(Self { text, json })
+impl ExtraValue {
+    pub fn from_py(value: &Bound<'_, PyAny>) -> PyResult<Self> {
+        match FastKind::classify(value)? {
+            FastKind::None => Ok(Self {
+                text: "None".to_string(),
+                json: Value::Null,
+            }),
+            FastKind::Bool(b) => Ok(Self {
+                text: if b { "True" } else { "False" }.to_string(),
+                json: Value::Bool(b),
+            }),
+            FastKind::Str(s) => Ok(Self {
+                json: Value::String(s.clone()),
+                text: s,
+            }),
+            FastKind::I64(n) => Ok(Self {
+                text: n.to_string(),
+                json: Value::Number(Number::from(n)),
+            }),
+            FastKind::U64(n) => Ok(Self {
+                text: n.to_string(),
+                json: Value::Number(Number::from(n)),
+            }),
+            FastKind::Slow => {
+                let text = value.str()?.to_string();
+                let json = py_to_json_value(value, 0)?;
+                Ok(Self { text, json })
+            }
+        }
     }
 
     #[inline]
@@ -152,59 +172,68 @@ fn py_to_json_value(value: &Bound<'_, PyAny>, depth: usize) -> PyResult<Value> {
     if value.is_none() {
         return Ok(Value::Null);
     }
-
     // PyBool must be checked before PyInt because `bool` is a subclass of `int`
     // in Python — otherwise `True` would serialize as `1`.
     if value.cast::<PyBool>().is_ok() {
         return Ok(Value::Bool(value.extract::<bool>()?));
     }
-
     if value.cast::<PyString>().is_ok() {
         return Ok(Value::String(value.extract::<String>()?));
     }
-
     if value.cast::<PyInt>().is_ok() {
-        if let Ok(n) = value.extract::<i64>() {
-            return Ok(Value::Number(Number::from(n)));
-        }
-        if let Ok(n) = value.extract::<u64>() {
-            return Ok(Value::Number(Number::from(n)));
-        }
-        return Ok(Value::String(value.str()?.to_string()));
+        return py_int_to_json(value);
     }
-
     if value.cast::<PyFloat>().is_ok() {
-        let n = value.extract::<f64>()?;
-        return Ok(Number::from_f64(n).map(Value::Number).unwrap_or_else(|| {
-            Value::String(value.str().map(|s| s.to_string()).unwrap_or_default())
-        }));
+        return py_float_to_json(value);
     }
-
     if let Ok(list) = value.cast::<PyList>() {
-        let mut values = Vec::with_capacity(list.len());
-        for item in list.iter() {
-            values.push(py_to_json_value(&item, depth + 1)?);
-        }
-        return Ok(Value::Array(values));
+        return py_seq_to_json(list.iter(), list.len(), depth + 1);
     }
-
     if let Ok(tuple) = value.cast::<PyTuple>() {
-        let mut values = Vec::with_capacity(tuple.len());
-        for item in tuple.iter() {
-            values.push(py_to_json_value(&item, depth + 1)?);
-        }
-        return Ok(Value::Array(values));
+        return py_seq_to_json(tuple.iter(), tuple.len(), depth + 1);
     }
-
     if let Ok(dict) = value.cast::<PyDict>() {
-        let mut map = Map::with_capacity(dict.len());
-        for (key, value) in dict.iter() {
-            map.insert(key.str()?.to_string(), py_to_json_value(&value, depth + 1)?);
-        }
-        return Ok(Value::Object(map));
+        return py_dict_to_json(dict, depth + 1);
     }
 
     Ok(Value::String(value.str()?.to_string()))
+}
+
+fn py_int_to_json(value: &Bound<'_, PyAny>) -> PyResult<Value> {
+    if let Ok(n) = value.extract::<i64>() {
+        return Ok(Value::Number(Number::from(n)));
+    }
+    if let Ok(n) = value.extract::<u64>() {
+        return Ok(Value::Number(Number::from(n)));
+    }
+    Ok(Value::String(value.str()?.to_string()))
+}
+
+fn py_float_to_json(value: &Bound<'_, PyAny>) -> PyResult<Value> {
+    let n = value.extract::<f64>()?;
+    Ok(Number::from_f64(n)
+        .map(Value::Number)
+        .unwrap_or_else(|| Value::String(value.str().map(|s| s.to_string()).unwrap_or_default())))
+}
+
+fn py_seq_to_json<'py>(
+    iter: impl Iterator<Item = Bound<'py, PyAny>>,
+    capacity: usize,
+    depth: usize,
+) -> PyResult<Value> {
+    let mut values = Vec::with_capacity(capacity);
+    for item in iter {
+        values.push(py_to_json_value(&item, depth)?);
+    }
+    Ok(Value::Array(values))
+}
+
+fn py_dict_to_json(dict: &Bound<'_, PyDict>, depth: usize) -> PyResult<Value> {
+    let mut map = Map::with_capacity(dict.len());
+    for (key, value) in dict.iter() {
+        map.insert(key.str()?.to_string(), py_to_json_value(&value, depth)?);
+    }
+    Ok(Value::Object(map))
 }
 
 /// Get empty context (zero-cost)
