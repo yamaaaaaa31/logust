@@ -23,7 +23,7 @@ import uuid
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractContextManager, nullcontext
 from contextvars import ContextVar
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 try:
     from starlette.middleware.base import BaseHTTPMiddleware
@@ -65,7 +65,7 @@ def get_request_id() -> str:
     return _request_id.get()
 
 
-class RequestLoggerMiddleware(BaseHTTPMiddleware):  # type: ignore[misc]
+class RequestLoggerMiddleware(BaseHTTPMiddleware):
     """Middleware that logs HTTP requests and responses.
 
     Features:
@@ -178,7 +178,7 @@ class RequestLoggerMiddleware(BaseHTTPMiddleware):  # type: ignore[misc]
     async def dispatch(self, request: Request, call_next: Callable[[Request], Any]) -> Response:
         """Process the request and log timing information."""
         if self._should_skip(request):
-            return await call_next(request)
+            return cast(Response, await call_next(request))
 
         return await self._log_request(request, call_next)
 
@@ -217,7 +217,7 @@ class RequestLoggerMiddleware(BaseHTTPMiddleware):  # type: ignore[misc]
                         self._log_request_start(request, client_ip, body_log)
 
                     try:
-                        response = await call_next(request)
+                        response = cast(Response, await call_next(request))
                     except Exception as e:
                         elapsed = time.perf_counter() - start_time
                         if event is not None:
@@ -237,12 +237,12 @@ class RequestLoggerMiddleware(BaseHTTPMiddleware):  # type: ignore[misc]
                             )
                         raise
 
-                elapsed = time.perf_counter() - start_time
-                if event is not None:
-                    event.update(self._build_response_event(request, response, elapsed))
-                    self._emit_canonical_event(event)
-                else:
-                    self._log_response(request, response, elapsed, client_ip)
+                    elapsed = time.perf_counter() - start_time
+                    if event is not None:
+                        event.update(self._build_response_event(request, response, elapsed))
+                        self._emit_canonical_event(event)
+                    else:
+                        self._log_response(request, response, elapsed, client_ip)
 
                 return response
         finally:

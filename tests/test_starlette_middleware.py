@@ -10,6 +10,9 @@ from typing import Any
 
 import pytest
 
+from logust._logger import Logger
+from logust._logust import LogLevel, PyLogger
+
 
 def _load_starlette_module(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
     """Load the Starlette integration with lightweight dependency stubs."""
@@ -118,6 +121,30 @@ def test_request_id_falls_back_to_short_uuid_without_header(
     assigned = logger.contexts[0]["request_id"]
     assert len(assigned) == 8
     assert all(c in "0123456789abcdef" for c in assigned)
+
+
+def test_response_log_keeps_request_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_starlette_module(monkeypatch)
+    inner = PyLogger(LogLevel.Trace)
+    logger = Logger(inner)
+    logger.disable()
+    records: list[dict[str, Any]] = []
+    logger.add_callback(records.append, level=LogLevel.Trace)
+    middleware = module.RequestLoggerMiddleware(object(), logger=logger)
+    request = _request(request_id="req-abc")
+
+    async def call_next(_request: Any) -> Any:
+        return SimpleNamespace(status_code=201)
+
+    asyncio.run(middleware._log_request(request, call_next))
+
+    response_record = next(
+        record for record in records if record["message"].startswith("Request successful:")
+    )
+    assert response_record["extra"]["request_id"] == "req-abc"
+    assert response_record["extra"]["path"] == "/items"
 
 
 def test_max_body_size_rejects_negative_values(
