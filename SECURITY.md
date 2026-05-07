@@ -4,7 +4,8 @@
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 0.1.x   | :white_check_mark: |
+| 0.3.x   | :white_check_mark: |
+| < 0.3   | :x:                |
 
 ## Reporting a Vulnerability
 
@@ -102,7 +103,7 @@ We monitor for security advisories in our dependencies and update promptly when 
 
 ## Security Updates
 
-Security updates will be released as patch versions (e.g., 0.1.1, 0.1.2) and announced via:
+Security updates will be released as patch versions (e.g., 0.3.2, 0.3.3) and announced via:
 
 - GitHub Security Advisories
 - Release notes

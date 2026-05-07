@@ -1,6 +1,6 @@
 """Logust - A fast, Rust-powered Python logging library inspired by loguru.
 
-Version: 0.3.0
+Version: 0.3.2
 
 Usage:
     >>> import logust
@@ -78,7 +78,7 @@ if TYPE_CHECKING:
     def critical(message: str, *, exception: str | None = None, **kwargs: Any) -> None: ...
 
 
-__version__ = "0.3.1"
+__version__ = "0.3.2"
 
 logger = Logger(_rust_logger)
 

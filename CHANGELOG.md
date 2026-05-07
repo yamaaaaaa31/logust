@@ -7,8 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-05-07
+
 ### Added
-- **Loguru-style kwargs-to-extra in log methods**: `logger.info("user {id}", id=1, action="x")` now formats the message with `str.format` and attaches any kwargs not consumed by the message placeholders to `record["extra"]` for that call only (no persistent bind). Works on `trace` / `debug` / `info` / `success` / `warning` / `error` / `fail` / `critical` / `log` / `exception`. When the level is disabled, `message.format(**kwargs)` is skipped entirely via the existing `min_level` early-return, so disabled-level calls never trigger format work or `__format__`-side effects. Field root detection treats `{0abc}` and other non-decimal roots as keyword references. Implementation is Python-only — no Rust or `.pyi` changes — and per-call extra values are coerced to strings via the same path as `bind()`.
+- **Loguru-style kwargs-to-extra in log methods**: `logger.info("user {id}", id=1, action="x")` now formats the message with `str.format` and attaches any kwargs not consumed by the message placeholders to `record["extra"]` for that call only (no persistent bind). Works on `trace` / `debug` / `info` / `success` / `warning` / `error` / `fail` / `critical` / `log` / `exception`. When the level is disabled, `message.format(**kwargs)` is skipped entirely via the existing `min_level` early-return, so disabled-level calls never trigger format work or `__format__`-side effects. Field root detection treats `{0abc}` and other non-decimal roots as keyword references. Implementation is Python-only — no Rust or `.pyi` changes — and per-call extra values are coerced to strings via the same path as `bind()`. (#25)
+- **`logust.contrib.starlette` honors incoming `x-request-id` header**: `RequestLoggerMiddleware` now propagates the upstream `x-request-id` header value as the request id when present, falling back to the existing 8-char `uuid4` otherwise. Improves log correlation across reverse proxies. Visible behavior change for users behind proxies that already set the header — log ids will look different from before. (#28)
+- **Optional extras `[starlette]` and `[fastapi]`**: `pip install "logust[starlette]"` / `pip install "logust[fastapi]"` install the framework alongside Logust so `logust.contrib.starlette` works without extra steps. (#29)
+
+### Fixed
+- **Patcher pipeline runs before handlers see the record**: `Logger.patch()` previously registered a callback that was never invoked before records reached filters or sinks, so security-sensitive transforms (e.g. token redaction) were silently dropped. `_log_with_level` and the dynamic-level `log()` path now run patchers before binding extras, normalize patched-extra keys to `str` for the Rust binder, and blank removed keys (`""`) so a patcher can hide a value previously bound via `bind()` / `contextualize()`. Behavior fix: code that relied on the silent drop (unlikely) will now see patchers run. (#26)
+- **Starlette middleware no longer leaks secrets via query strings or partial JSON bodies**: `query_params` was logged as a plain `dict(...)`, exposing `access_token` / `password` / etc. in cleartext. Body masking ran *after* truncation, so a request that exceeded `max_body_size` could still log the unmasked head. Query params are now masked through the same sensitive-key check as headers, multi-value params are preserved, and bodies are masked first then truncated. (#26)
+- **File retention no longer deletes unrelated same-stem files**: The retention scan in `src/sink.rs` used `filename.starts_with(stem)`, so a sibling like `app.keep`, `app.log.bak`, or even `application.log` next to `app.log` was eligible for deletion. Matching is now strict: only filenames matching the generated rotation pattern `{stem}.{YYYY-MM-DD_HH-MM-SS}_{micros}.pid{N}.{ext}[.gz]` are considered. (#26)
+
+### Changed
+- **`RequestLoggerMiddleware` rejects negative `max_body_size`**: `__init__` now raises `ValueError` when `max_body_size < 0` instead of silently producing surprising slicing behavior. (#28)
 
 ## [0.3.1] - 2026-04-23
 
@@ -119,7 +131,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 1.3x faster than Python standard logging
 - Lock-free fast path for filtered messages
 
-[Unreleased]: https://github.com/yamaaaaaa31/logust/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/yamaaaaaa31/logust/compare/v0.3.2...HEAD
+[0.3.2]: https://github.com/yamaaaaaa31/logust/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/yamaaaaaa31/logust/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/yamaaaaaa31/logust/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/yamaaaaaa31/logust/releases/tag/v0.2.1
