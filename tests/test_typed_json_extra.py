@@ -7,6 +7,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 from enum import Enum, IntEnum
 from pathlib import Path
+from time import perf_counter
 from typing import Any
 from uuid import UUID
 
@@ -26,6 +27,28 @@ def _json_extra(tmp_path: Path, filename: str, **extra: Any) -> dict[str, Any]:
     logger.complete()
 
     return json.loads(log_file.read_text(encoding="utf-8"))["extra"]
+
+
+def _text_callback_and_json_extra(
+    tmp_path: Path, key: str, value: Any
+) -> tuple[str, Any, dict[str, Any]]:
+    inner = PyLogger(LogLevel.Trace)
+    logger = Logger(inner)
+    logger.disable()
+
+    text_file = tmp_path / f"{key}.log"
+    json_file = tmp_path / f"{key}.json"
+    records: list[dict[str, Any]] = []
+    logger.add(text_file, format=f"{{extra[{key}]}}|{{message}}")
+    logger.add_callback(records.append, level=LogLevel.Trace)
+    logger.add(json_file, serialize=True)
+
+    logger.info("typed", **{key: value})
+    logger.complete()
+
+    text = text_file.read_text(encoding="utf-8").strip()
+    json_extra = json.loads(json_file.read_text(encoding="utf-8"))["extra"]
+    return text, records[0]["extra"][key], json_extra
 
 
 def test_json_file_preserves_extra_value_types(tmp_path: Path) -> None:
@@ -69,6 +92,69 @@ def test_callback_extra_values_remain_string_compatible() -> None:
     logger.info("typed", status_code=201, ok=True)
 
     assert records[0]["extra"] == {"status_code": "201", "ok": "True"}
+
+
+def test_serialized_callable_sink_receives_typed_extra_values() -> None:
+    inner = PyLogger(LogLevel.Trace)
+    logger = Logger(inner)
+    logger.disable()
+    messages: list[str] = []
+    logger.add(messages.append, level=LogLevel.Trace, serialize=True)
+
+    logger.info(
+        "typed",
+        status_code=201,
+        ok=True,
+        ratio=0.5,
+        tags=["a", 1],
+        meta={"k": False},
+        missing=None,
+        body=b"hi",
+    )
+
+    record = json.loads(messages[0])
+    assert record["extra"] == {
+        "status_code": 201,
+        "ok": True,
+        "ratio": 0.5,
+        "tags": ["a", 1],
+        "meta": {"k": False},
+        "missing": None,
+        "body": "hi",
+    }
+
+
+def test_non_serialized_callable_sink_filter_keeps_string_extra_values() -> None:
+    inner = PyLogger(LogLevel.Trace)
+    logger = Logger(inner)
+    logger.disable()
+    messages: list[str] = []
+    records: list[dict[str, Any]] = []
+
+    def capture(record: dict[str, Any]) -> bool:
+        records.append(record)
+        return True
+
+    logger.add(messages.append, level=LogLevel.Trace, format="{message}", filter=capture)
+    logger.info(
+        "typed",
+        status_code=201,
+        ok=True,
+        tags=["a", 1],
+        meta={"k": False},
+        missing=None,
+        body=b"hi",
+    )
+
+    assert messages == ["typed"]
+    assert records[0]["extra"] == {
+        "status_code": "201",
+        "ok": "True",
+        "tags": "['a', 1]",
+        "meta": "{'k': False}",
+        "missing": "None",
+        "body": "b'hi'",
+    }
 
 
 def test_string_passthrough_in_json(tmp_path: Path) -> None:
@@ -274,6 +360,63 @@ def test_int_enum_and_str_enum_use_values_in_json(tmp_path: Path) -> None:
     assert extra == {"code": 201, "action": "login"}
 
 
+def test_str_subclass_text_uses_python_str_and_json_uses_underlying_value(
+    tmp_path: Path,
+) -> None:
+    class S(str):
+        def __str__(self) -> str:
+            return "custom"
+
+    text, callback_value, extra = _text_callback_and_json_extra(tmp_path, "s", S("raw"))
+
+    assert text == "custom|typed"
+    assert callback_value == "custom"
+    assert extra["s"] == "raw"
+
+
+def test_int_enum_text_uses_python_str_and_json_uses_underlying_value(
+    tmp_path: Path,
+) -> None:
+    class Code(IntEnum):
+        CREATED = 201
+
+        def __str__(self) -> str:
+            return "Code.CREATED"
+
+    text, callback_value, extra = _text_callback_and_json_extra(tmp_path, "code", Code.CREATED)
+
+    assert text == "Code.CREATED|typed"
+    assert callback_value == "Code.CREATED"
+    assert extra["code"] == 201
+
+
+def test_str_enum_text_uses_python_str_and_json_uses_underlying_value(
+    tmp_path: Path,
+) -> None:
+    class Action(str, Enum):
+        LOGIN = "login"
+
+    text, callback_value, extra = _text_callback_and_json_extra(tmp_path, "action", Action.LOGIN)
+
+    assert text == "Action.LOGIN|typed"
+    assert callback_value == "Action.LOGIN"
+    assert extra["action"] == "login"
+
+
+def test_int_subclass_text_uses_python_str_and_json_uses_underlying_value(
+    tmp_path: Path,
+) -> None:
+    class IntSubclass(int):
+        def __str__(self) -> str:
+            return "I-custom"
+
+    text, callback_value, extra = _text_callback_and_json_extra(tmp_path, "i", IntSubclass(7))
+
+    assert text == "I-custom|typed"
+    assert callback_value == "I-custom"
+    assert extra["i"] == 7
+
+
 def test_text_view_unchanged_for_enum(tmp_path: Path) -> None:
     class Status(Enum):
         OK = "ok"
@@ -399,6 +542,71 @@ def test_recursive_structure_does_not_crash(tmp_path: Path) -> None:
     record = json.loads(raw)
     assert "<recursion limit reached>" in raw
     assert record["extra"]["data"]["name"] == "root"
+
+
+def test_repeated_backreferences_stop_at_container_identity(tmp_path: Path) -> None:
+    inner = PyLogger(LogLevel.Trace)
+    logger = Logger(inner)
+    logger.disable()
+    log_file = tmp_path / "shared-cycle.json"
+    logger.add(log_file, serialize=True)
+
+    cyclic: dict[str, Any] = {}
+    cyclic["a"] = cyclic
+    cyclic["b"] = cyclic
+
+    start = perf_counter()
+    logger.info("cycle", data=cyclic)
+    logger.complete()
+    elapsed = perf_counter() - start
+
+    raw = log_file.read_text(encoding="utf-8")
+    record = json.loads(raw)
+    sentinel = "<recursion limit reached>"
+    assert elapsed < 2.0
+    assert raw.count(sentinel) == 2
+    assert record["extra"]["data"] == {"a": sentinel, "b": sentinel}
+
+
+def test_self_referential_list_uses_sentinel(tmp_path: Path) -> None:
+    inner = PyLogger(LogLevel.Trace)
+    logger = Logger(inner)
+    logger.disable()
+    log_file = tmp_path / "list-cycle.json"
+    logger.add(log_file, serialize=True)
+
+    cyclic: list[Any] = []
+    cyclic.append(cyclic)
+
+    start = perf_counter()
+    logger.info("cycle", data=cyclic)
+    logger.complete()
+    elapsed = perf_counter() - start
+
+    record = json.loads(log_file.read_text(encoding="utf-8"))
+    assert elapsed < 2.0
+    assert record["extra"]["data"] == ["<recursion limit reached>"]
+
+
+def test_cross_container_cycle_uses_sentinel(tmp_path: Path) -> None:
+    inner = PyLogger(LogLevel.Trace)
+    logger = Logger(inner)
+    logger.disable()
+    log_file = tmp_path / "cross-cycle.json"
+    logger.add(log_file, serialize=True)
+
+    a: dict[str, Any] = {}
+    b: list[Any] = [a]
+    a["b"] = b
+
+    start = perf_counter()
+    logger.info("cycle", data=a)
+    logger.complete()
+    elapsed = perf_counter() - start
+
+    record = json.loads(log_file.read_text(encoding="utf-8"))
+    assert elapsed < 2.0
+    assert record["extra"]["data"] == {"b": ["<recursion limit reached>"]}
 
 
 def test_extra_format_token_renders_as_string(tmp_path: Path) -> None:

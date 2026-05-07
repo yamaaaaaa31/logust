@@ -135,6 +135,14 @@ class PyLogger:
         """Add a callback to receive log records."""
         ...
 
+    def add_serialized_callback(
+        self,
+        callback: Callable[[dict[str, Any]], None],
+        level: LogLevel | None = None,
+    ) -> int:
+        """Add a serialized callable sink with typed JSON extras."""
+        ...
+
     def add_formatted_sink_callback(
         self,
         callback: Callable[[dict[str, Any]], None],
