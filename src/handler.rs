@@ -29,7 +29,18 @@ static EMPTY_CONTEXT: std::sync::LazyLock<Arc<ExtraMap>> =
 
 pub type ExtraMap = HashMap<String, ExtraValue>;
 
+/// Maximum recursion depth when converting Python containers to JSON values.
+/// Anything deeper is replaced with a sentinel string to avoid stack overflow
+/// on cyclic data structures (e.g. ORM back-references, dict containing itself).
+const MAX_JSON_DEPTH: usize = 32;
+
 /// Extra context value with text rendering compatibility and typed JSON output.
+///
+/// Two views are stored side-by-side:
+/// * `text` keeps loguru-compatible `str(value)` output for format-string
+///   `{extra[key]}` rendering and Python callbacks (`record["extra"][key]`).
+/// * `json` carries the original Python type (int, float, bool, list, dict,
+///   None) so JSON sinks emit native types instead of strings.
 #[derive(Clone, Debug)]
 pub struct ExtraValue {
     text: String,
@@ -37,19 +48,28 @@ pub struct ExtraValue {
 }
 
 impl ExtraValue {
-    pub fn new(text: String, json: Value) -> Self {
+    /// Construct an `ExtraValue` from explicit text and JSON views.
+    ///
+    /// Crate-internal — outside callers should use `from_py` or `From<&str>`
+    /// to keep `text` and `json` in sync.
+    pub(crate) fn new(text: String, json: Value) -> Self {
         Self { text, json }
     }
 
     pub fn from_py(value: &Bound<'_, PyAny>) -> PyResult<Self> {
         let text = value.str()?.to_string();
-        let json = py_to_json_value(value)?;
+        let json = py_to_json_value(value, 0)?;
         Ok(Self { text, json })
     }
 
     #[inline]
     pub fn as_str(&self) -> &str {
         &self.text
+    }
+
+    #[inline]
+    pub fn as_json(&self) -> &Value {
+        &self.json
     }
 }
 
@@ -83,11 +103,17 @@ impl Serialize for ExtraValue {
     }
 }
 
-fn py_to_json_value(value: &Bound<'_, PyAny>) -> PyResult<Value> {
+fn py_to_json_value(value: &Bound<'_, PyAny>, depth: usize) -> PyResult<Value> {
+    if depth >= MAX_JSON_DEPTH {
+        return Ok(Value::String("<recursion limit reached>".to_string()));
+    }
+
     if value.is_none() {
         return Ok(Value::Null);
     }
 
+    // PyBool must be checked before PyInt because `bool` is a subclass of `int`
+    // in Python — otherwise `True` would serialize as `1`.
     if value.cast::<PyBool>().is_ok() {
         return Ok(Value::Bool(value.extract::<bool>()?));
     }
@@ -116,7 +142,7 @@ fn py_to_json_value(value: &Bound<'_, PyAny>) -> PyResult<Value> {
     if let Ok(list) = value.cast::<PyList>() {
         let mut values = Vec::with_capacity(list.len());
         for item in list.iter() {
-            values.push(py_to_json_value(&item)?);
+            values.push(py_to_json_value(&item, depth + 1)?);
         }
         return Ok(Value::Array(values));
     }
@@ -124,7 +150,7 @@ fn py_to_json_value(value: &Bound<'_, PyAny>) -> PyResult<Value> {
     if let Ok(tuple) = value.cast::<PyTuple>() {
         let mut values = Vec::with_capacity(tuple.len());
         for item in tuple.iter() {
-            values.push(py_to_json_value(&item)?);
+            values.push(py_to_json_value(&item, depth + 1)?);
         }
         return Ok(Value::Array(values));
     }
@@ -132,7 +158,7 @@ fn py_to_json_value(value: &Bound<'_, PyAny>) -> PyResult<Value> {
     if let Ok(dict) = value.cast::<PyDict>() {
         let mut map = Map::with_capacity(dict.len());
         for (key, value) in dict.iter() {
-            map.insert(key.str()?.to_string(), py_to_json_value(&value)?);
+            map.insert(key.str()?.to_string(), py_to_json_value(&value, depth + 1)?);
         }
         return Ok(Value::Object(map));
     }
