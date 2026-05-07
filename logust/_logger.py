@@ -947,7 +947,7 @@ class Logger:
         if resolved_emit < self._inner.min_level:
             return
 
-        extra_kw: dict[str, Any] | None = None
+        extra_kw = None
         if kwargs:
             message, extra_kw = _split_kwargs_for_format(message, kwargs)
             if not extra_kw:
