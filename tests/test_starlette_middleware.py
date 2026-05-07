@@ -1,0 +1,128 @@
+"""Tests for RequestLoggerMiddleware general behavior."""
+
+from __future__ import annotations
+
+import asyncio
+import importlib
+import sys
+from types import ModuleType, SimpleNamespace
+from typing import Any
+
+import pytest
+
+
+def _load_starlette_module(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
+    """Load the Starlette integration with lightweight dependency stubs."""
+    starlette = ModuleType("starlette")
+    middleware = ModuleType("starlette.middleware")
+    middleware_base = ModuleType("starlette.middleware.base")
+    requests = ModuleType("starlette.requests")
+    responses = ModuleType("starlette.responses")
+    types = ModuleType("starlette.types")
+
+    class BaseHTTPMiddleware:
+        def __init__(self, app: Any) -> None:
+            self.app = app
+
+    class Request:
+        pass
+
+    class Response:
+        status_code = 200
+
+    middleware_base.BaseHTTPMiddleware = BaseHTTPMiddleware
+    requests.Request = Request
+    responses.Response = Response
+    types.ASGIApp = object
+
+    monkeypatch.setitem(sys.modules, "starlette", starlette)
+    monkeypatch.setitem(sys.modules, "starlette.middleware", middleware)
+    monkeypatch.setitem(sys.modules, "starlette.middleware.base", middleware_base)
+    monkeypatch.setitem(sys.modules, "starlette.requests", requests)
+    monkeypatch.setitem(sys.modules, "starlette.responses", responses)
+    monkeypatch.setitem(sys.modules, "starlette.types", types)
+    sys.modules.pop("logust.contrib.starlette", None)
+    return importlib.import_module("logust.contrib.starlette")
+
+
+class CapturingLogger:
+    def __init__(self) -> None:
+        self.records: list[tuple[str, str]] = []
+        self.contexts: list[dict[str, Any]] = []
+
+    def info(self, message: str) -> None:
+        self.records.append(("info", message))
+
+    def warning(self, message: str) -> None:
+        self.records.append(("warning", message))
+
+    def error(self, message: str) -> None:
+        self.records.append(("error", message))
+
+    def contextualize(self, **kwargs: Any) -> Any:
+        self.contexts.append(kwargs)
+
+        class _Ctx:
+            def __enter__(self_inner: Any) -> None:
+                return None
+
+            def __exit__(self_inner: Any, *exc: Any) -> None:
+                return None
+
+        return _Ctx()
+
+
+def _request(*, request_id: str | None) -> SimpleNamespace:
+    headers: dict[str, str] = {}
+    if request_id is not None:
+        headers["x-request-id"] = request_id
+    return SimpleNamespace(
+        method="GET",
+        url=SimpleNamespace(path="/items"),
+        headers=headers,
+        query_params=None,
+        client=SimpleNamespace(host="127.0.0.1"),
+    )
+
+
+def test_request_id_uses_incoming_header_when_present(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_starlette_module(monkeypatch)
+    logger = CapturingLogger()
+    middleware = module.RequestLoggerMiddleware(object(), logger=logger)
+    request = _request(request_id="upstream-id-1234")
+
+    async def call_next(_request: Any) -> Any:
+        assert module.get_request_id() == "upstream-id-1234"
+        return SimpleNamespace(status_code=200)
+
+    asyncio.run(middleware._log_request(request, call_next))
+
+    assert logger.contexts[0]["request_id"] == "upstream-id-1234"
+
+
+def test_request_id_falls_back_to_short_uuid_without_header(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_starlette_module(monkeypatch)
+    logger = CapturingLogger()
+    middleware = module.RequestLoggerMiddleware(object(), logger=logger)
+    request = _request(request_id=None)
+
+    async def call_next(_request: Any) -> Any:
+        return SimpleNamespace(status_code=200)
+
+    asyncio.run(middleware._log_request(request, call_next))
+
+    assigned = logger.contexts[0]["request_id"]
+    assert len(assigned) == 8
+    assert all(c in "0123456789abcdef" for c in assigned)
+
+
+def test_max_body_size_rejects_negative_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_starlette_module(monkeypatch)
+    with pytest.raises(ValueError, match="max_body_size"):
+        module.RequestLoggerMiddleware(object(), max_body_size=-1)
