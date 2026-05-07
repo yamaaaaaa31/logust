@@ -1,0 +1,28 @@
+:root {
+  --logust-brand: #7c3aed;
+  --logust-accent: #a855f7;
+}
+
+.md-typeset h1,
+.md-typeset h2,
+.md-typeset h3,
+.md-typeset h4 {
+  letter-spacing: -0.01em;
+}
+
+.md-typeset .md-button,
+.md-typeset .md-button--primary {
+  border-radius: 6px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.md-typeset .md-button--primary {
+  background: var(--logust-brand);
+  border-color: var(--logust-brand);
+}
+
+.md-typeset .md-button--primary:hover {
+  background: #6d28d9;
+  border-color: #6d28d9;
+}
