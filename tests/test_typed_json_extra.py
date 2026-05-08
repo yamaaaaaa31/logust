@@ -124,6 +124,26 @@ def test_serialized_callable_sink_receives_typed_extra_values() -> None:
     }
 
 
+def test_serialized_callable_sink_filter_sees_text_view() -> None:
+    inner = PyLogger(LogLevel.Trace)
+    logger = Logger(inner)
+    logger.disable()
+    messages: list[str] = []
+    seen_by_filter: list[Any] = []
+
+    def keep_201(record: dict[str, Any]) -> bool:
+        seen_by_filter.append(record["extra"]["status_code"])
+        return record["extra"]["status_code"] == "201"
+
+    logger.add(messages.append, level=LogLevel.Trace, serialize=True, filter=keep_201)
+    logger.info("typed", status_code=201)
+    logger.info("typed", status_code=500)
+
+    assert seen_by_filter == ["201", "500"]
+    assert len(messages) == 1
+    assert json.loads(messages[0])["extra"] == {"status_code": "201"}
+
+
 def test_non_serialized_callable_sink_filter_keeps_string_extra_values() -> None:
     inner = PyLogger(LogLevel.Trace)
     logger = Logger(inner)

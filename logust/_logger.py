@@ -1319,7 +1319,9 @@ class Logger:
             return self._inner.add_formatted_sink_callback(
                 callback_wrapper, flags, extra_keys, resolved_level
             )
-        if serialize:
+        # Filter callbacks always observe the loguru-compatible text view of
+        # extras; only filterless serialized sinks get the typed JSON dict.
+        if serialize and filter is None:
             return self._inner.add_serialized_callback(callback_wrapper, resolved_level)
         return self._inner.add_callback(callback_wrapper, resolved_level)
 
