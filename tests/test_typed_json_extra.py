@@ -438,6 +438,19 @@ def test_text_view_unchanged_for_enum(tmp_path: Path) -> None:
     assert record["extra"]["status"] == "ok"
 
 
+def test_top_level_failing_str_does_not_crash_log(tmp_path: Path) -> None:
+    class BadStr:
+        def __repr__(self) -> str:
+            return "BadStr-repr"
+
+        def __str__(self) -> str:
+            raise RuntimeError("bad str")
+
+    extra = _json_extra(tmp_path, "bad-str-direct.json", obj=BadStr())
+
+    assert extra["obj"] == "BadStr-repr"
+
+
 def test_failing_str_inside_container_falls_back_to_text_view(tmp_path: Path) -> None:
     class BadStr:
         def __repr__(self) -> str:

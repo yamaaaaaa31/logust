@@ -100,10 +100,25 @@ impl FastKind {
     }
 }
 
+fn safe_text_view(value: &Bound<'_, PyAny>) -> String {
+    if let Ok(s) = value.str() {
+        return s.to_string();
+    }
+    if let Ok(s) = value.repr() {
+        return s.to_string();
+    }
+    let type_name = value
+        .get_type()
+        .name()
+        .map(|n| n.to_string())
+        .unwrap_or_else(|_| "object".to_string());
+    format!("<unprintable {type_name}>")
+}
+
 impl ExtraValue {
     pub fn from_py(value: &Bound<'_, PyAny>) -> PyResult<Self> {
         let kind = FastKind::classify(value)?;
-        let text = value.str()?.to_string();
+        let text = safe_text_view(value);
 
         match kind {
             FastKind::None => Ok(Self {
