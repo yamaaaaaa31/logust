@@ -128,7 +128,8 @@ impl ExtraValue {
             }),
             FastKind::Slow => {
                 let mut seen = HashSet::new();
-                let json = py_to_json_value(value, 0, &mut seen)?;
+                let json = py_to_json_value(value, 0, &mut seen)
+                    .unwrap_or_else(|_| Value::String(text.clone()));
                 Ok(Self { text, json })
             }
         }

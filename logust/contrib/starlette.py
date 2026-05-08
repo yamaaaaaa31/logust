@@ -317,6 +317,8 @@ class RequestLoggerMiddleware(BaseHTTPMiddleware):  # type: ignore[misc,unused-i
             "client_ip": client_ip,
         }
 
+    _RESERVED_LOG_KWARGS: ClassVar[frozenset[str]] = frozenset({"message", "exception", "_depth"})
+
     def _emit_canonical_event(self, event: dict[str, Any]) -> None:
         """Emit a completed canonical event if the sampler keeps it."""
         if not self._should_keep_event(event):
@@ -329,12 +331,14 @@ class RequestLoggerMiddleware(BaseHTTPMiddleware):  # type: ignore[misc,unused-i
             except ValueError:
                 status_code = 0
 
+        safe_event = {k: v for k, v in event.items() if k not in self._RESERVED_LOG_KWARGS}
+
         if status_code >= 500 or event.get("outcome") == "error":
-            self.logger.error("http.request", **event)
+            self.logger.error("http.request", **safe_event)
         elif status_code >= 400:
-            self.logger.warning("http.request", **event)
+            self.logger.warning("http.request", **safe_event)
         else:
-            self.logger.info("http.request", **event)
+            self.logger.info("http.request", **safe_event)
 
     def _should_keep_event(self, event: dict[str, Any]) -> bool:
         """Return whether the canonical event should be logged."""

@@ -147,6 +147,40 @@ def test_response_log_keeps_request_context(
     assert response_record["extra"]["path"] == "/items"
 
 
+def test_canonical_event_with_reserved_keys_does_not_raise(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_starlette_module(monkeypatch)
+    inner = PyLogger(LogLevel.Trace)
+    logger = Logger(inner)
+    logger.disable()
+    records: list[dict[str, Any]] = []
+    logger.add_callback(records.append, level=LogLevel.Trace)
+    middleware = module.RequestLoggerMiddleware(
+        object(), logger=logger, canonical=True, sample_rate=1.0
+    )
+
+    event = {
+        "method": "GET",
+        "path": "/items",
+        "status_code": 200,
+        "outcome": "success",
+        "message": "user-supplied",
+        "exception": "user-supplied-exc",
+        "_depth": 99,
+    }
+
+    middleware._emit_canonical_event(event)
+
+    assert len(records) == 1
+    extra = records[0]["extra"]
+    assert "message" not in extra
+    assert "exception" not in extra
+    assert "_depth" not in extra
+    assert extra["method"] == "GET"
+    assert extra["path"] == "/items"
+
+
 def test_max_body_size_rejects_negative_values(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
