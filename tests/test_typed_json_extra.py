@@ -438,6 +438,19 @@ def test_text_view_unchanged_for_enum(tmp_path: Path) -> None:
     assert record["extra"]["status"] == "ok"
 
 
+def test_failing_str_inside_container_falls_back_to_text_view(tmp_path: Path) -> None:
+    class BadStr:
+        def __repr__(self) -> str:
+            return "BadStr"
+
+        def __str__(self) -> str:
+            raise RuntimeError("bad str")
+
+    extra = _json_extra(tmp_path, "bad-str.json", payload=[BadStr()])
+
+    assert extra["payload"] == "[BadStr]"
+
+
 def test_object_with_value_attribute_is_not_treated_as_enum(tmp_path: Path) -> None:
     class HasValue:
         value = "not-an-enum"
