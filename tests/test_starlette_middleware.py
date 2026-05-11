@@ -28,7 +28,7 @@ def _load_starlette_module(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
             self.app = app
 
         async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
-            request = Request()
+            request: Any = Request()
             request.scope = scope
             request.url = SimpleNamespace(path=scope.get("path", "/"))
             request.method = scope.get("method", "GET")
@@ -39,7 +39,7 @@ def _load_starlette_module(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
             async def call_next(_req: Any) -> Any:
                 return await self.app(scope, receive, send)
 
-            response = await self.dispatch(request, call_next)
+            response = await self.dispatch(request, call_next)  # type: ignore[attr-defined]  # ty: ignore[unresolved-attribute]  # pyright: ignore[reportAttributeAccessIssue]
             if response is not None and hasattr(response, "body_iterator"):
                 async for chunk in response.body_iterator:
                     await send({"type": "http.response.body", "body": chunk, "more_body": True})
@@ -51,10 +51,10 @@ def _load_starlette_module(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
     class Response:
         status_code = 200
 
-    middleware_base.BaseHTTPMiddleware = BaseHTTPMiddleware
-    requests.Request = Request
-    responses.Response = Response
-    types.ASGIApp = object
+    middleware_base.BaseHTTPMiddleware = BaseHTTPMiddleware  # type: ignore[attr-defined]  # ty: ignore[unresolved-attribute]  # pyright: ignore[reportAttributeAccessIssue]
+    requests.Request = Request  # type: ignore[attr-defined]  # ty: ignore[unresolved-attribute]  # pyright: ignore[reportAttributeAccessIssue]
+    responses.Response = Response  # type: ignore[attr-defined]  # ty: ignore[unresolved-attribute]  # pyright: ignore[reportAttributeAccessIssue]
+    types.ASGIApp = object  # type: ignore[attr-defined]  # ty: ignore[unresolved-attribute]  # pyright: ignore[reportAttributeAccessIssue]
 
     monkeypatch.setitem(sys.modules, "starlette", starlette)
     monkeypatch.setitem(sys.modules, "starlette.middleware", middleware)
@@ -84,10 +84,10 @@ class CapturingLogger:
         self.contexts.append(kwargs)
 
         class _Ctx:
-            def __enter__(self_inner: Any) -> None:
+            def __enter__(self_inner: Any) -> None:  # noqa: N805  # pyright: ignore[reportSelfClsParameterName]
                 return None
 
-            def __exit__(self_inner: Any, *exc: Any) -> None:
+            def __exit__(self_inner: Any, *exc: Any) -> None:  # noqa: N805  # pyright: ignore[reportSelfClsParameterName]
                 return None
 
         return _Ctx()
@@ -295,7 +295,7 @@ def test_call_path_classifies_inner_app_failure_after_streaming_start(
     records: list[dict[str, Any]] = []
     logger.add_callback(records.append, level=LogLevel.Trace)
 
-    async def inner_app(scope: Any, receive: Any, send: Any) -> None:
+    async def inner_app(scope: Any, receive: Any, send: Any) -> Any:
         async def empty_iter() -> Any:
             if False:
                 yield b""

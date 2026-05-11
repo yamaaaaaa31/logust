@@ -311,14 +311,16 @@ class RequestLoggerMiddleware(BaseHTTPMiddleware):  # type: ignore[misc,unused-i
                     if event is not None and hasattr(response, "body_iterator"):
                         if holder is not None:
                             holder["response"] = response
-                        response.body_iterator = self._wrap_canonical_body_iterator(
-                            response.body_iterator,
-                            event,
-                            request,
-                            response,
-                            client_ip,
-                            start_time,
-                            holder,
+                        response.body_iterator = (  # type: ignore[attr-defined]  # ty: ignore[invalid-assignment]  # pyright: ignore[reportAttributeAccessIssue]
+                            self._wrap_canonical_body_iterator(
+                                response.body_iterator,  # type: ignore[attr-defined]  # pyright: ignore[reportAttributeAccessIssue]
+                                event,
+                                request,
+                                response,
+                                client_ip,
+                                start_time,
+                                holder,
+                            )
                         )
                     else:
                         elapsed = time.perf_counter() - start_time
@@ -627,9 +629,9 @@ class RequestLoggerMiddleware(BaseHTTPMiddleware):  # type: ignore[misc,unused-i
 
     def _mask_sensitive(self, body: str) -> str:
         """Mask sensitive fields in JSON body."""
-        try:
-            import json
+        import json
 
+        try:
             data = json.loads(body)
             masked = self._mask_dict(data)
             return json.dumps(masked)

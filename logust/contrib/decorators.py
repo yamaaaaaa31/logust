@@ -111,7 +111,7 @@ def log_fn(
                 logger.opt(depth=1).log(level, f"Called {fn_name} with elapsed_time={elapsed:.3f}")
                 return result
 
-            return async_wrapper  # type: ignore[return-value]
+            return async_wrapper  # type: ignore[return-value]  # ty: ignore[invalid-return-type]
 
         @wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
@@ -123,7 +123,7 @@ def log_fn(
             logger.opt(depth=1).log(level, f"Called {fn_name} with elapsed_time={elapsed:.3f}")
             return result
 
-        return wrapper  # type: ignore[return-value]
+        return wrapper  # type: ignore[return-value]  # ty: ignore[invalid-return-type]
 
     if fn is not None:
         return decorator(fn)
@@ -163,5 +163,5 @@ def debug_fn(fn: F | None = None) -> F | Callable[[F], F]:
         # Logs at DEBUG: "Called internal_process with elapsed_time=0.005"
     """
     if fn is not None:
-        return log_fn(fn, level="DEBUG")  # type: ignore[call-overload, no-any-return]
+        return log_fn(fn, level="DEBUG")  # type: ignore[call-overload, no-any-return]  # ty: ignore[no-matching-overload]
     return log_fn(level="DEBUG")

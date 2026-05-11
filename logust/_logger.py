@@ -12,7 +12,7 @@ import traceback
 from collections.abc import Callable, Generator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, TextIO
+from typing import TYPE_CHECKING, Any, TextIO, cast
 
 from ._logust import LogLevel, PyLogger
 from ._template import CALLER_TOKENS, KNOWN_TOKENS, ParsedCallableTemplate
@@ -706,11 +706,12 @@ class Logger:
                 name, function, line, file = _get_caller_info(depth + 1)
             else:
                 # needs_caller is CallerInfo (False case already returned above)
+                assert isinstance(needs_caller, CallerInfo)
                 name, function, line, file = (
-                    needs_caller.name,  # type: ignore[union-attr]
-                    needs_caller.function,  # type: ignore[union-attr]
-                    needs_caller.line,  # type: ignore[union-attr]
-                    needs_caller.file,  # type: ignore[union-attr]
+                    needs_caller.name,
+                    needs_caller.function,
+                    needs_caller.line,
+                    needs_caller.file,
                 )
             if exception is None:
                 getattr(inner, level_name)(
@@ -979,11 +980,12 @@ class Logger:
                 name, function, line, file = _get_caller_info(_depth + 1)
             else:
                 # needs_caller is CallerInfo (False case already returned above)
+                assert isinstance(needs_caller, CallerInfo)
                 name, function, line, file = (
-                    needs_caller.name,  # type: ignore[union-attr]
-                    needs_caller.function,  # type: ignore[union-attr]
-                    needs_caller.line,  # type: ignore[union-attr]
-                    needs_caller.file,  # type: ignore[union-attr]
+                    needs_caller.name,
+                    needs_caller.function,
+                    needs_caller.line,
+                    needs_caller.file,
                 )
             if exception is None:
                 inner.log(level, str(message), name=name, function=function, line=line, file=file)
@@ -1171,7 +1173,7 @@ class Logger:
         # Check for callable sink first (before checking stdout/stderr)
         if callable(sink) and sink not in (sys.stdout, sys.stderr):
             handler_id = self._add_callable_sink(
-                sink,
+                cast("Callable[[str], Any]", sink),
                 level=level,
                 format=format,
                 serialize=serialize,
@@ -1198,7 +1200,8 @@ class Logger:
             resolved_level = _to_log_level(level) if level is not None else None
             resolved_colorize = colorize
             if resolved_colorize is None:
-                resolved_colorize = sink.isatty() if hasattr(sink, "isatty") else False
+                stream = cast("TextIO", sink)
+                resolved_colorize = stream.isatty() if hasattr(stream, "isatty") else False
 
             handler_id = self._inner.add_console(
                 stream=stream_name,
@@ -1216,7 +1219,7 @@ class Logger:
             return handler_id
 
         # At this point sink must be a path (str or PathLike), not TextIO
-        sink_str = os.fspath(sink)  # type: ignore[arg-type]
+        sink_str = os.fspath(cast("str | os.PathLike[str]", sink))
 
         resolved_level = _to_log_level(level) if level is not None else None
 

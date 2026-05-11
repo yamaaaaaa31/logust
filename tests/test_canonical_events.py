@@ -39,10 +39,10 @@ def _load_starlette_module(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
     class Response:
         status_code = 200
 
-    middleware_base.BaseHTTPMiddleware = BaseHTTPMiddleware
-    requests.Request = Request
-    responses.Response = Response
-    types.ASGIApp = object
+    middleware_base.BaseHTTPMiddleware = BaseHTTPMiddleware  # type: ignore[attr-defined]  # ty: ignore[unresolved-attribute]  # pyright: ignore[reportAttributeAccessIssue]
+    requests.Request = Request  # type: ignore[attr-defined]  # ty: ignore[unresolved-attribute]  # pyright: ignore[reportAttributeAccessIssue]
+    responses.Response = Response  # type: ignore[attr-defined]  # ty: ignore[unresolved-attribute]  # pyright: ignore[reportAttributeAccessIssue]
+    types.ASGIApp = object  # type: ignore[attr-defined]  # ty: ignore[unresolved-attribute]  # pyright: ignore[reportAttributeAccessIssue]
 
     monkeypatch.setitem(sys.modules, "starlette", starlette)
     monkeypatch.setitem(sys.modules, "starlette.middleware", middleware)
@@ -142,9 +142,9 @@ def test_tail_sampler_validates_configuration() -> None:
     with pytest.raises(ValueError, match="slow_ms"):
         TailSampler(slow_ms=-1)
     with pytest.raises(TypeError, match="keep_if"):
-        TailSampler(keep_if=True)
+        TailSampler(keep_if=True)  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]  # pyright: ignore[reportArgumentType]
     with pytest.raises(TypeError, match="random_fn"):
-        TailSampler(random_fn=True)
+        TailSampler(random_fn=True)  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]  # pyright: ignore[reportArgumentType]
 
 
 def test_canonical_middleware_emits_single_wide_event(monkeypatch: pytest.MonkeyPatch) -> None:

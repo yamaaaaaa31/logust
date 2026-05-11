@@ -30,10 +30,10 @@ def _load_starlette_module(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
     class Response:
         status_code = 200
 
-    middleware_base.BaseHTTPMiddleware = BaseHTTPMiddleware
-    requests.Request = Request
-    responses.Response = Response
-    types.ASGIApp = object
+    middleware_base.BaseHTTPMiddleware = BaseHTTPMiddleware  # type: ignore[attr-defined]  # ty: ignore[unresolved-attribute]  # pyright: ignore[reportAttributeAccessIssue]
+    requests.Request = Request  # type: ignore[attr-defined]  # ty: ignore[unresolved-attribute]  # pyright: ignore[reportAttributeAccessIssue]
+    responses.Response = Response  # type: ignore[attr-defined]  # ty: ignore[unresolved-attribute]  # pyright: ignore[reportAttributeAccessIssue]
+    types.ASGIApp = object  # type: ignore[attr-defined]  # ty: ignore[unresolved-attribute]  # pyright: ignore[reportAttributeAccessIssue]
 
     monkeypatch.setitem(sys.modules, "starlette", starlette)
     monkeypatch.setitem(sys.modules, "starlette.middleware", middleware)
