@@ -155,7 +155,7 @@ async def health() -> dict[str, str]:
 
 if __name__ == "__main__":
     try:
-        import uvicorn
+        import uvicorn  # ty: ignore[unresolved-import]  # pyright: ignore[reportMissingImports]
     except ImportError:
         print("uvicorn is not installed. Install it with:")
         print("  pip install uvicorn")

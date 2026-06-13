@@ -48,30 +48,38 @@ jobs:
 
       - name: Resolve version
         id: version
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_SET_LATEST: ${{ inputs.set_latest }}
         run: |
-          if [ "${{ github.event_name }}" = "release" ]; then
-            tag="${{ github.event.release.tag_name }}"
+          if [ "$EVENT_NAME" = "release" ]; then
+            tag="$RELEASE_TAG"
             version="${tag#v}"
-            echo "version=$version" >> "$GITHUB_OUTPUT"
-            echo "alias=latest" >> "$GITHUB_OUTPUT"
+            printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+            printf 'alias=latest\n' >> "$GITHUB_OUTPUT"
           else
-            version="${{ inputs.version }}"
+            version="$INPUT_VERSION"
             if [ -z "$version" ]; then
               version="dev"
             fi
-            echo "version=$version" >> "$GITHUB_OUTPUT"
-            if [ "${{ inputs.set_latest }}" = "true" ]; then
-              echo "alias=latest" >> "$GITHUB_OUTPUT"
+            printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+            if [ "$INPUT_SET_LATEST" = "true" ]; then
+              printf 'alias=latest\n' >> "$GITHUB_OUTPUT"
             else
-              echo "alias=" >> "$GITHUB_OUTPUT"
+              printf 'alias=\n' >> "$GITHUB_OUTPUT"
             fi
           fi
 
       - name: Deploy with mike
+        env:
+          MIKE_VERSION: ${{ steps.version.outputs.version }}
+          MIKE_ALIAS: ${{ steps.version.outputs.alias }}
         run: |
-          if [ -n "${{ steps.version.outputs.alias }}" ]; then
-            mike deploy --push --update-aliases "${{ steps.version.outputs.version }}" "${{ steps.version.outputs.alias }}"
-            mike set-default --push "${{ steps.version.outputs.alias }}"
+          if [ -n "$MIKE_ALIAS" ]; then
+            mike deploy --push --update-aliases "$MIKE_VERSION" "$MIKE_ALIAS"
+            mike set-default --push "$MIKE_ALIAS"
           else
-            mike deploy --push "${{ steps.version.outputs.version }}"
+            mike deploy --push "$MIKE_VERSION"
           fi

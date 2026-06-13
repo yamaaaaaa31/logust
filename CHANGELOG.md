@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-06-14
+
+### Added
+- **Canonical request events for web integrations**: `logust.contrib` now provides `canonical_event()`, `add_event_fields()`, `clear_event_fields()`, `get_event_fields()`, `get_current_event()`, and `TailSampler`, and Starlette/FastAPI middleware can emit one `http.request` event per request with request/response fields, endpoint-enriched extras, and tail sampling for errors and slow requests. (#38)
+
 ### Changed
 - **JSON extra values handle more Python types**: `serialize=True` now emits `bytes` / `bytearray` extras as UTF-8 strings with replacement for invalid bytes, `set` / `frozenset` extras as arrays, `datetime` / `date` / `time` extras as `.isoformat()` strings, and `Enum` extras via their `.value` converted with the same rules. Text formatting (`{extra[key]}`) and Python callback records still use the existing `str(value)` view. Other object types such as `Decimal`, `UUID`, `Path`, and `complex` continue to fall back to `str(value)` in JSON.
 
@@ -134,7 +139,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 1.3x faster than Python standard logging
 - Lock-free fast path for filtered messages
 
-[Unreleased]: https://github.com/yamaaaaaa31/logust/compare/v0.3.2...HEAD
+[Unreleased]: https://github.com/yamaaaaaa31/logust/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/yamaaaaaa31/logust/compare/v0.3.2...v0.4.0
 [0.3.2]: https://github.com/yamaaaaaa31/logust/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/yamaaaaaa31/logust/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/yamaaaaaa31/logust/compare/v0.2.1...v0.3.0

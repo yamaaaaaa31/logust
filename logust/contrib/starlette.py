@@ -20,7 +20,7 @@ from __future__ import annotations
 import re
 import time
 import uuid
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping, MutableMapping, Sequence
 from contextlib import AbstractContextManager, nullcontext
 from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any, ClassVar, cast
@@ -175,6 +175,63 @@ class RequestLoggerMiddleware(BaseHTTPMiddleware):  # type: ignore[misc,unused-i
             return logger
         return self._logger
 
+    _PENDING_CANONICAL_KEY: ClassVar[str] = "__logust_pending_canonical__"
+
+    async def __call__(  # type: ignore[override,unused-ignore]
+        self,
+        scope: MutableMapping[str, Any],
+        receive: Callable[..., Any],
+        send: Callable[..., Any],
+    ) -> None:
+        """Wrap BaseHTTPMiddleware.__call__ to capture app exceptions raised
+        after dispatch returns (e.g. a StreamingResponse generator that fails
+        mid-flight). The body_iterator wrapper defers emission and stashes
+        timing data on the scope; this method finalizes the canonical event
+        with success or error outcome based on whether the inner ASGI app
+        raised.
+        """
+        if not isinstance(scope, dict) or scope.get("type") != "http":
+            await super().__call__(scope, receive, send)
+            return
+
+        holder: dict[str, Any] = {}
+        scope[self._PENDING_CANONICAL_KEY] = holder
+
+        try:
+            await super().__call__(scope, receive, send)
+        except BaseException as exc:
+            self._finalize_canonical_from_holder(holder, exc)
+            raise
+        else:
+            self._finalize_canonical_from_holder(holder, None)
+
+    def _finalize_canonical_from_holder(
+        self,
+        holder: dict[str, Any],
+        exc: BaseException | None,
+    ) -> None:
+        event = holder.get("event")
+        if event is None or holder.get("emitted"):
+            return
+        elapsed = time.perf_counter() - holder["start_time"]
+        if isinstance(exc, Exception):
+            event.update(
+                self._build_error_event(holder["request"], elapsed, holder["client_ip"], exc)
+            )
+        else:
+            response_event = holder.get("response_event")
+            if response_event is None and holder.get("response") is not None:
+                response_event = self._build_response_event(
+                    holder["request"], holder["response"], elapsed
+                )
+            if response_event is not None:
+                event.update(response_event)
+        holder["emitted"] = True
+        try:
+            self._emit_canonical_event(event)
+        except Exception:
+            pass
+
     async def dispatch(self, request: Request, call_next: Callable[[Request], Any]) -> Response:
         """Process the request and log timing information."""
         if self._should_skip(request):
@@ -203,6 +260,12 @@ class RequestLoggerMiddleware(BaseHTTPMiddleware):  # type: ignore[misc,unused-i
         if self._include_request_body and request.method in self._BODY_METHODS:
             body_log = await self._get_request_body(request)
 
+        holder: dict[str, Any] | None = None
+        if self._canonical:
+            scope = getattr(request, "scope", None)
+            if isinstance(scope, dict):
+                holder = scope.get(self._PENDING_CANONICAL_KEY)
+
         event_context: AbstractContextManager[dict[str, Any] | None]
         if self._canonical:
             base_event = self._build_base_event(request, request_id, client_ip, body_log)
@@ -212,6 +275,12 @@ class RequestLoggerMiddleware(BaseHTTPMiddleware):  # type: ignore[misc,unused-i
 
         try:
             with event_context as event:
+                if event is not None and holder is not None:
+                    holder["event"] = event
+                    holder["start_time"] = start_time
+                    holder["request"] = request
+                    holder["client_ip"] = client_ip
+
                 with self.logger.contextualize(request_id=request_id, path=request.url.path):
                     if not self._canonical:
                         self._log_request_start(request, client_ip, body_log)
@@ -229,6 +298,8 @@ class RequestLoggerMiddleware(BaseHTTPMiddleware):  # type: ignore[misc,unused-i
                                     e,
                                 )
                             )
+                            if holder is not None:
+                                holder["emitted"] = True
                             self._emit_canonical_event(event)
                         else:
                             self.logger.error(
@@ -237,12 +308,29 @@ class RequestLoggerMiddleware(BaseHTTPMiddleware):  # type: ignore[misc,unused-i
                             )
                         raise
 
-                    elapsed = time.perf_counter() - start_time
-                    if event is not None:
-                        event.update(self._build_response_event(request, response, elapsed))
-                        self._emit_canonical_event(event)
+                    if event is not None and hasattr(response, "body_iterator"):
+                        if holder is not None:
+                            holder["response"] = response
+                        response.body_iterator = (  # ty: ignore[invalid-assignment]  # pyright: ignore[reportAttributeAccessIssue]
+                            self._wrap_canonical_body_iterator(
+                                response.body_iterator,  # pyright: ignore[reportAttributeAccessIssue]
+                                event,
+                                request,
+                                response,
+                                client_ip,
+                                start_time,
+                                holder,
+                            )
+                        )
                     else:
-                        self._log_response(request, response, elapsed, client_ip)
+                        elapsed = time.perf_counter() - start_time
+                        if event is not None:
+                            event.update(self._build_response_event(request, response, elapsed))
+                            if holder is not None:
+                                holder["emitted"] = True
+                            self._emit_canonical_event(event)
+                        else:
+                            self._log_response(request, response, elapsed, client_ip)
 
                 return response
         finally:
@@ -420,12 +508,86 @@ class RequestLoggerMiddleware(BaseHTTPMiddleware):  # type: ignore[misc,unused-i
         else:
             self.logger.info(message)
 
-    @staticmethod
-    def _get_request_id(request: Request) -> str:
-        """Honor an incoming x-request-id header, otherwise generate a new id."""
+    _MAX_INCOMING_REQUEST_ID_LEN: ClassVar[int] = 128
+
+    async def _wrap_canonical_body_iterator(
+        self,
+        body_iterator: Any,
+        event: dict[str, Any],
+        request: Request,
+        response: Response,
+        client_ip: str,
+        start_time: float,
+        holder: dict[str, Any] | None,
+    ) -> Any:
+        """Yield body chunks then emit (or stage) the canonical event.
+
+        - Direct iterator usage (no ASGI scope holder): emit the canonical
+          event eagerly as the body iterator finishes, capturing any
+          exception raised by the iterator itself.
+        - ASGI flow (holder provided by ``__call__``): record the response
+          event and any iterator-level error onto the holder without
+          emitting, so ``__call__`` can finalize after Starlette's outer
+          task group surfaces any inner-app exception (the case where a
+          ``StreamingResponse`` generator fails *after* the response start
+          and ``BaseHTTPMiddleware`` re-raises ``app_exc`` post-dispatch).
+        """
+        iterator_error: BaseException | None = None
+        try:
+            async for chunk in body_iterator:
+                yield chunk
+        except BaseException as exc:
+            iterator_error = exc
+            raise
+        finally:
+            elapsed = time.perf_counter() - start_time
+            response_event: dict[str, Any] | None
+            error_event: dict[str, Any] | None
+            if iterator_error is None or isinstance(iterator_error, GeneratorExit):
+                response_event = self._build_response_event(request, response, elapsed)
+                error_event = None
+            elif isinstance(iterator_error, Exception):
+                response_event = None
+                error_event = self._build_error_event(request, elapsed, client_ip, iterator_error)
+            else:
+                response_event = self._build_response_event(request, response, elapsed)
+                error_event = None
+
+            if holder is not None and not holder.get("emitted"):
+                if error_event is not None:
+                    event.update(error_event)
+                    holder["emitted"] = True
+                    try:
+                        self._emit_canonical_event(event)
+                    except Exception:
+                        pass
+                elif response_event is not None:
+                    holder["response_event"] = response_event
+            else:
+                if error_event is not None:
+                    event.update(error_event)
+                elif response_event is not None:
+                    event.update(response_event)
+                try:
+                    self._emit_canonical_event(event)
+                except Exception:
+                    pass
+
+    @classmethod
+    def _get_request_id(cls, request: Request) -> str:
+        """Honor an incoming x-request-id header, otherwise generate a new id.
+
+        Incoming values are sanitized to defeat log injection: any character
+        outside printable ASCII (excluding space) is dropped, and the result
+        is truncated to ``_MAX_INCOMING_REQUEST_ID_LEN``. Values that become
+        empty after sanitization fall back to a generated id.
+        """
         incoming_id = request.headers.get("x-request-id")
         if incoming_id:
-            return str(incoming_id)
+            sanitized = "".join(c for c in str(incoming_id) if 0x21 <= ord(c) <= 0x7E)
+            sanitized = sanitized[: cls._MAX_INCOMING_REQUEST_ID_LEN]
+            if sanitized:
+                return sanitized
         return str(uuid.uuid4())[:8]
 
     @staticmethod
@@ -467,9 +629,9 @@ class RequestLoggerMiddleware(BaseHTTPMiddleware):  # type: ignore[misc,unused-i
 
     def _mask_sensitive(self, body: str) -> str:
         """Mask sensitive fields in JSON body."""
-        try:
-            import json
+        import json
 
+        try:
             data = json.loads(body)
             masked = self._mask_dict(data)
             return json.dumps(masked)

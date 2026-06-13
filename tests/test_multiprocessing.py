@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import gzip
 import multiprocessing
+import multiprocessing.process
+import multiprocessing.synchronize
 import os
 import subprocess
 import sys

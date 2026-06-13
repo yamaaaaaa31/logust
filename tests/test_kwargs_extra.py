@@ -115,7 +115,7 @@ def test_conversion_consumes_root_kwarg() -> None:
 def test_numeric_prefixed_kwarg_is_not_treated_as_positional() -> None:
     logger, records = make_logger()
 
-    logger.info("{0abc}", **{"0abc": "v"})
+    logger.info("{0abc}", **{"0abc": "v"})  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]  # pyright: ignore[reportArgumentType]
 
     assert len(records) == 1
     assert records[0]["message"] == "v"
@@ -156,7 +156,7 @@ def test_non_str_message_with_kwargs_is_coerced() -> None:
     the no-kwargs path which already wraps message with str())."""
     logger, records = make_logger()
 
-    logger.info(42, note="life")  # type: ignore[arg-type]
+    logger.info(42, note="life")  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
 
     assert len(records) == 1
     assert records[0]["message"] == "42"

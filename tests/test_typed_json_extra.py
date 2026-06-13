@@ -124,6 +124,26 @@ def test_serialized_callable_sink_receives_typed_extra_values() -> None:
     }
 
 
+def test_serialized_callable_sink_filter_sees_text_view() -> None:
+    inner = PyLogger(LogLevel.Trace)
+    logger = Logger(inner)
+    logger.disable()
+    messages: list[str] = []
+    seen_by_filter: list[Any] = []
+
+    def keep_201(record: dict[str, Any]) -> bool:
+        seen_by_filter.append(record["extra"]["status_code"])
+        return record["extra"]["status_code"] == "201"
+
+    logger.add(messages.append, level=LogLevel.Trace, serialize=True, filter=keep_201)
+    logger.info("typed", status_code=201)
+    logger.info("typed", status_code=500)
+
+    assert seen_by_filter == ["201", "500"]
+    assert len(messages) == 1
+    assert json.loads(messages[0])["extra"] == {"status_code": "201"}
+
+
 def test_non_serialized_callable_sink_filter_keeps_string_extra_values() -> None:
     inner = PyLogger(LogLevel.Trace)
     logger = Logger(inner)
@@ -436,6 +456,19 @@ def test_text_view_unchanged_for_enum(tmp_path: Path) -> None:
     assert text_file.read_text(encoding="utf-8").strip() == "Status.OK|enum"
     record = json.loads(json_file.read_text(encoding="utf-8"))
     assert record["extra"]["status"] == "ok"
+
+
+def test_top_level_failing_str_does_not_crash_log(tmp_path: Path) -> None:
+    class BadStr:
+        def __repr__(self) -> str:
+            return "BadStr-repr"
+
+        def __str__(self) -> str:
+            raise RuntimeError("bad str")
+
+    extra = _json_extra(tmp_path, "bad-str-direct.json", obj=BadStr())
+
+    assert extra["obj"] == "BadStr-repr"
 
 
 def test_failing_str_inside_container_falls_back_to_text_view(tmp_path: Path) -> None:

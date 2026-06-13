@@ -45,7 +45,7 @@ class CapturingLogger:
 def test_fastapi_canonical_request_emits_single_event_with_route_context() -> None:
     logger = CapturingLogger()
     app = FastAPI()
-    app.add_middleware(RequestLoggerMiddleware, logger=logger, canonical=True)
+    app.add_middleware(RequestLoggerMiddleware, logger=logger, canonical=True)  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]  # pyright: ignore[reportArgumentType]
 
     @app.get("/users/{user_id}")
     async def get_user(user_id: str) -> dict[str, str]:
@@ -91,7 +91,7 @@ def test_fastapi_canonical_request_emits_single_event_with_route_context() -> No
 def test_fastapi_canonical_request_generates_short_id_without_header() -> None:
     logger = CapturingLogger()
     app = FastAPI()
-    app.add_middleware(RequestLoggerMiddleware, logger=logger, canonical=True)
+    app.add_middleware(RequestLoggerMiddleware, logger=logger, canonical=True)  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]  # pyright: ignore[reportArgumentType]
 
     @app.get("/request-id")
     async def read_request_id() -> dict[str, str]:
@@ -126,7 +126,7 @@ def test_starlette_canonical_sampling_drops_success_but_keeps_exception() -> Non
     )
     app.add_middleware(
         RequestLoggerMiddleware,
-        logger=logger,
+        logger=logger,  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]  # pyright: ignore[reportArgumentType]
         canonical=True,
         sample_rate=0.0,
     )
