@@ -20,7 +20,6 @@ jobs:
           - runner: ubuntu-22.04
             target: aarch64
         python-version:
-          - '3.13t'
           - '3.14t'
     steps:
       - uses: actions/checkout@v6
@@ -47,7 +46,6 @@ jobs:
           - runner: macos-latest
             target: aarch64
         python-version:
-          - '3.13t'
           - '3.14t'
     steps:
       - uses: actions/checkout@v6
@@ -66,11 +64,45 @@ jobs:
           name: wheels-macos-freethreaded-${{ matrix.platform.target }}-${{ matrix.python-version }}
           path: dist
 
+  windows-freethreaded:
+    runs-on: ${{ matrix.platform.runner }}
+    strategy:
+      matrix:
+        platform:
+          - runner: windows-latest
+            target: x64
+            python_arch: x64
+          - runner: windows-latest
+            target: x86
+            python_arch: x86
+          - runner: windows-11-arm
+            target: aarch64
+            python_arch: arm64
+        python-version:
+          - '3.14t'
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+          architecture: ${{ matrix.platform.python_arch }}
+      - name: Build free-threaded wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.platform.target }}
+          args: --release --out dist --interpreter python
+          sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
+      - name: Upload wheels
+        uses: actions/upload-artifact@v7
+        with:
+          name: wheels-windows-freethreaded-${{ matrix.platform.target }}-${{ matrix.python-version }}
+          path: dist
+
   release-freethreaded:
     name: Release Free-Threaded
     runs-on: ubuntu-latest
     if: ${{ startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch' }}
-    needs: [linux-freethreaded, macos-freethreaded]
+    needs: [linux-freethreaded, macos-freethreaded, windows-freethreaded]
     environment: pypi
     permissions:
       id-token: write
