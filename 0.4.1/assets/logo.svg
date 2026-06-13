@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <!-- Main purple gradient -->
+    <linearGradient id="purpleMain" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#9b59b6"/>
+      <stop offset="50%" style="stop-color:#8e44ad"/>
+      <stop offset="100%" style="stop-color:#6c3483"/>
+    </linearGradient>
+
+    <!-- Light purple for top ellipse -->
+    <linearGradient id="purpleLight" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#d7bde2"/>
+      <stop offset="100%" style="stop-color:#bb8fce"/>
+    </linearGradient>
+
+    <!-- Lightning bolt gradient -->
+    <linearGradient id="lightning" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#f5b041"/>
+      <stop offset="50%" style="stop-color:#f39c12"/>
+      <stop offset="100%" style="stop-color:#e67e22"/>
+    </linearGradient>
+
+    <!-- Drop shadow filter -->
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="4" stdDeviation="8" flood-color="#1a0a2e" flood-opacity="0.4"/>
+    </filter>
+
+  </defs>
+
+  <!-- Log (stylized wood cylinder) -->
+  <g filter="url(#shadow)">
+    <!-- Bottom ellipse (shadow effect) -->
+    <ellipse cx="256" cy="400" rx="150" ry="40" fill="#4a235a"/>
+
+    <!-- Main log body -->
+    <rect x="106" y="160" width="300" height="240" rx="0" fill="url(#purpleMain)"/>
+
+    <!-- Left curve of cylinder -->
+    <path d="M106 160 Q106 280, 106 400" stroke="none" fill="url(#purpleMain)"/>
+
+    <!-- Right curve of cylinder -->
+    <path d="M406 160 Q406 280, 406 400" stroke="none" fill="url(#purpleMain)"/>
+
+    <!-- Bottom ellipse -->
+    <ellipse cx="256" cy="400" rx="150" ry="40" fill="#7d3c98"/>
+
+    <!-- Top ellipse (cross-section of log) -->
+    <ellipse cx="256" cy="160" rx="150" ry="40" fill="url(#purpleLight)"/>
+
+    <!-- Wood grain rings on top -->
+    <ellipse cx="256" cy="160" rx="110" ry="28" fill="none" stroke="#9b59b6" stroke-width="3" opacity="0.5"/>
+    <ellipse cx="256" cy="160" rx="70" ry="18" fill="none" stroke="#8e44ad" stroke-width="2" opacity="0.4"/>
+    <ellipse cx="256" cy="160" rx="35" ry="9" fill="#8e44ad" opacity="0.3"/>
+    <circle cx="256" cy="160" r="8" fill="#6c3483" opacity="0.5"/>
+
+    <!-- Horizontal grain lines on side -->
+    <line x1="115" y1="210" x2="397" y2="210" stroke="#6c3483" stroke-width="2" opacity="0.15"/>
+    <line x1="110" y1="260" x2="402" y2="260" stroke="#6c3483" stroke-width="2" opacity="0.2"/>
+    <line x1="108" y1="310" x2="404" y2="310" stroke="#6c3483" stroke-width="2" opacity="0.15"/>
+    <line x1="112" y1="360" x2="400" y2="360" stroke="#6c3483" stroke-width="2" opacity="0.1"/>
+  </g>
+
+  <!-- Lightning bolt (representing speed/Rust performance) -->
+  <g>
+    <polygon
+      points="320,60 255,185 305,185 235,340 250,340 195,450 370,250 305,250 380,90"
+      fill="url(#lightning)"
+      stroke="#d68910"
+      stroke-width="4"
+      stroke-linejoin="round"
+    />
+  </g>
+</svg>
