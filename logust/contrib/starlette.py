@@ -311,9 +311,9 @@ class RequestLoggerMiddleware(BaseHTTPMiddleware):  # type: ignore[misc,unused-i
                     if event is not None and hasattr(response, "body_iterator"):
                         if holder is not None:
                             holder["response"] = response
-                        response.body_iterator = (  # type: ignore[attr-defined]  # ty: ignore[invalid-assignment]  # pyright: ignore[reportAttributeAccessIssue]
+                        response.body_iterator = (  # ty: ignore[invalid-assignment]  # pyright: ignore[reportAttributeAccessIssue]
                             self._wrap_canonical_body_iterator(
-                                response.body_iterator,  # type: ignore[attr-defined]  # pyright: ignore[reportAttributeAccessIssue]
+                                response.body_iterator,  # pyright: ignore[reportAttributeAccessIssue]
                                 event,
                                 request,
                                 response,

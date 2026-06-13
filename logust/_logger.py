@@ -1173,7 +1173,7 @@ class Logger:
         # Check for callable sink first (before checking stdout/stderr)
         if callable(sink) and sink not in (sys.stdout, sys.stderr):
             handler_id = self._add_callable_sink(
-                cast("Callable[[str], Any]", sink),
+                sink,
                 level=level,
                 format=format,
                 serialize=serialize,
