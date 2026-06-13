@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-06-14
+
+### Fixed
+- **Free-threaded release CI targets supported interpreters and platforms**: release wheel builds no longer target unsupported Python 3.13t, keep Python 3.14t free-threaded validation, and add Windows 3.14t free-threaded wheels for x64, x86, and arm64. (#48)
+
 ## [0.4.0] - 2026-06-14
 
 ### Added
@@ -139,7 +144,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 1.3x faster than Python standard logging
 - Lock-free fast path for filtered messages
 
-[Unreleased]: https://github.com/yamaaaaaa31/logust/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/yamaaaaaa31/logust/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/yamaaaaaa31/logust/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/yamaaaaaa31/logust/compare/v0.3.2...v0.4.0
 [0.3.2]: https://github.com/yamaaaaaa31/logust/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/yamaaaaaa31/logust/compare/v0.3.0...v0.3.1
