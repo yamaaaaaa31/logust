@@ -149,7 +149,7 @@ Types: `feat`, `fix`, `docs`, `style`, `refactor`, `test`, `chore`
 - Lint with `cargo clippy -- -D warnings`
 - Follow [Rust API Guidelines](https://rust-lang.github.io/api-guidelines/)
 - Use `#[inline]` for small, hot functions
-- Prefer `parking_lot` over `std::sync` for locks
+- Use `std::sync` locks (not `parking_lot`): inherited mutex state must stay well-defined across `fork()`, which `enqueue=True` file sinks rely on
 
 ### Python
 
