@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Dropped the unused `parking_lot` build dependency**: sink, level, and logger state has used `std::sync` primitives since the `fork()`-safety work in 0.3.1, so `parking_lot` was no longer referenced anywhere in `src/` and was not pulled in transitively either. Removing it shrinks the build graph for anyone compiling Logust from source; no runtime or API behavior changes. The contributing guide now documents `std::sync` as the expected lock choice. (#56)
+
 ## [0.4.1] - 2026-06-14
 
 ### Fixed
