@@ -8,7 +8,7 @@ use colored::Color;
 use serde::Serialize;
 
 use crate::handler::{ExtraMap, LogRecord};
-use crate::level::{LogLevel, get_level_info};
+use crate::level::get_level_info;
 
 /// Logger initialization time for elapsed calculation
 pub static LOGGER_START_TIME: LazyLock<DateTime<Local>> = LazyLock::new(Local::now);
@@ -38,10 +38,10 @@ pub fn format_elapsed(start: &DateTime<Local>, now: &DateTime<Local>) -> String 
     s
 }
 
-/// Apply ANSI color code to text (thread-safe, no global state)
+/// ANSI SGR color number for `color`.
 #[inline]
-fn colorize_text(text: &str, color: Color, bold: bool) -> String {
-    let color_code = match color {
+fn color_code(color: Color) -> &'static str {
+    match color {
         Color::Black => "30",
         Color::Red => "31",
         Color::Green => "32",
@@ -59,8 +59,13 @@ fn colorize_text(text: &str, color: Color, bold: bool) -> String {
         Color::BrightCyan => "96",
         Color::BrightWhite => "97",
         _ => "0", // Default/reset
-    };
+    }
+}
 
+/// Apply ANSI color code to text (thread-safe, no global state)
+#[inline]
+fn colorize_text(text: &str, color: Color, bold: bool) -> String {
+    let color_code = color_code(color);
     if bold {
         format!("\x1b[1;{}m{}\x1b[0m", color_code, text)
     } else {
@@ -72,6 +77,12 @@ fn colorize_text(text: &str, color: Color, bold: bool) -> String {
 pub fn colorize_level(text: &str, level_name: &str) -> String {
     let color = get_level_info(level_name).map_or(Color::White, |info| info.get_color());
     colorize_text(text, color, true)
+}
+
+/// ANSI prefix that styles text like the level `level_name` (bold, level color).
+pub fn level_style(level_name: &str) -> String {
+    let color = get_level_info(level_name).map_or(Color::White, |info| info.get_color());
+    format!("\x1b[1;{}m", color_code(color))
 }
 
 /// Apply dim style to text (thread-safe)
@@ -173,6 +184,10 @@ pub enum FormatToken {
     File,
     /// {module} placeholder - module name (alias for Name)
     Module,
+    /// Opening color markup tag in the template (`<red>`, `<level>`, ...)
+    StyleOpen(MarkupStyle),
+    /// Closing color markup tag in the template
+    StyleClose,
 }
 
 /// Compute token requirements from parsed tokens
@@ -214,6 +229,18 @@ fn compute_requirements(tokens: &[FormatToken]) -> TokenRequirements {
 /// Parse a template string into tokens
 fn parse_template(template: &str) -> Vec<FormatToken> {
     let mut tokens = Vec::new();
+    for piece in split_format_markup(template) {
+        match piece {
+            MarkupPiece::Text(text) => parse_placeholders(&text, &mut tokens),
+            MarkupPiece::Open(style) => tokens.push(FormatToken::StyleOpen(style)),
+            MarkupPiece::Close => tokens.push(FormatToken::StyleClose),
+        }
+    }
+    tokens
+}
+
+/// Parse `{...}` placeholders in a markup-free piece of the template
+fn parse_placeholders(template: &str, tokens: &mut Vec<FormatToken>) {
     let mut chars = template.chars().peekable();
     let mut static_buf = String::new();
 
@@ -278,8 +305,6 @@ fn parse_template(template: &str) -> Vec<FormatToken> {
     if !static_buf.is_empty() {
         tokens.push(FormatToken::Static(static_buf));
     }
-
-    tokens
 }
 
 /// Convert tag name to ANSI escape code (returns static string to avoid allocation)
@@ -315,6 +340,12 @@ fn tag_to_ansi(tag: &str) -> Option<&'static str> {
 /// Parse color markup tags (<red>, <bold>, <italic>, etc.) and render them as ANSI codes,
 /// or strip them if `colorize` is false. Unknown tags are kept as literal text.
 pub fn apply_color_markup(text: &str, colorize: bool) -> Cow<'_, str> {
+    apply_color_markup_within(text, colorize, "")
+}
+
+/// Like [`apply_color_markup`], for text rendered inside `base` (ANSI prefix of the
+/// surrounding styles): `base` is re-applied after each reset so it isn't lost.
+pub fn apply_color_markup_within<'a>(text: &'a str, colorize: bool, base: &str) -> Cow<'a, str> {
     if !text.contains('<') {
         return Cow::Borrowed(text);
     }
@@ -355,6 +386,7 @@ pub fn apply_color_markup(text: &str, colorize: bool) -> Cow<'_, str> {
                     style_stack.pop();
                     if colorize {
                         result.push_str("\x1b[0m");
+                        result.push_str(base);
                         for s in &style_stack {
                             result.push_str(s);
                         }
@@ -381,9 +413,155 @@ pub fn apply_color_markup(text: &str, colorize: bool) -> Cow<'_, str> {
 
     if colorize && !style_stack.is_empty() {
         result.push_str("\x1b[0m");
+        result.push_str(base);
     }
 
     Cow::Owned(result)
+}
+
+/// A color style opened by a markup tag in a format template
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MarkupStyle {
+    /// Fixed ANSI style (`<red>`, `<bold>`, ...)
+    Ansi(&'static str),
+    /// `<level>`: the color of the record's level
+    Level,
+}
+
+/// A piece of a format template after color markup is resolved
+#[derive(Debug, PartialEq, Eq)]
+pub enum MarkupPiece {
+    /// Text without markup (may still contain `{...}` placeholders)
+    Text(String),
+    /// Opening tag
+    Open(MarkupStyle),
+    /// Closing tag matching an open one
+    Close,
+}
+
+fn markup_style(tag: &str) -> Option<MarkupStyle> {
+    if tag.eq_ignore_ascii_case("level") {
+        Some(MarkupStyle::Level)
+    } else {
+        tag_to_ansi(tag).map(MarkupStyle::Ansi)
+    }
+}
+
+/// Split color markup out of a format template.
+///
+/// `{...}` placeholders are skipped so `{level:<8}` is not read as a tag. Unknown tags and
+/// closing tags without an open one are kept as literal text.
+pub fn split_format_markup(template: &str) -> Vec<MarkupPiece> {
+    let mut pieces = Vec::new();
+    let mut text = String::new();
+    let mut depth = 0usize;
+    let mut rest = template;
+
+    while let Some(pos) = rest.find(['<', '{']) {
+        text.push_str(&rest[..pos]);
+        rest = &rest[pos..];
+
+        if rest.starts_with('{') {
+            let end = rest.find('}').map_or(rest.len(), |i| i + 1);
+            text.push_str(&rest[..end]);
+            rest = &rest[end..];
+            continue;
+        }
+
+        // A tag ends at the first '>' and contains no '<' or '{'
+        let tag_end = rest[1..].find(['>', '<', '{']).map(|i| i + 1);
+        let Some(end) = tag_end.filter(|&i| rest.as_bytes()[i] == b'>') else {
+            text.push('<');
+            rest = &rest[1..];
+            continue;
+        };
+
+        let tag = &rest[1..end];
+        let (is_closing, name) = match tag.strip_prefix('/') {
+            Some(name) => (true, name),
+            None => (false, tag),
+        };
+
+        match markup_style(name) {
+            Some(_) if is_closing && depth > 0 => {
+                depth -= 1;
+                if !text.is_empty() {
+                    pieces.push(MarkupPiece::Text(std::mem::take(&mut text)));
+                }
+                pieces.push(MarkupPiece::Close);
+            }
+            Some(style) if !is_closing => {
+                depth += 1;
+                if !text.is_empty() {
+                    pieces.push(MarkupPiece::Text(std::mem::take(&mut text)));
+                }
+                pieces.push(MarkupPiece::Open(style));
+            }
+            _ => text.push_str(&rest[..=end]),
+        }
+        rest = &rest[end + 1..];
+    }
+
+    text.push_str(rest);
+    if !text.is_empty() {
+        pieces.push(MarkupPiece::Text(text));
+    }
+    pieces
+}
+
+/// ANSI prefix for a markup style
+fn push_style(result: &mut String, style: MarkupStyle, level_color: Color) {
+    match style {
+        MarkupStyle::Ansi(ansi) => result.push_str(ansi),
+        MarkupStyle::Level => {
+            let _ = write!(result, "\x1b[1;{}m", color_code(level_color));
+        }
+    }
+}
+
+/// Reset, then re-apply the styles still open
+fn restore_styles(result: &mut String, styles: &[MarkupStyle], level_color: Color) {
+    result.push_str("\x1b[0m");
+    for &style in styles {
+        push_style(result, style, level_color);
+    }
+}
+
+/// ANSI prefix of the open template styles
+fn styles_prefix(styles: &[MarkupStyle], level_color: Color) -> String {
+    let mut prefix = String::new();
+    for &style in styles {
+        push_style(&mut prefix, style, level_color);
+    }
+    prefix
+}
+
+/// Render a template markup token. Returns false for non-markup tokens.
+#[inline]
+fn render_markup_token(
+    token: &FormatToken,
+    result: &mut String,
+    styles: &mut Vec<MarkupStyle>,
+    level_color: Color,
+    colorize: bool,
+) -> bool {
+    match token {
+        FormatToken::StyleOpen(style) => {
+            styles.push(*style);
+            if colorize {
+                push_style(result, *style, level_color);
+            }
+            true
+        }
+        FormatToken::StyleClose => {
+            styles.pop();
+            if colorize {
+                restore_styles(result, styles, level_color);
+            }
+            true
+        }
+        _ => false,
+    }
 }
 
 /// Format configuration for log output
@@ -436,23 +614,6 @@ impl FormatConfig {
         self.requirements
     }
 
-    /// Format a log record
-    pub fn format(
-        &self,
-        timestamp: &DateTime<Local>,
-        level: LogLevel,
-        message: &str,
-        extra: &ExtraMap,
-        exception: &Option<String>,
-        colorize: bool,
-    ) -> String {
-        if self.serialize {
-            self.format_json(timestamp, level, message, extra, exception)
-        } else {
-            self.format_template(timestamp, level, message, extra, exception, colorize)
-        }
-    }
-
     /// Format a LogRecord (supports both built-in and custom levels)
     pub fn format_record(&self, record: &LogRecord, colorize: bool) -> String {
         if self.serialize {
@@ -475,55 +636,52 @@ impl FormatConfig {
             .unwrap_or_else(|| record.level.color());
 
         // Lazy time formatting - only compute if {time} token is in format
-        let time_fmt = if reqs.needs_time {
-            let time_raw = record.timestamp.format(&self.time_format).to_string();
-            if colorize {
-                Some(dim_text(&time_raw))
-            } else {
-                Some(time_raw)
-            }
-        } else {
-            None
-        };
-
-        // Lazy level formatting - only for colorized output (non-color uses `level_name` in-token)
-        let level_fmt_color = if colorize && reqs.needs_level {
-            Some(colorize_text(level_name, level_color, true))
-        } else {
-            None
-        };
-
-        let message_fmt = reqs
-            .needs_message
-            .then(|| apply_color_markup(&record.message, colorize));
+        let time_raw = reqs
+            .needs_time
+            .then(|| record.timestamp.format(&self.time_format).to_string());
 
         let mut result = String::with_capacity(self.template.len() + FORMAT_RESULT_CAPACITY);
+        // Styles opened by template markup; tokens inside them keep the markup's color
+        let mut styles: Vec<MarkupStyle> = Vec::new();
 
         for token in &self.tokens {
+            if render_markup_token(token, &mut result, &mut styles, level_color, colorize) {
+                continue;
+            }
+            // Default token styles apply only outside template markup
+            let auto = colorize && styles.is_empty();
             match token {
                 FormatToken::Static(s) => result.push_str(s),
                 FormatToken::Time => {
-                    if let Some(ref fmt) = time_fmt {
-                        result.push_str(fmt);
+                    if let Some(ref raw) = time_raw {
+                        if auto {
+                            result.push_str(&dim_text(raw));
+                        } else {
+                            result.push_str(raw);
+                        }
                     }
                 }
                 FormatToken::Message => {
-                    if let Some(ref fmt) = message_fmt {
-                        result.push_str(fmt);
+                    if !colorize || styles.is_empty() {
+                        result.push_str(&apply_color_markup(&record.message, colorize));
+                    } else {
+                        // Keep template styles alive across resets in the message markup
+                        let base = styles_prefix(&styles, level_color);
+                        result.push_str(&apply_color_markup_within(&record.message, true, &base));
                     }
                 }
                 FormatToken::Level => {
-                    if let Some(ref fmt) = level_fmt_color {
-                        result.push_str(fmt);
-                    } else if reqs.needs_level {
+                    if auto {
+                        result.push_str(&colorize_text(level_name, level_color, true));
+                    } else {
                         result.push_str(level_name);
                     }
                 }
                 FormatToken::LevelWidth(width) => {
-                    if colorize {
+                    if auto {
                         let padded = format!("{:<width$}", level_name, width = width);
                         result.push_str(&colorize_text(&padded, level_color, true));
-                    } else if reqs.needs_level {
+                    } else {
                         let _ = write!(result, "{:<width$}", level_name, width = width);
                     }
                 }
@@ -532,22 +690,22 @@ impl FormatConfig {
                         result.push_str(value.as_str());
                     }
                 }
-                FormatToken::Name => {
-                    if colorize {
+                FormatToken::Name | FormatToken::Module => {
+                    if auto {
                         result.push_str(&cyan_text(&record.caller.name));
                     } else {
                         result.push_str(&record.caller.name);
                     }
                 }
                 FormatToken::Function => {
-                    if colorize {
+                    if auto {
                         result.push_str(&cyan_text(&record.caller.function));
                     } else {
                         result.push_str(&record.caller.function);
                     }
                 }
                 FormatToken::Line => {
-                    if colorize {
+                    if auto {
                         let line_str = record.caller.line.to_string();
                         result.push_str(&cyan_text(&line_str));
                     } else {
@@ -555,7 +713,7 @@ impl FormatConfig {
                     }
                 }
                 FormatToken::Elapsed => {
-                    if colorize {
+                    if auto {
                         let elapsed = format_elapsed(&LOGGER_START_TIME, &record.timestamp);
                         result.push_str(&dim_text(&elapsed));
                     } else {
@@ -563,7 +721,7 @@ impl FormatConfig {
                     }
                 }
                 FormatToken::Thread => {
-                    if colorize {
+                    if auto {
                         let thread_str = format!("{}:{}", record.thread.name, record.thread.id);
                         result.push_str(&cyan_text(&thread_str));
                     } else {
@@ -571,7 +729,7 @@ impl FormatConfig {
                     }
                 }
                 FormatToken::Process => {
-                    if colorize {
+                    if auto {
                         let process_str = format!("{}:{}", record.process.name, record.process.id);
                         result.push_str(&cyan_text(&process_str));
                     } else {
@@ -579,21 +737,19 @@ impl FormatConfig {
                     }
                 }
                 FormatToken::File => {
-                    if colorize {
+                    if auto {
                         result.push_str(&cyan_text(&record.caller.file));
                     } else {
                         result.push_str(&record.caller.file);
                     }
                 }
-                FormatToken::Module => {
-                    // Alias for Name
-                    if colorize {
-                        result.push_str(&cyan_text(&record.caller.name));
-                    } else {
-                        result.push_str(&record.caller.name);
-                    }
-                }
+                FormatToken::StyleOpen(_) | FormatToken::StyleClose => {}
             }
+        }
+
+        // Close styles left open by the template
+        if colorize && !styles.is_empty() {
+            result.push_str("\x1b[0m");
         }
 
         if let Some(ref exc) = record.exception {
@@ -640,144 +796,23 @@ impl FormatConfig {
 
         serde_json::to_string(&json_record).unwrap_or_else(|_| record.message.clone())
     }
-
-    /// Format using pre-parsed tokens (O(n) single pass, thread-safe)
-    fn format_template(
-        &self,
-        timestamp: &DateTime<Local>,
-        level: LogLevel,
-        message: &str,
-        extra: &ExtraMap,
-        exception: &Option<String>,
-        colorize: bool,
-    ) -> String {
-        let reqs = self.requirements;
-        let level_name = level.as_str();
-        let level_color = level.color();
-
-        let time_fmt = if reqs.needs_time {
-            let time_raw = timestamp.format(&self.time_format).to_string();
-            Some(if colorize {
-                dim_text(&time_raw)
-            } else {
-                time_raw
-            })
-        } else {
-            None
-        };
-
-        let level_fmt_color = if colorize && reqs.needs_level {
-            Some(colorize_text(level_name, level_color, true))
-        } else {
-            None
-        };
-
-        let message_fmt = reqs
-            .needs_message
-            .then(|| apply_color_markup(message, colorize));
-
-        let mut result = String::with_capacity(self.template.len() + FORMAT_RESULT_CAPACITY);
-
-        for token in &self.tokens {
-            match token {
-                FormatToken::Static(s) => result.push_str(s),
-                FormatToken::Time => {
-                    if let Some(ref fmt) = time_fmt {
-                        result.push_str(fmt);
-                    }
-                }
-                FormatToken::Message => {
-                    if let Some(ref fmt) = message_fmt {
-                        result.push_str(fmt);
-                    }
-                }
-                FormatToken::Level => {
-                    if let Some(ref fmt) = level_fmt_color {
-                        result.push_str(fmt);
-                    } else if reqs.needs_level {
-                        result.push_str(level_name);
-                    }
-                }
-                FormatToken::LevelWidth(width) => {
-                    if colorize {
-                        let padded = format!("{:<width$}", level_name, width = width);
-                        result.push_str(&colorize_text(&padded, level_color, true));
-                    } else if reqs.needs_level {
-                        let _ = write!(result, "{:<width$}", level_name, width = width);
-                    }
-                }
-                FormatToken::Extra(key) => {
-                    if let Some(value) = extra.get(key) {
-                        result.push_str(value.as_str());
-                    }
-                }
-                // These tokens are not available in this context (no caller/thread/process info)
-                FormatToken::Name
-                | FormatToken::Function
-                | FormatToken::Line
-                | FormatToken::Elapsed
-                | FormatToken::Thread
-                | FormatToken::Process
-                | FormatToken::File
-                | FormatToken::Module => {}
-            }
-        }
-
-        if let Some(exc) = exception {
-            result.push('\n');
-            result.push_str(exc);
-        }
-
-        result
-    }
-
-    /// Format as JSON
-    fn format_json(
-        &self,
-        timestamp: &DateTime<Local>,
-        level: LogLevel,
-        message: &str,
-        extra: &ExtraMap,
-        exception: &Option<String>,
-    ) -> String {
-        #[derive(Serialize)]
-        struct JsonRecord<'a> {
-            time: String,
-            level: &'a str,
-            message: &'a str,
-            #[serde(skip_serializing_if = "HashMap::is_empty")]
-            extra: &'a ExtraMap,
-            #[serde(skip_serializing_if = "Option::is_none")]
-            exception: &'a Option<String>,
-        }
-
-        let record = JsonRecord {
-            time: timestamp.format(&self.time_format).to_string(),
-            level: level.as_str(),
-            message,
-            extra,
-            exception,
-        };
-
-        serde_json::to_string(&record).unwrap_or_else(|_| message.to_string())
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
 
     use crate::handler::empty_context;
     use crate::handler::{CallerInfo, ExtraValue, LogRecord, ProcessInfo, ThreadInfo};
-    use crate::level::LevelInfo;
+    use crate::level::{LevelInfo, LogLevel};
 
     #[test]
     fn test_default_format() {
         let config = FormatConfig::default();
-        let now = Local::now();
-        let extra = HashMap::new();
+        let record = LogRecord::new(LogLevel::Info, "test message".into());
 
-        let result = config.format(&now, LogLevel::Info, "test message", &extra, &None, false);
+        let result = config.format_record(&record, false);
         assert!(result.contains("INFO"));
         assert!(result.contains("test message"));
     }
@@ -785,17 +820,9 @@ mod tests {
     #[test]
     fn test_json_format() {
         let config = FormatConfig::new(None, true);
-        let now = Local::now();
-        let extra = HashMap::new();
+        let record = LogRecord::new(LogLevel::Error, "error occurred".into());
 
-        let result = config.format(
-            &now,
-            LogLevel::Error,
-            "error occurred",
-            &extra,
-            &None,
-            false,
-        );
+        let result = config.format_record(&record, false);
         assert!(result.contains("\"level\":\"ERROR\""));
         assert!(result.contains("\"message\":\"error occurred\""));
     }
@@ -803,10 +830,9 @@ mod tests {
     #[test]
     fn test_custom_template() {
         let config = FormatConfig::new(Some("[{level}] {message}".to_string()), false);
-        let now = Local::now();
-        let extra = HashMap::new();
+        let record = LogRecord::new(LogLevel::Warning, "warning!".into());
 
-        let result = config.format(&now, LogLevel::Warning, "warning!", &extra, &None, false);
+        let result = config.format_record(&record, false);
         assert_eq!(result, "[WARNING] warning!");
     }
 
@@ -814,22 +840,22 @@ mod tests {
     fn test_extra_fields() {
         let config =
             FormatConfig::new(Some("{message} - user={extra[user_id]}".to_string()), false);
-        let now = Local::now();
         let mut extra = HashMap::new();
         extra.insert("user_id".to_string(), ExtraValue::from("123"));
+        let record = LogRecord::with_extra(LogLevel::Info, "login".into(), Arc::new(extra));
 
-        let result = config.format(&now, LogLevel::Info, "login", &extra, &None, false);
+        let result = config.format_record(&record, false);
         assert_eq!(result, "login - user=123");
     }
 
     #[test]
     fn test_exception_in_template() {
         let config = FormatConfig::new(Some("[{level}] {message}".to_string()), false);
-        let now = Local::now();
-        let extra = HashMap::new();
         let exception = Some("Traceback:\n  File test.py".to_string());
+        let record =
+            LogRecord::with_exception(LogLevel::Error, "Failed".into(), empty_context(), exception);
 
-        let result = config.format(&now, LogLevel::Error, "Failed", &extra, &exception, false);
+        let result = config.format_record(&record, false);
         assert!(result.contains("[ERROR] Failed"));
         assert!(result.contains("Traceback:"));
     }
@@ -837,11 +863,11 @@ mod tests {
     #[test]
     fn test_exception_in_json() {
         let config = FormatConfig::new(None, true);
-        let now = Local::now();
-        let extra = HashMap::new();
         let exception = Some("Traceback".to_string());
+        let record =
+            LogRecord::with_exception(LogLevel::Error, "Failed".into(), empty_context(), exception);
 
-        let result = config.format(&now, LogLevel::Error, "Failed", &extra, &exception, false);
+        let result = config.format_record(&record, false);
         assert!(result.contains("\"exception\":\"Traceback\""));
     }
 
@@ -920,13 +946,12 @@ mod tests {
     }
 
     #[test]
-    fn test_format_template_message_only_omits_time() {
+    fn test_format_record_message_only_omits_time() {
         let config = FormatConfig::new(Some("{message}".to_string()), false);
-        let now = Local::now();
-        let extra = HashMap::new();
-        let result = config.format(&now, LogLevel::Info, "only", &extra, &None, false);
+        let record = LogRecord::new(LogLevel::Info, "only".into());
+        let result = config.format_record(&record, false);
         assert_eq!(result, "only");
-        assert!(!result.contains(&format!("{}", now.format("%Y"))));
+        assert!(!result.contains(&format!("{}", record.timestamp.format("%Y"))));
     }
 
     #[test]
@@ -980,5 +1005,59 @@ mod tests {
             LogRecord::with_caller(LogLevel::Info, "m".into(), empty_context(), None, caller);
         let config = FormatConfig::new(Some("L={line}".to_string()), false);
         assert_eq!(config.format_record(&record, false), "L=12345");
+    }
+
+    #[test]
+    fn test_split_format_markup() {
+        use MarkupPiece::{Close, Open, Text};
+        assert_eq!(
+            split_format_markup("<green>{time}</green> <level>{level:<8}</level> <nope>x</nope>"),
+            vec![
+                Open(MarkupStyle::Ansi("\x1b[32m")),
+                Text("{time}".into()),
+                Close,
+                Text(" ".into()),
+                Open(MarkupStyle::Level),
+                Text("{level:<8}".into()),
+                Close,
+                Text(" <nope>x</nope>".into()),
+            ]
+        );
+        // Unmatched closing tag and stray '<' stay literal
+        assert_eq!(
+            split_format_markup("</red>a < b <red>c"),
+            vec![
+                Text("</red>a < b ".into()),
+                Open(MarkupStyle::Ansi("\x1b[31m")),
+                Text("c".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_record_template_markup_stripped_without_color() {
+        let config = FormatConfig::new(
+            Some("<green>{level}</green> <level>{message}</level> <nope>x</nope>".to_string()),
+            false,
+        );
+        let record = LogRecord::new(LogLevel::Info, "<red>m</red>".into());
+        assert_eq!(
+            config.format_record(&record, false),
+            "INFO m <nope>x</nope>"
+        );
+    }
+
+    #[test]
+    fn test_record_template_markup_colorized() {
+        let config = FormatConfig::new(
+            Some("<green>{level}</green>|<level>{message}</level>|{level}".to_string()),
+            false,
+        );
+        let record = LogRecord::new(LogLevel::Warning, "<red>r</red> t".into());
+        assert_eq!(
+            config.format_record(&record, true),
+            // Markup color replaces the default level style; message resets keep <level>
+            "\x1b[32mWARNING\x1b[0m|\x1b[1;33m\x1b[31mr\x1b[0m\x1b[1;33m t\x1b[0m|\x1b[1;33mWARNING\x1b[0m"
+        );
     }
 }

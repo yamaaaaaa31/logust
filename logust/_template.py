@@ -10,7 +10,7 @@ import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from ._logust import apply_color_markup, colorize_level
+from ._logust import apply_color_markup, colorize_level, level_style, split_format_markup
 
 if TYPE_CHECKING:
     pass
@@ -65,10 +65,27 @@ class TokenSegment:
     spec: str | None = None
     is_extra: bool = False
     extra_key: str | None = None
+    # Inside template color markup: the markup's color wins over the default token style
+    in_markup: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class StyleSegment:
+    """An opening color markup tag in the template.
+
+    ``ansi`` is the ANSI prefix, or None for ``<level>`` (the record's level color).
+    """
+
+    ansi: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class StyleEndSegment:
+    """A closing color markup tag in the template."""
 
 
 # Type alias for segment types
-Segment = LiteralSegment | TokenSegment
+Segment = LiteralSegment | TokenSegment | StyleSegment | StyleEndSegment
 
 
 class ParsedCallableTemplate:
@@ -111,12 +128,18 @@ class ParsedCallableTemplate:
         self._needed_tokens: frozenset[str] = frozenset(
             seg.key for seg in self._segments if isinstance(seg, TokenSegment)
         )
+        # <level> markup needs the level name even without a {level} token
+        if any(isinstance(seg, StyleSegment) and seg.ansi is None for seg in self._segments):
+            self._needed_tokens |= {"level"}
         self._needs_extra = "extra" in self._needed_tokens
         self._needs_thread = "thread" in self._needed_tokens
         self._needs_process = "process" in self._needed_tokens
 
     def _parse(self, template: str) -> tuple[Segment, ...]:
-        """Parse template into literal and token segments.
+        """Parse template into literal, token, and color markup segments.
+
+        Color markup is resolved in Rust (shared with the console/file formatter).
+        Without colorize the markup segments are dropped, so the tags are stripped.
 
         Args:
             template: Format template string.
@@ -125,6 +148,24 @@ class ParsedCallableTemplate:
             Tuple of segments (immutable for performance).
         """
         segments: list[Segment] = []
+        depth = 0
+
+        for kind, value in split_format_markup(template):
+            if kind == "text":
+                self._parse_tokens(value, depth > 0, segments)
+            elif kind == "close":
+                depth -= 1
+                if self._colorize:
+                    segments.append(StyleEndSegment())
+            else:
+                depth += 1
+                if self._colorize:
+                    segments.append(StyleSegment(value if kind == "open" else None))
+
+        return tuple(segments)
+
+    def _parse_tokens(self, template: str, in_markup: bool, segments: list[Segment]) -> None:
+        """Append literal and token segments for a markup-free piece of the template."""
         last_end = 0
 
         for match in self._TOKEN_PATTERN.finditer(template):
@@ -137,17 +178,15 @@ class ParsedCallableTemplate:
 
             if key.startswith("extra["):
                 extra_key = key[6:-1]  # Extract key from extra[key]
-                segments.append(TokenSegment("extra", spec, True, extra_key))
+                segments.append(TokenSegment("extra", spec, True, extra_key, in_markup))
             else:
-                segments.append(TokenSegment(key, spec, False, None))
+                segments.append(TokenSegment(key, spec, False, None, in_markup))
 
             last_end = match.end()
 
         # Add remaining literal
         if last_end < len(template):
             segments.append(LiteralSegment(template[last_end:]))
-
-        return tuple(segments)
 
     def lightweight_requirements_for_rust(self) -> tuple[bool, ...]:
         """Booleans for Rust `FormattedSinkRequirements` / `build_mini_record_dict`.
@@ -219,10 +258,13 @@ class ParsedCallableTemplate:
             else ""
         )
 
+        # Styles opened by template markup (only present when colorizing)
+        styles: list[str] = []
+
         for seg in self._segments:
             if isinstance(seg, LiteralSegment):
                 parts.append(seg.text)
-            else:
+            elif isinstance(seg, TokenSegment):
                 # TokenSegment - get value lazily
                 if seg.is_extra:
                     value = extra.get(seg.extra_key, "")
@@ -247,7 +289,12 @@ class ParsedCallableTemplate:
                     elif key == "process":
                         value = process_str
                     elif key == "message":
-                        value = apply_color_markup(record.get("message", ""), self._colorize)
+                        message = record.get("message", "")
+                        if styles:
+                            # Keep template styles alive across resets in the message markup
+                            value = apply_color_markup(message, True, "".join(styles))
+                        else:
+                            value = apply_color_markup(message, self._colorize)
                     else:
                         value = ""
 
@@ -259,13 +306,25 @@ class ParsedCallableTemplate:
                 else:
                     text = str(value)
 
-                if self._colorize and not seg.is_extra:
+                if self._colorize and not seg.is_extra and not seg.in_markup:
                     if seg.key == "level":
                         text = colorize_level(text, str(value))
                     elif style := _TOKEN_STYLES.get(seg.key):
                         text = f"{style}{text}{_RESET}"
 
                 parts.append(text)
+            elif isinstance(seg, StyleSegment):
+                opened = seg.ansi if seg.ansi is not None else level_style(record.get("level", ""))
+                styles.append(opened)
+                parts.append(opened)
+            else:  # StyleEndSegment
+                styles.pop()
+                parts.append(_RESET)
+                parts.extend(styles)
+
+        # Close styles left open by the template
+        if styles:
+            parts.append(_RESET)
 
         exception = record.get("exception")
         if exception:
