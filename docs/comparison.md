@@ -90,6 +90,22 @@ logger.add("app.log", rotation="500 MB")
 logger.info("Hello")
 ```
 
+### Callable sinks receive no trailing newline
+
+loguru passes callable sinks the formatted message **with** a trailing `"\n"`, so its recipes use `end=""`. Logust passes it **without** one, so drop `end=""` when porting:
+
+```python
+# loguru
+logger.add(lambda msg: tqdm.write(msg, end=""))
+logger.add(lambda msg: print(msg, end=""))
+
+# logust
+logger.add(lambda msg: tqdm.write(msg))
+logger.add(lambda msg: print(msg))
+```
+
+Keeping `end=""` with logust joins every log line into one. Stream sinks (objects with a `write()` method, such as `sys.stdout` or `io.StringIO`) get a trailing newline in both libraries.
+
 ## When to choose logust
 
 - Performance and throughput are critical

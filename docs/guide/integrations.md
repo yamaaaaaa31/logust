@@ -82,6 +82,60 @@ def slow_operation():
     pass
 ```
 
+## Progress Bars (rich, tqdm)
+
+Live displays like `rich.progress.Progress` and `tqdm` redraw the bar around each line they print. Logust's default console handler writes straight to the process stdout, so its lines land in the middle of the bar. Replace it with a callable sink that prints through the progress bar's own API.
+
+=== "rich"
+
+    ```python
+    from rich.progress import Progress
+    from rich.text import Text
+
+    from logust import logger
+
+    logger.remove()
+
+    with Progress() as progress:
+        handler_id = logger.add(
+            lambda msg: progress.console.print(Text.from_ansi(msg)),
+            format="{time} | {level:<8} | {message}",
+            colorize=True,
+        )
+
+        task = progress.add_task("Processing", total=100)
+        for i in range(100):
+            if i % 25 == 0:
+                logger.info(f"Checkpoint <green>{i}</green> reached")
+            progress.advance(task)
+
+        logger.remove(handler_id)
+    ```
+
+=== "tqdm"
+
+    ```python
+    from tqdm import tqdm
+
+    from logust import logger
+
+    logger.remove()
+    logger.add(lambda msg: tqdm.write(msg), colorize=True)
+
+    for i in tqdm(range(100)):
+        if i % 25 == 0:
+            logger.info(f"Checkpoint <green>{i}</green> reached")
+    ```
+
+- `colorize=True` gives the sink level colors and renders `<green>...</green>` markup, as on the console. Callable sinks default to no color.
+- With rich, wrap the message in `Text.from_ansi()`. A plain string is parsed as rich markup, which mangles the ANSI codes.
+- Don't pass `end=""`: logust hands callable sinks the message **without** a trailing newline (see [Comparison](../comparison.md#callable-sinks-receive-no-trailing-newline)).
+
+!!! note "Add the sink after the display starts"
+    A sink is bound when `add()` is called. Adding `sys.stdout` before `rich` swaps it out does not make the two cooperate, so call `logger.remove()` and add the callable sink explicitly, as above. A stream added while the display is active (`logger.add(sys.stdout)` inside `with Progress():`) does go through rich's proxy.
+
+See [`examples/09_rich_progress.py`](https://github.com/yamaaaaaa31/logust/blob/main/examples/09_rich_progress.py) for a runnable version.
+
 ## FastAPI / Starlette Middleware
 
 Automatic request/response logging for web applications:
