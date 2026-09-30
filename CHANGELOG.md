@@ -7,18 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-01
+
 ### Added
-- **Stream sinks**: `logger.add()` accepts any object with a callable `write()` (e.g. `io.StringIO`, a redirected `sys.stdout`). Only `sys.__stdout__` / `sys.__stderr__` use the Rust fast path. Item 1 from issue #59
-- **`colorize` for every sink type**: callable and file sinks accept `colorize=True` (level colors, token styles, message markup). Item 2 from issue #59
-- **`rich` progress bar example**: `examples/09_rich_progress.py` logs above a live progress bar.
+- **Stream sinks**: `logger.add()` accepts any object with a callable `write()` (e.g. `io.StringIO`, a redirected `sys.stdout`). Only `sys.__stdout__` / `sys.__stderr__` use the Rust fast path. Item 1 from issue #59 (#64)
+- **`colorize` for every sink type**: callable and file sinks accept `colorize=True` (level colors, token styles, message markup). Item 2 from issue #59 (#65)
+- **`rich` progress bar example**: `examples/09_rich_progress.py` logs above a live progress bar. (#65)
 
 ### Changed
-- **Color markup is stripped from non-colorized output**: Item 3 from issue #59
-- **Stream `colorize` auto-detection follows loguru**: `NO_COLOR`, `FORCE_COLOR`, CI, PyCharm, Jupyter, and `TERM=dumb` are honored before `isatty()`. `serialize=True`, file, and callable sinks default to no color.
+- **Color markup is stripped from non-colorized output**: Item 3 from issue #59 (#61)
+- **Stream `colorize` auto-detection follows loguru**: `NO_COLOR`, `FORCE_COLOR`, CI, PyCharm, Jupyter, and `TERM=dumb` are honored before `isatty()`. `serialize=True`, file, and callable sinks default to no color. (#65)
 
 ### Fixed
-- **Color markup in the `format` string**: tags such as `<green>{time}</green>` and loguru's `<level>...</level>` are rendered when colorized and stripped otherwise, on every sink type. A token inside markup takes the markup's color instead of its default style.
-- **Callable sinks include tracebacks**: formatted callable sinks now append the exception text, the same as file and console sinks.
+- **Color markup in the `format` string**: tags such as `<green>{time}</green>` and loguru's `<level>...</level>` are rendered when colorized and stripped otherwise, on every sink type. A token inside markup takes the markup's color instead of its default style. (#66)
+- **Callable sinks include tracebacks**: formatted callable sinks now append the exception text, the same as file and console sinks. (#64)
 
 ## [0.4.2] - 2026-08-06
 
@@ -162,7 +164,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 1.3x faster than Python standard logging
 - Lock-free fast path for filtered messages
 
-[Unreleased]: https://github.com/yamaaaaaa31/logust/compare/v0.4.2...HEAD
+[Unreleased]: https://github.com/yamaaaaaa31/logust/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/yamaaaaaa31/logust/compare/v0.4.2...v0.5.0
 [0.4.2]: https://github.com/yamaaaaaa31/logust/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/yamaaaaaa31/logust/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/yamaaaaaa31/logust/compare/v0.3.2...v0.4.0
