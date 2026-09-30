@@ -731,6 +731,7 @@ pub struct FileHandler {
     pub sink: FileSink,
     pub level: LogLevel,
     pub format: FormatConfig,
+    pub colorize: bool,
 }
 
 impl FileHandler {
@@ -739,21 +740,28 @@ impl FileHandler {
             sink,
             level,
             format: FormatConfig::default(),
+            colorize: false,
         }
     }
 
-    pub fn with_format(sink: FileSink, level: LogLevel, format: FormatConfig) -> Self {
+    pub fn with_format(
+        sink: FileSink,
+        level: LogLevel,
+        format: FormatConfig,
+        colorize: bool,
+    ) -> Self {
         FileHandler {
             sink,
             level,
             format,
+            colorize,
         }
     }
 
     #[inline]
     pub fn handle(&self, record: &LogRecord) -> io::Result<()> {
         if record.level_no() >= self.level as u32 {
-            let output = self.format.format_record(record, false);
+            let output = self.format.format_record(record, self.colorize);
             self.sink.write_owned(output)
         } else {
             Ok(())

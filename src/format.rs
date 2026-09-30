@@ -8,7 +8,7 @@ use colored::Color;
 use serde::Serialize;
 
 use crate::handler::{ExtraMap, LogRecord};
-use crate::level::LogLevel;
+use crate::level::{LogLevel, get_level_info};
 
 /// Logger initialization time for elapsed calculation
 pub static LOGGER_START_TIME: LazyLock<DateTime<Local>> = LazyLock::new(Local::now);
@@ -66,6 +66,12 @@ fn colorize_text(text: &str, color: Color, bold: bool) -> String {
     } else {
         format!("\x1b[{}m{}\x1b[0m", color_code, text)
     }
+}
+
+/// Style `text` as the console styles the level `level_name` (bold, level color).
+pub fn colorize_level(text: &str, level_name: &str) -> String {
+    let color = get_level_info(level_name).map_or(Color::White, |info| info.get_color());
+    colorize_text(text, color, true)
 }
 
 /// Apply dim style to text (thread-safe)

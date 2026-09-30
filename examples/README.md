@@ -17,6 +17,7 @@ python examples/01_basic_logging.py
 - `06_custom_levels.py`: custom level names, colors, and filtering
 - `07_callbacks.py`: callbacks for metrics, alerts, and external services
 - `08_fastapi_integration.py`: FastAPI canonical request events and tail sampling
+- `09_rich_progress.py`: log lines above a live `rich` progress bar (`pip install rich`)
 
 ## FastAPI Example
 

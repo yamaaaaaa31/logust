@@ -9,9 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **Stream sinks**: `logger.add()` accepts any object with a callable `write()` (e.g. `io.StringIO`, a redirected `sys.stdout`). Only `sys.__stdout__` / `sys.__stderr__` use the Rust fast path. Item 1 from issue #59
+- **`colorize` for every sink type**: callable and file sinks accept `colorize=True` (level colors, token styles, message markup). Item 2 from issue #59
+- **`rich` progress bar example**: `examples/09_rich_progress.py` logs above a live progress bar.
 
 ### Changed
 - **Color markup is stripped from non-colorized output**: Item 3 from issue #59
+- **Stream `colorize` auto-detection follows loguru**: `NO_COLOR`, `FORCE_COLOR`, CI, PyCharm, Jupyter, and `TERM=dumb` are honored before `isatty()`. `serialize=True`, file, and callable sinks default to no color.
 
 ### Fixed
 - **Callable sinks include tracebacks**: formatted callable sinks now append the exception text, the same as file and console sinks.

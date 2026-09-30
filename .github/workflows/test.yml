@@ -71,7 +71,7 @@ jobs:
       - name: Install dependencies and build
         run: |
           uv venv
-          uv pip install maturin pytest pytest-cov
+          uv pip install maturin pytest pytest-cov rich
           uv run maturin develop
 
       - name: Run tests

@@ -239,7 +239,7 @@ impl PyLogger {
 
     /// Add a file handler
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (path, level=None, format=None, rotation=None, retention=None, compression=None, serialize=None, filter=None, enqueue=None))]
+    #[pyo3(signature = (path, level=None, format=None, rotation=None, retention=None, compression=None, serialize=None, filter=None, enqueue=None, colorize=None))]
     fn add(
         &self,
         path: String,
@@ -251,6 +251,7 @@ impl PyLogger {
         serialize: Option<bool>,
         filter: Option<Py<PyAny>>,
         enqueue: Option<bool>,
+        colorize: Option<bool>,
     ) -> PyResult<u64> {
         let level = level.unwrap_or(LogLevel::Debug);
         let serialize = serialize.unwrap_or(false);
@@ -280,7 +281,8 @@ impl PyLogger {
             .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
 
         let id = handler::next_handler_id();
-        let file_handler = FileHandler::with_format(sink, level, format_config);
+        let file_handler =
+            FileHandler::with_format(sink, level, format_config, colorize.unwrap_or(false));
         let entry = HandlerEntry {
             id,
             handler: HandlerType::File(file_handler),
@@ -1458,10 +1460,16 @@ impl PyLogger {
     }
 }
 
-/// Remove known color markup tags from `text`, keeping unknown tags as literal text.
+/// Render known color markup tags in `text` as ANSI codes, or strip them if `colorize` is false.
 #[pyfunction]
-fn strip_color_markup(text: &str) -> std::borrow::Cow<'_, str> {
-    format::apply_color_markup(text, false)
+fn apply_color_markup(text: &str, colorize: bool) -> std::borrow::Cow<'_, str> {
+    format::apply_color_markup(text, colorize)
+}
+
+/// Style `text` in the bold color of the level `level`.
+#[pyfunction]
+fn colorize_level(text: &str, level: &str) -> String {
+    format::colorize_level(text, level)
 }
 
 #[pymodule]
@@ -1472,7 +1480,8 @@ fn _logust(py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     m.add_class::<PyLogger>()?;
 
-    m.add_function(wrap_pyfunction!(strip_color_markup, m)?)?;
+    m.add_function(wrap_pyfunction!(apply_color_markup, m)?)?;
+    m.add_function(wrap_pyfunction!(colorize_level, m)?)?;
 
     let default_logger = Py::new(py, PyLogger::new(None))?;
     m.add("logger", default_logger)?;

@@ -70,6 +70,7 @@ class PyLogger:
         serialize: bool | None = None,
         filter: Callable[[dict[str, Any]], bool] | None = None,
         enqueue: bool | None = None,
+        colorize: bool | None = None,
     ) -> int:
         """Add a file handler and return its ID."""
         ...
@@ -376,8 +377,12 @@ class PyLogger:
         """Output CRITICAL level log message."""
         ...
 
-def strip_color_markup(text: str) -> str:
-    """Remove known color markup tags, keeping unknown tags as literal text."""
+def apply_color_markup(text: str, colorize: bool) -> str:
+    """Render known color markup tags as ANSI codes, or strip them if not colorize."""
+    ...
+
+def colorize_level(text: str, level: str) -> str:
+    """Style text in the bold color of the named level."""
     ...
 
 logger: PyLogger

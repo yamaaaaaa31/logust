@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import builtins
 import functools
 import os
 import re
@@ -1148,9 +1149,10 @@ class Logger:
                      in a background thread (thread-safe).
                      If False (default), writes are synchronous (reliable).
                      Only valid for file sinks.
-            colorize: Enable ANSI color codes (for console sinks).
-                      If None, auto-detect based on whether sink is a TTY.
-                      Only valid for console sinks.
+            colorize: Enable ANSI color codes and render message color markup.
+                      If None, auto-detect for streams (TTY, NO_COLOR,
+                      FORCE_COLOR, CI, PyCharm, Jupyter); False for serialize,
+                      files, and callables.
             collect: Options for controlling information collection.
                      Can override auto-detection from format string.
 
@@ -1175,7 +1177,11 @@ class Logger:
 
         # A replaced sys.stdout (rich, Jupyter, redirect_stdout) must get output via its write().
         is_console = sink is sys.__stdout__ or sink is sys.__stderr__
-        if not is_console and callable(getattr(sink, "write", None)):
+        is_stream = callable(getattr(sink, "write", None))
+        if colorize is None:
+            colorize = not serialize and is_stream and self._should_colorize(cast("TextIO", sink))
+
+        if is_stream and not is_console:
             sink = self._stream_writer(cast("TextIO", sink))
 
         if callable(sink) and not is_console:
@@ -1185,6 +1191,7 @@ class Logger:
                 format=format,
                 serialize=serialize,
                 filter=filter,
+                colorize=colorize,
             )
             # For callable sinks, compute CollectOptions from format if not specified
             # This avoids relying on Rust's needs_* which is polluted by callback registration
@@ -1205,18 +1212,13 @@ class Logger:
         if is_console:
             stream_name = "stdout" if sink is sys.__stdout__ else "stderr"
             resolved_level = _to_log_level(level) if level is not None else None
-            resolved_colorize = colorize
-            if resolved_colorize is None:
-                stream = cast("TextIO", sink)
-                resolved_colorize = stream.isatty() if hasattr(stream, "isatty") else False
-
             handler_id = self._inner.add_console(
                 stream=stream_name,
                 level=resolved_level,
                 format=format,
                 serialize=serialize,
                 filter=filter,
-                colorize=resolved_colorize,
+                colorize=colorize,
             )
             # Always track handler with CollectOptions (default to auto-detect if not specified)
             self._collect_options[handler_id] = collect if collect is not None else CollectOptions()
@@ -1244,6 +1246,7 @@ class Logger:
             serialize=serialize,
             filter=filter,
             enqueue=enqueue,
+            colorize=colorize,
         )
         # Always track handler with CollectOptions (default to auto-detect if not specified)
         self._collect_options[handler_id] = collect if collect is not None else CollectOptions()
@@ -1251,6 +1254,41 @@ class Logger:
             self._filter_ids.add(handler_id)
         self._invalidate_requirements_cache()
         return handler_id
+
+    @staticmethod
+    def _should_colorize(stream: TextIO) -> bool:
+        """Port of loguru's ``_colorama.should_colorize``."""
+        is_standard_stream = stream is sys.stdout or stream is sys.stderr
+        is_original_standard_stream = stream is sys.__stdout__ or stream is sys.__stderr__
+
+        if is_standard_stream or is_original_standard_stream:
+            if os.getenv("NO_COLOR"):
+                return False
+            if os.getenv("FORCE_COLOR"):
+                return True
+
+        if getattr(builtins, "__IPYTHON__", False) and is_standard_stream:
+            iostream = sys.modules.get("ipykernel.iostream")
+            if iostream is not None and isinstance(stream, iostream.OutStream):
+                return True
+
+        if is_original_standard_stream:
+            if "CI" in os.environ and any(
+                ci in os.environ
+                for ci in ("TRAVIS", "CIRCLECI", "APPVEYOR", "GITLAB_CI", "GITHUB_ACTIONS")
+            ):
+                return True
+            if "PYCHARM_HOSTED" in os.environ:
+                return True
+            if os.environ.get("TERM", "") == "dumb":
+                return False
+            if os.name == "nt" and "TERM" in os.environ:
+                return True
+
+        try:
+            return stream.isatty()
+        except Exception:
+            return False
 
     @staticmethod
     def _stream_writer(stream: TextIO) -> Callable[[str], None]:
@@ -1273,6 +1311,7 @@ class Logger:
         format: str | None = None,
         serialize: bool = False,
         filter: Callable[[dict[str, Any]], bool] | None = None,
+        colorize: bool = False,
     ) -> int:
         """Add a callable as a sink (internal method).
 
@@ -1285,6 +1324,7 @@ class Logger:
             serialize: Output as JSON instead of text format.
             filter: Optional callable that receives a record dict and returns
                     True if the record should be logged, False to skip.
+            colorize: Style tokens and render message markup as ANSI codes.
 
         Returns:
             Handler ID for later removal.
@@ -1296,7 +1336,7 @@ class Logger:
         template_str = format or default_format
 
         # Pre-parse template for efficient single-pass formatting
-        parsed_template = ParsedCallableTemplate(template_str)
+        parsed_template = ParsedCallableTemplate(template_str, colorize)
 
         def callback_wrapper(record: dict[str, Any]) -> None:
             # Apply filter if provided
@@ -1595,7 +1635,7 @@ class Logger:
                 - serialize: Output as JSON
                 - filter: Filter function
                 - enqueue: Async writes (file sinks only, default False)
-                - colorize: Enable ANSI colors (console sinks only)
+                - colorize: Enable ANSI colors (auto-detected for streams)
             levels: List of custom level configurations. Each dict must have:
                 - name (required): Level name
                 - no (required): Numeric value

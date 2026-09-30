@@ -10,7 +10,7 @@ import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from ._logust import strip_color_markup
+from ._logust import apply_color_markup, colorize_level
 
 if TYPE_CHECKING:
     pass
@@ -30,6 +30,21 @@ KNOWN_TOKENS: tuple[str, ...] = (
     "process",
     "message",
 )
+
+_RESET = "\x1b[0m"
+
+# Must match the console token styles in src/format.rs.
+_TOKEN_STYLES: dict[str, str] = {
+    "time": "\x1b[2m",
+    "elapsed": "\x1b[2m",
+    "name": "\x1b[36m",
+    "module": "\x1b[36m",
+    "function": "\x1b[36m",
+    "line": "\x1b[36m",
+    "file": "\x1b[36m",
+    "thread": "\x1b[36m",
+    "process": "\x1b[36m",
+}
 
 # Tokens that require caller info collection
 CALLER_TOKENS: frozenset[str] = frozenset({"name", "module", "function", "line", "file"})
@@ -66,7 +81,14 @@ class ParsedCallableTemplate:
     Performance improvement: ~1-2us/log for callable sinks.
     """
 
-    __slots__ = ("_needed_tokens", "_needs_extra", "_needs_process", "_needs_thread", "_segments")
+    __slots__ = (
+        "_colorize",
+        "_needed_tokens",
+        "_needs_extra",
+        "_needs_process",
+        "_needs_thread",
+        "_segments",
+    )
 
     # Token pattern: {token} or {token:spec} or {extra[key]} or {extra[key]:spec}
     # Only matches known tokens to preserve unknown patterns as literals
@@ -76,12 +98,14 @@ class ParsedCallableTemplate:
         r"\{(" + "|".join(re.escape(t) for t in KNOWN_TOKENS) + r"|extra\[[^\]]+\])(?::([^}]+))?\}"
     )
 
-    def __init__(self, template: str) -> None:
+    def __init__(self, template: str, colorize: bool = False) -> None:
         """Parse the template into segments.
 
         Args:
             template: Format template string.
+            colorize: Style tokens and render message markup as ANSI codes.
         """
+        self._colorize = colorize
         self._segments: tuple[Segment, ...] = self._parse(template)
         # Pre-compute which tokens are needed for lazy evaluation
         self._needed_tokens: frozenset[str] = frozenset(
@@ -223,17 +247,25 @@ class ParsedCallableTemplate:
                     elif key == "process":
                         value = process_str
                     elif key == "message":
-                        value = strip_color_markup(record.get("message", ""))
+                        value = apply_color_markup(record.get("message", ""), self._colorize)
                     else:
                         value = ""
 
                 if seg.spec:
                     try:
-                        parts.append(format(value, seg.spec))
+                        text = format(value, seg.spec)
                     except (ValueError, TypeError):
-                        parts.append(str(value))
+                        text = str(value)
                 else:
-                    parts.append(str(value))
+                    text = str(value)
+
+                if self._colorize and not seg.is_extra:
+                    if seg.key == "level":
+                        text = colorize_level(text, str(value))
+                    elif style := _TOKEN_STYLES.get(seg.key):
+                        text = f"{style}{text}{_RESET}"
+
+                parts.append(text)
 
         exception = record.get("exception")
         if exception:
