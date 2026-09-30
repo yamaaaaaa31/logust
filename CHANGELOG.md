@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Stream `colorize` auto-detection follows loguru**: `NO_COLOR`, `FORCE_COLOR`, CI, PyCharm, Jupyter, and `TERM=dumb` are honored before `isatty()`. `serialize=True`, file, and callable sinks default to no color.
 
 ### Fixed
+- **Color markup in the `format` string**: tags such as `<green>{time}</green>` and loguru's `<level>...</level>` are rendered when colorized and stripped otherwise, on every sink type. A token inside markup takes the markup's color instead of its default style.
 - **Callable sinks include tracebacks**: formatted callable sinks now append the exception text, the same as file and console sinks.
 
 ## [0.4.2] - 2026-08-06

@@ -377,12 +377,26 @@ class PyLogger:
         """Output CRITICAL level log message."""
         ...
 
-def apply_color_markup(text: str, colorize: bool) -> str:
-    """Render known color markup tags as ANSI codes, or strip them if not colorize."""
+def apply_color_markup(text: str, colorize: bool, base: str = "") -> str:
+    """Render known color markup tags as ANSI codes, or strip them if not colorize.
+
+    base is the ANSI prefix of styles surrounding text; it is re-applied after each reset.
+    """
     ...
 
 def colorize_level(text: str, level: str) -> str:
     """Style text in the bold color of the named level."""
+    ...
+
+def split_format_markup(template: str) -> list[tuple[str, str]]:
+    """Split color markup out of a format template into (kind, value) pieces.
+
+    kind is "text", "open" (value is the ANSI prefix), "level", or "close".
+    """
+    ...
+
+def level_style(level: str) -> str:
+    """ANSI prefix that styles text in the bold color of the named level."""
     ...
 
 logger: PyLogger

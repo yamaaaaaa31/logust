@@ -151,3 +151,38 @@ def test_file_sink_colorize(logger: Logger, tmp_path: Path) -> None:
 
     assert colored.read_text() == f"{GREEN_INFO} \x1b[32mhi\x1b[0m\n"
     assert plain.read_text() == "INFO hi\n"
+
+
+FORMAT_MARKUP = "<green>{level}</green>|<level>{message}</level>|{level}"
+# <green> replaces the default level style; <level> survives the reset after </red>
+COLORED_MARKUP = (
+    "\x1b[32mWARNING\x1b[0m|\x1b[1;33m\x1b[31mr\x1b[0m\x1b[1;33m t\x1b[0m|\x1b[1;33mWARNING\x1b[0m"
+)
+
+
+def test_callable_sink_colorizes_format_markup(logger: Logger) -> None:
+    messages: list[str] = []
+    logger.add(messages.append, format=FORMAT_MARKUP, colorize=True)
+
+    logger.warning("<red>r</red> t")
+
+    assert messages == [COLORED_MARKUP]
+
+
+def test_file_sink_colorizes_format_markup(logger: Logger, tmp_path: Path) -> None:
+    log_file = tmp_path / "colored.log"
+    logger.add(str(log_file), format=FORMAT_MARKUP, colorize=True)
+
+    logger.warning("<red>r</red> t")
+    logger.complete()
+
+    assert log_file.read_text() == f"{COLORED_MARKUP}\n"
+
+
+def test_level_markup_without_level_token(logger: Logger) -> None:
+    messages: list[str] = []
+    logger.add(messages.append, format="<level>{message}</level>", colorize=True)
+
+    logger.error("x")
+
+    assert messages == ["\x1b[1;31mx\x1b[0m"]

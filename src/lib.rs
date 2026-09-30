@@ -1461,15 +1461,43 @@ impl PyLogger {
 }
 
 /// Render known color markup tags in `text` as ANSI codes, or strip them if `colorize` is false.
+///
+/// `base` is the ANSI prefix of styles surrounding `text`; it is re-applied after each reset.
 #[pyfunction]
-fn apply_color_markup(text: &str, colorize: bool) -> std::borrow::Cow<'_, str> {
-    format::apply_color_markup(text, colorize)
+#[pyo3(signature = (text, colorize, base=""))]
+fn apply_color_markup<'a>(text: &'a str, colorize: bool, base: &str) -> std::borrow::Cow<'a, str> {
+    format::apply_color_markup_within(text, colorize, base)
 }
 
 /// Style `text` in the bold color of the level `level`.
 #[pyfunction]
 fn colorize_level(text: &str, level: &str) -> String {
     format::colorize_level(text, level)
+}
+
+/// Split color markup out of a format template into `(kind, value)` pieces.
+///
+/// `kind` is `"text"` (value: text), `"open"` (value: ANSI prefix), `"level"` (open `<level>`),
+/// or `"close"`.
+#[pyfunction]
+fn split_format_markup(template: &str) -> Vec<(&'static str, String)> {
+    format::split_format_markup(template)
+        .into_iter()
+        .map(|piece| match piece {
+            format::MarkupPiece::Text(text) => ("text", text),
+            format::MarkupPiece::Open(format::MarkupStyle::Ansi(ansi)) => {
+                ("open", ansi.to_string())
+            }
+            format::MarkupPiece::Open(format::MarkupStyle::Level) => ("level", String::new()),
+            format::MarkupPiece::Close => ("close", String::new()),
+        })
+        .collect()
+}
+
+/// ANSI prefix that styles text like the level `level` (bold, level color).
+#[pyfunction]
+fn level_style(level: &str) -> String {
+    format::level_style(level)
 }
 
 #[pymodule]
@@ -1482,6 +1510,8 @@ fn _logust(py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     m.add_function(wrap_pyfunction!(apply_color_markup, m)?)?;
     m.add_function(wrap_pyfunction!(colorize_level, m)?)?;
+    m.add_function(wrap_pyfunction!(split_format_markup, m)?)?;
+    m.add_function(wrap_pyfunction!(level_style, m)?)?;
 
     let default_logger = Py::new(py, PyLogger::new(None))?;
     m.add("logger", default_logger)?;
