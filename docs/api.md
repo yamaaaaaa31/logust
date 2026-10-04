@@ -17,16 +17,25 @@ The main logging interface.
 ### Log methods
 
 ```python
-logger.trace(message, **kwargs)
-logger.debug(message, **kwargs)
-logger.info(message, **kwargs)
-logger.success(message, **kwargs)
-logger.warning(message, **kwargs)
-logger.error(message, **kwargs)
-logger.fail(message, **kwargs)
-logger.critical(message, **kwargs)
-logger.exception(message, **kwargs)  # ERROR with traceback
-logger.log(level, message, **kwargs)  # Any level
+logger.trace(message, *args, **kwargs)
+logger.debug(message, *args, **kwargs)
+logger.info(message, *args, **kwargs)
+logger.success(message, *args, **kwargs)
+logger.warning(message, *args, **kwargs)
+logger.error(message, *args, **kwargs)
+logger.fail(message, *args, **kwargs)
+logger.critical(message, *args, **kwargs)
+logger.exception(message, *args, **kwargs)  # ERROR with traceback
+logger.log(level, message, *args, **kwargs)  # Any level
+```
+
+When `args` or `kwargs` are given, the message is formatted with
+`message.format(*args, **kwargs)`; kwargs not used by a placeholder go to `extra`.
+A message without arguments is logged as-is.
+
+```python
+logger.info("Processed {} items", 42)
+logger.info("User {user} did {}", "login", user="alice", request_id="r1")
 ```
 
 ### Handler management

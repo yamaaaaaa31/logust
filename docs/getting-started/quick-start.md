@@ -56,6 +56,9 @@ from logust import logger
 # Rotate and retain
 logger.add("app.log", rotation="500 MB", retention="10 days")
 
+# Format with arguments (loguru style)
+logger.info("Processed {} items for {user}", 42, user="alice")
+
 # JSON output
 logger.add("app.json", serialize=True)
 logger.info("Structured log")
