@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{LazyLock, RwLockReadGuard, RwLockWriteGuard};
 
 use colored::Color;
@@ -65,8 +66,48 @@ impl LogLevel {
         }
     }
 
+    /// Slot of this level in [`BUILTIN_COLOR_OVERRIDES`] (one byte per level).
+    #[inline]
+    fn slot(&self) -> u32 {
+        match self {
+            LogLevel::Trace => 0,
+            LogLevel::Debug => 1,
+            LogLevel::Info => 2,
+            LogLevel::Success => 3,
+            LogLevel::Warning => 4,
+            LogLevel::Error => 5,
+            LogLevel::Fail => 6,
+            LogLevel::Critical => 7,
+        }
+    }
+
+    /// Look up a built-in level by (case-insensitive) name.
+    pub fn from_name(name: &str) -> Option<LogLevel> {
+        match name.to_ascii_uppercase().as_str() {
+            "TRACE" => Some(LogLevel::Trace),
+            "DEBUG" => Some(LogLevel::Debug),
+            "INFO" => Some(LogLevel::Info),
+            "SUCCESS" => Some(LogLevel::Success),
+            "WARNING" => Some(LogLevel::Warning),
+            "ERROR" => Some(LogLevel::Error),
+            "FAIL" => Some(LogLevel::Fail),
+            "CRITICAL" => Some(LogLevel::Critical),
+            _ => None,
+        }
+    }
+
     /// Get associated color for terminal output
+    #[inline]
     pub fn color(&self) -> Color {
+        let code = (BUILTIN_COLOR_OVERRIDES.load(Ordering::Relaxed) >> (self.slot() * 8)) as u8;
+        if code != 0 {
+            return color_from_code(code);
+        }
+        self.default_color()
+    }
+
+    /// Default color of the built-in level, ignoring `logger.level()` updates
+    fn default_color(&self) -> Color {
         match self {
             LogLevel::Trace => Color::Cyan,
             LogLevel::Debug => Color::Blue,
@@ -106,6 +147,55 @@ impl LevelInfo {
     }
 }
 
+/// Colors set on built-in levels via `logger.level()`: one byte per level slot,
+/// `0` = default color, otherwise an index into [`NAMED_COLORS`] plus one.
+/// Read with one relaxed load in [`LogLevel::color`], written only at setup time.
+static BUILTIN_COLOR_OVERRIDES: AtomicU64 = AtomicU64::new(0);
+
+/// Colors that [`get_color_from_name`] can produce, indexed by override code - 1.
+const NAMED_COLORS: [Color; 16] = [
+    Color::Black,
+    Color::Red,
+    Color::Green,
+    Color::Yellow,
+    Color::Blue,
+    Color::Magenta,
+    Color::Cyan,
+    Color::White,
+    Color::BrightBlack,
+    Color::BrightRed,
+    Color::BrightGreen,
+    Color::BrightYellow,
+    Color::BrightBlue,
+    Color::BrightMagenta,
+    Color::BrightCyan,
+    Color::BrightWhite,
+];
+
+fn color_to_code(color: Color) -> u8 {
+    NAMED_COLORS
+        .iter()
+        .position(|c| *c == color)
+        .map_or(8, |i| i as u8 + 1)
+}
+
+fn color_from_code(code: u8) -> Color {
+    NAMED_COLORS
+        .get(usize::from(code) - 1)
+        .copied()
+        .unwrap_or(Color::White)
+}
+
+/// Make console output of the built-in `level` use `color`
+fn set_builtin_color(level: LogLevel, color: Color) {
+    let shift = level.slot() * 8;
+    let code = u64::from(color_to_code(color)) << shift;
+    let mask = !(0xFFu64 << shift);
+    let _ = BUILTIN_COLOR_OVERRIDES.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
+        Some((v & mask) | code)
+    });
+}
+
 /// Global registry for custom log levels (by name)
 static LEVEL_REGISTRY: LazyLock<RwLock<HashMap<String, LevelInfo>>> =
     LazyLock::new(|| RwLock::new(HashMap::new()));
@@ -117,6 +207,9 @@ static LEVEL_NO_REGISTRY: LazyLock<RwLock<HashMap<u32, String>>> =
 /// Register a custom level
 pub fn register_level(info: LevelInfo) {
     let name = info.name.to_ascii_uppercase();
+    if let Some(builtin) = LogLevel::from_name(&name) {
+        set_builtin_color(builtin, info.get_color());
+    }
     let no = info.no;
     LEVEL_REGISTRY.write().insert(name.clone(), info);
     LEVEL_NO_REGISTRY.write().insert(no, name);
@@ -272,6 +365,28 @@ mod tests {
 
         let info = get_level_by_no(40).unwrap();
         assert_eq!(info.name, "ERROR");
+    }
+
+    #[test]
+    fn test_color_code_roundtrip() {
+        for color in NAMED_COLORS {
+            assert_eq!(color_from_code(color_to_code(color)), color);
+        }
+    }
+
+    #[test]
+    fn test_builtin_color_override() {
+        // Use FAIL only: tests share the global registry.
+        assert_eq!(LogLevel::Fail.color(), Color::Magenta);
+        register_level(LevelInfo::new(
+            "FAIL".into(),
+            45,
+            Some("bright_blue".into()),
+            None,
+        ));
+        assert_eq!(LogLevel::Fail.color(), Color::BrightBlue);
+        assert_eq!(LogLevel::Error.color(), Color::Red);
+        assert_eq!(get_level_info("fail").unwrap().color, "bright_blue");
     }
 
     #[test]

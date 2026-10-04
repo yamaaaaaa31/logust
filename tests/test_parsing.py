@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from logust import parse, parse_json
+from logust import Logger, logger, parse, parse_json
 
 DEFAULT_PATTERN = r"(?P<time>[\d-]+ [\d:]+) \| (?P<level>\w+)\s+\| (?P<message>.*)"
 
@@ -160,3 +160,25 @@ class TestParseJson:
 
         records = list(parse_json(str(log_file)))
         assert len(records) == 2
+
+
+class TestLoggerParse:
+    """Test ``logger.parse()`` (loguru-style access to ``parse``)."""
+
+    def test_logger_parse_matches_module_parse(self, sample_log_file: Path) -> None:
+        records = list(logger.parse(sample_log_file, DEFAULT_PATTERN))
+
+        assert records == list(parse(sample_log_file, DEFAULT_PATTERN))
+        assert [r["level"] for r in records] == ["INFO", "DEBUG", "ERROR"]
+
+    def test_logger_parse_with_cast(self, tmp_path: Path) -> None:
+        log_file = tmp_path / "counts.log"
+        log_file.write_text("count=1\ncount=2\n")
+
+        records = list(logger.parse(log_file, r"count=(?P<count>\d+)", cast={"count": int}))
+
+        assert [r["count"] for r in records] == [1, 2]
+
+    def test_parse_on_class_and_bound_logger(self, sample_log_file: Path) -> None:
+        assert Logger.parse is parse
+        assert len(list(logger.bind(a=1).parse(sample_log_file, DEFAULT_PATTERN))) == 3

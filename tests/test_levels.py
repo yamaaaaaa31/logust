@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from logust import Logger, LogLevel
+import pytest
+
+from logust import Level, Logger, LogLevel
 from logust._logust import PyLogger
 
 
@@ -196,3 +198,98 @@ class TestEnableDisable:
 
         logger.enable("ERROR")
         assert logger.is_enabled() is True
+
+
+class TestLevelLookupAndUpdate:
+    """Test ``logger.level(name)`` lookup and color/icon updates (loguru parity)."""
+
+    def test_lookup_builtin_level(self) -> None:
+        logger = Logger(PyLogger(LogLevel.Trace))
+
+        info = logger.level("INFO")
+
+        assert isinstance(info, Level)
+        assert info == Level("INFO", 20, "green", "")
+        assert (info.name, info.no) == ("INFO", 20)
+
+    def test_lookup_is_case_insensitive(self) -> None:
+        logger = Logger(PyLogger(LogLevel.Trace))
+
+        assert logger.level("warning").no == 30
+
+    def test_lookup_custom_level(self) -> None:
+        logger = Logger(PyLogger(LogLevel.Trace))
+        logger.level("LOOKUP_LVL", no=33, color="cyan", icon="@")
+
+        assert logger.level("LOOKUP_LVL") == Level("LOOKUP_LVL", 33, "cyan", "@")
+
+    def test_register_returns_level(self) -> None:
+        logger = Logger(PyLogger(LogLevel.Trace))
+
+        info = logger.level("RETURNED_LVL", no=34, color="red")
+
+        assert info == Level("RETURNED_LVL", 34, "red", "")
+
+    def test_register_positional_no(self) -> None:
+        logger = Logger(PyLogger(LogLevel.Trace))
+
+        assert logger.level("POSITIONAL_LVL", 36).no == 36
+
+    def test_unknown_level_raises(self) -> None:
+        logger = Logger(PyLogger(LogLevel.Trace))
+
+        with pytest.raises(ValueError, match="does not exist"):
+            logger.level("NO_SUCH_LEVEL")
+
+    def test_update_unknown_level_raises(self) -> None:
+        logger = Logger(PyLogger(LogLevel.Trace))
+
+        with pytest.raises(ValueError, match="does not exist"):
+            logger.level("NO_SUCH_LEVEL", color="red")
+
+    def test_update_custom_level_keeps_no(self) -> None:
+        logger = Logger(PyLogger(LogLevel.Trace))
+        logger.level("UPDATE_LVL", no=37, color="cyan", icon="a")
+
+        updated = logger.level("UPDATE_LVL", icon="b")
+
+        assert updated == Level("UPDATE_LVL", 37, "cyan", "b")
+        assert logger.level("UPDATE_LVL", color="blue") == Level("UPDATE_LVL", 37, "blue", "b")
+
+    def test_update_builtin_color_applies_to_output(self, tmp_path: Path) -> None:
+        logger = Logger(PyLogger(LogLevel.Trace))
+        logger.disable()
+        log_file = tmp_path / "color.log"
+        file_id = logger.add(log_file, format="{level} {message}", colorize=True)
+        messages: list[str] = []
+        logger.add(messages.append, format="{level}", colorize=True)
+
+        try:
+            updated = logger.level("FAIL", color="bright_blue")
+            assert updated == Level("FAIL", 45, "bright_blue", "")
+
+            logger.fail("x")
+            logger.complete()
+
+            # Rust file sink and Python callable sink both use the new color
+            assert "\x1b[1;94mFAIL" in log_file.read_text()
+            assert messages == ["\x1b[1;94mFAIL\x1b[0m"]
+        finally:
+            logger.level("FAIL", color="magenta")
+            logger.remove(file_id)
+
+        assert logger.level("FAIL") == Level("FAIL", 45, "magenta", "")
+
+    def test_configure_levels_updates_existing(self) -> None:
+        logger = Logger(PyLogger(LogLevel.Trace))
+        logger.level("CONFIGURED_LVL", no=38, color="cyan")
+
+        logger.configure(levels=[{"name": "CONFIGURED_LVL", "icon": "*"}])
+
+        assert logger.level("CONFIGURED_LVL") == Level("CONFIGURED_LVL", 38, "cyan", "*")
+
+    def test_configure_levels_unknown_without_no_raises(self) -> None:
+        logger = Logger(PyLogger(LogLevel.Trace))
+
+        with pytest.raises(ValueError, match="does not exist"):
+            logger.configure(levels=[{"name": "NO_SUCH_LEVEL", "color": "red"}])

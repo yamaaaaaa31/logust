@@ -907,6 +907,11 @@ impl PyLogger {
         Ok(())
     }
 
+    /// Look up a level by name: `(name, no, color, icon)`, or `None` if unknown
+    fn level_info(&self, name: &str) -> Option<(String, u32, String, Option<String>)> {
+        get_level_info(name).map(|info| (info.name, info.no, info.color, info.icon))
+    }
+
     /// Log at any level (built-in or custom)
     #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (level_arg, message, exception=None, name=None, function=None, line=None, file=None, thread_name=None, thread_id=None, process_name=None, process_id=None))]

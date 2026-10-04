@@ -62,6 +62,7 @@ from ._parse import parse, parse_json
 from ._types import (
     FilterCallback,
     HandlerConfig,
+    Level,
     LevelConfig,
     LogCallback,
     LogRecord,
@@ -98,6 +99,7 @@ __all__ = [
     "CollectOptions",
     "FilterCallback",
     "HandlerConfig",
+    "Level",
     "LevelConfig",
     "LogCallback",
     "LogLevel",
