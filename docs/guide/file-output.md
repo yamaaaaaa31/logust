@@ -86,7 +86,14 @@ logger.add("app.log", rotation="daily")
 logger.add("app.log", retention=5)
 
 # Compress rotated files
-logger.add("app.log", rotation="daily", compression=True)
+logger.add("app.log", rotation="daily", compression=True)    # gzip
+logger.add("app.log", rotation="daily", compression="zip")   # or "tar.gz", "bz2", ...
+
+# Start a fresh file on every run
+logger.add("app.log", mode="w")
+
+# Only create the file once something is logged
+logger.add("errors.log", level="ERROR", delay=True)
 ```
 
 ## Handler options
@@ -99,10 +106,14 @@ logger.add(
     format="{time} | {level} | {message}",  # Custom format
     rotation="500 MB",      # Rotation strategy
     retention="10 days",    # Retention policy
-    compression=True,       # Compress rotated files
+    compression=True,       # Compress rotated files (True = gzip, or "zip", "tar.gz", ...)
     serialize=True,         # JSON output
     filter=None,            # Filter callback
     enqueue=False,          # Sync writes (default)
+    mode="a",               # "a" appends (default), "w" truncates
+    encoding="utf-8",       # UTF-8 only (see below)
+    delay=False,            # True: create the file on the first message
+    catch=None,             # Sink error policy (see below)
 )
 
 # Console handler options
@@ -113,8 +124,12 @@ logger.add(
     serialize=False,        # JSON output
     filter=None,            # Filter callback
     colorize=True,          # ANSI color codes (console only)
+    catch=None,             # Sink error policy (see below)
 )
 ```
+
+`mode`, `encoding`, and `delay` only apply to file sinks. Passing them to a
+stream or callable sink raises `TypeError`, as in loguru.
 
 ## Rotation
 
@@ -171,12 +186,99 @@ logger.add("app.log", retention=5)  # Keep last 5 files
 
 ## Compression
 
-Compress rotated files with gzip:
+Compress rotated files. `compression=True` uses gzip; a string picks the
+format, using the same names as loguru:
 
 ```python
 logger.add("app.log", rotation="daily", compression=True)
-# Creates: app.2024-12-24.log.gz
+# Creates: app.2024-12-24_00-00-00_000000.pid1234.log.gz
+
+logger.add("app.log", rotation="daily", compression="zip")
+# Creates: app.2024-12-24_00-00-00_000000.pid1234.log.zip
 ```
+
+| Value | Archive |
+|-------|---------|
+| `True`, `"gz"` | gzip (`.log.gz`) |
+| `"bz2"` | bzip2 (`.log.bz2`) |
+| `"zip"` | ZIP with one deflated entry (`.log.zip`) |
+| `"tar"` | uncompressed tarball (`.log.tar`) |
+| `"tar.gz"` | gzip-compressed tarball (`.log.tar.gz`) |
+| `"tar.bz2"` | bzip2-compressed tarball (`.log.tar.bz2`) |
+
+Archives hold the rotated file under its own name, so `unzip`, `tar` and
+Python's `zipfile`/`tarfile` restore the original file. `"xz"`, `"lzma"` and
+`"tar.xz"` raise `ValueError`, since Logust does not bundle an LZMA encoder.
+Passing a function as `compression`, which loguru allows, raises `TypeError`.
+
+Compression only runs when a file is rotated, so it does not slow down
+writes. Retention finds rotated files in every supported format, so changing
+`compression` between runs still cleans up older archives.
+
+## File mode
+
+```python
+logger.add("app.log")            # mode="a" (default): append to an existing file
+logger.add("app.log", mode="w")  # truncate the file when the sink opens it
+```
+
+With `mode="w"` only the first open truncates. Files reopened after rotation
+or in a forked child are appended to. Other modes raise `ValueError`.
+
+## Delayed file creation
+
+With `delay=True`, the file (and its parent directories) is created when the
+first message is written, not when `add()` is called. A sink that never
+receives a message leaves nothing on disk:
+
+```python
+logger.add("errors.log", level="ERROR", delay=True)
+```
+
+The sink also starts out unopened, so `delay=True` adds no cost to each
+write. Because the file is opened later, a path that cannot be opened is no
+longer reported by `add()`. The error happens at the first write and follows
+the `catch` setting.
+
+## Encoding
+
+Logust writes files from Rust, always as UTF-8. `encoding=` exists for
+loguru compatibility. Any spelling of UTF-8 (`"utf-8"`, `"utf8"`, `"UTF-8"`,
+...) is accepted, and any other encoding raises `ValueError`.
+
+## Handling sink errors
+
+`catch=` controls what happens when a sink fails, such as a callable that
+raises, a stream whose `write()` raises, or a file that cannot be opened or
+written:
+
+| Value | Behavior |
+|-------|----------|
+| `None` (default) | The error is dropped silently, as in earlier Logust releases |
+| `True` | A loguru-style report goes to stderr and logging continues |
+| `False` | The error is raised from the logging call (`OSError` for file sinks) |
+
+```python
+logger.add(send_to_service, catch=True)
+# --- Logging error in Logust Handler #3 ---
+# Record was: {...}
+# Traceback (most recent call last):
+#   ...
+# --- End of logging error ---
+```
+
+With `catch=False`, every other handler still receives the message, and then
+the first error is raised.
+
+!!! note "Difference from loguru"
+    loguru's default is `catch=True`. Logust keeps `None` (silent) as the
+    default so existing applications do not start writing reports to stderr.
+    Pass `catch=True` to match loguru.
+
+For file sinks, a report or exception can only come from a failed open or
+write in the calling thread. With `enqueue=True`, write errors happen on the
+background writer thread and are printed to stderr whatever `catch` is set
+to.
 
 ## JSON serialization
 
