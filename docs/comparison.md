@@ -114,7 +114,7 @@ Keeping `end=""` with logust joins every log line into one. Stream sinks (object
 ### Other differences
 
 - **`catch()`**: Same call shapes as loguru (`@logger.catch`, `@logger.catch(...)`, `with logger.catch():`) and the same `exception`, `level`, `reraise`, `onerror`, `exclude`, and `default` options. The record message is `"An error occurred: <exception>"` (set the prefix with `message=`), not loguru's `"An error has been caught in function ..."`.
-- **`level()`**: Returns `Level(name, no, color, icon)` like loguru, but `color` is a color name (`"green"`) rather than markup (`"<green><bold>"`), and built-in levels have no icon. Level names are case-insensitive, and passing `no` for an existing level re-registers it instead of raising.
+- **`level()`**: Returns `Level(name, no, color, icon)` like loguru, but `color` is a color name (`"green"`) rather than markup (`"<green><bold>"`). Level names are case-insensitive, and passing `no` for an existing level re-registers it instead of raising.
 - **Time-based `rotation`**: `timedelta(days=1)`, `timedelta(hours=1)`, and `time(0, 0)` are supported and rotate on clock boundaries (midnight, top of the hour). Other intervals and times raise `ValueError`.
 - **Coroutine sinks**: `async def` sinks are not supported yet; `add()` raises `TypeError` instead of silently never awaiting them.
 - **`logger.parse()`**: Same as `logust.parse()`. It takes a file path (not an open file) and `cast` must be a dict.

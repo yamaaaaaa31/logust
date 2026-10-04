@@ -96,6 +96,20 @@ impl LogLevel {
         }
     }
 
+    /// Default icon (loguru's defaults; FAIL is logust-only)
+    pub fn icon(&self) -> &'static str {
+        match self {
+            LogLevel::Trace => "\u{270F}\u{FE0F}",
+            LogLevel::Debug => "\u{1F41E}",
+            LogLevel::Info => "\u{2139}\u{FE0F}",
+            LogLevel::Success => "\u{2705}",
+            LogLevel::Warning => "\u{26A0}\u{FE0F}",
+            LogLevel::Error => "\u{274C}",
+            LogLevel::Fail => "\u{2716}\u{FE0F}",
+            LogLevel::Critical => "\u{2620}\u{FE0F}",
+        }
+    }
+
     /// Get associated color for terminal output
     #[inline]
     pub fn color(&self) -> Color {
@@ -230,47 +244,51 @@ pub fn get_level_info(name: &str) -> Option<LevelInfo> {
         return Some(info.clone());
     }
 
-    match upper.as_str() {
-        "TRACE" => Some(LevelInfo::new("TRACE".into(), 5, Some("cyan".into()), None)),
-        "DEBUG" => Some(LevelInfo::new(
-            "DEBUG".into(),
-            10,
-            Some("blue".into()),
-            None,
-        )),
-        "INFO" => Some(LevelInfo::new(
-            "INFO".into(),
-            20,
-            Some("green".into()),
-            None,
-        )),
-        "SUCCESS" => Some(LevelInfo::new(
-            "SUCCESS".into(),
-            25,
-            Some("bright_green".into()),
-            None,
-        )),
-        "WARNING" => Some(LevelInfo::new(
-            "WARNING".into(),
-            30,
-            Some("yellow".into()),
-            None,
-        )),
-        "ERROR" => Some(LevelInfo::new("ERROR".into(), 40, Some("red".into()), None)),
-        "FAIL" => Some(LevelInfo::new(
-            "FAIL".into(),
-            45,
-            Some("magenta".into()),
-            None,
-        )),
-        "CRITICAL" => Some(LevelInfo::new(
-            "CRITICAL".into(),
-            50,
-            Some("bright_red".into()),
-            None,
-        )),
-        _ => None,
+    builtin_level(&upper).map(builtin_level_info)
+}
+
+/// Built-in level for an upper-case level name
+fn builtin_level(upper: &str) -> Option<LogLevel> {
+    Some(match upper {
+        "TRACE" => LogLevel::Trace,
+        "DEBUG" => LogLevel::Debug,
+        "INFO" => LogLevel::Info,
+        "SUCCESS" => LogLevel::Success,
+        "WARNING" => LogLevel::Warning,
+        "ERROR" => LogLevel::Error,
+        "FAIL" => LogLevel::Fail,
+        "CRITICAL" => LogLevel::Critical,
+        _ => return None,
+    })
+}
+
+/// Level info of a built-in level
+fn builtin_level_info(level: LogLevel) -> LevelInfo {
+    let color = match level {
+        LogLevel::Trace => "cyan",
+        LogLevel::Debug => "blue",
+        LogLevel::Info => "green",
+        LogLevel::Success => "bright_green",
+        LogLevel::Warning => "yellow",
+        LogLevel::Error => "red",
+        LogLevel::Fail => "magenta",
+        LogLevel::Critical => "bright_red",
+    };
+    LevelInfo::new(
+        level.as_str().into(),
+        level as u32,
+        Some(color.into()),
+        Some(level.icon().into()),
+    )
+}
+
+/// Color of the level `name` (custom first, then built-in), without cloning its info
+pub fn get_level_color(name: &str) -> Option<Color> {
+    let upper = name.to_ascii_uppercase();
+    if let Some(info) = LEVEL_REGISTRY.read().get(&upper) {
+        return Some(info.get_color());
     }
+    builtin_level(&upper).map(|level| level.color())
 }
 
 /// Look up level by numeric value (O(1) using secondary registry)
@@ -329,6 +347,8 @@ mod tests {
 
         let info = get_level_info("Info").unwrap();
         assert_eq!(info.name, "INFO");
+        assert_eq!(info.icon.as_deref(), Some(LogLevel::Info.icon()));
+        assert_eq!(info.get_color(), LogLevel::Info.color());
     }
 
     #[test]

@@ -209,7 +209,7 @@ class TestLevelLookupAndUpdate:
         info = logger.level("INFO")
 
         assert isinstance(info, Level)
-        assert info == Level("INFO", 20, "green", "")
+        assert info == Level("INFO", 20, "green", "ℹ️")
         assert (info.name, info.no) == ("INFO", 20)
 
     def test_lookup_is_case_insensitive(self) -> None:
@@ -266,7 +266,7 @@ class TestLevelLookupAndUpdate:
 
         try:
             updated = logger.level("FAIL", color="bright_blue")
-            assert updated == Level("FAIL", 45, "bright_blue", "")
+            assert updated == Level("FAIL", 45, "bright_blue", "✖️")
 
             logger.fail("x")
             logger.complete()
@@ -278,7 +278,7 @@ class TestLevelLookupAndUpdate:
             logger.level("FAIL", color="magenta")
             logger.remove(file_id)
 
-        assert logger.level("FAIL") == Level("FAIL", 45, "magenta", "")
+        assert logger.level("FAIL") == Level("FAIL", 45, "magenta", "✖️")
 
     def test_configure_levels_updates_existing(self) -> None:
         logger = Logger(PyLogger(LogLevel.Trace))

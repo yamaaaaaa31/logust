@@ -8,7 +8,8 @@ use colored::Color;
 use serde::Serialize;
 
 use crate::handler::{ExtraMap, LogRecord};
-use crate::level::get_level_info;
+use crate::level::get_level_color;
+use crate::time_format::TimeSpec;
 
 /// Logger initialization time for elapsed calculation
 pub static LOGGER_START_TIME: LazyLock<DateTime<Local>> = LazyLock::new(Local::now);
@@ -75,13 +76,13 @@ fn colorize_text(text: &str, color: Color, bold: bool) -> String {
 
 /// Style `text` as the console styles the level `level_name` (bold, level color).
 pub fn colorize_level(text: &str, level_name: &str) -> String {
-    let color = get_level_info(level_name).map_or(Color::White, |info| info.get_color());
+    let color = get_level_color(level_name).unwrap_or(Color::White);
     colorize_text(text, color, true)
 }
 
 /// ANSI prefix that styles text like the level `level_name` (bold, level color).
 pub fn level_style(level_name: &str) -> String {
-    let color = get_level_info(level_name).map_or(Color::White, |info| info.get_color());
+    let color = get_level_color(level_name).unwrap_or(Color::White);
     format!("\x1b[1;{}m", color_code(color))
 }
 
@@ -160,10 +161,16 @@ pub enum FormatToken {
     Static(String),
     /// {time} placeholder
     Time,
+    /// {time:<spec>} placeholder with a precompiled loguru time spec
+    TimeFormatted(Box<TimeSpec>),
     /// {level} placeholder (no width)
     Level,
     /// {level:<N} placeholder with width
     LevelWidth(usize),
+    /// {level.no} placeholder - numeric severity
+    LevelNo,
+    /// {level.icon} placeholder
+    LevelIcon,
     /// {message} placeholder
     Message,
     /// {extra[key]} placeholder
@@ -178,10 +185,22 @@ pub enum FormatToken {
     Elapsed,
     /// {thread} placeholder - thread name:id
     Thread,
+    /// {thread.name} placeholder
+    ThreadName,
+    /// {thread.id} placeholder
+    ThreadId,
     /// {process} placeholder - process name:id
     Process,
-    /// {file} placeholder - source file basename
+    /// {process.name} placeholder
+    ProcessName,
+    /// {process.id} placeholder
+    ProcessId,
+    /// {file} / {file.name} placeholder - source file basename
     File,
+    /// {file.path} placeholder - source file path
+    FilePath,
+    /// {exception} placeholder - formatted traceback (empty without exception)
+    Exception,
     /// {module} placeholder - module name (alias for Name)
     Module,
     /// Opening color markup tag in the template (`<red>`, `<level>`, ...)
@@ -199,19 +218,24 @@ fn compute_requirements(tokens: &[FormatToken]) -> TokenRequirements {
             | FormatToken::Module
             | FormatToken::Function
             | FormatToken::Line
-            | FormatToken::File => {
+            | FormatToken::File
+            | FormatToken::FilePath => {
                 reqs.needs_caller = true;
             }
-            FormatToken::Thread => {
+            FormatToken::Thread | FormatToken::ThreadName | FormatToken::ThreadId => {
                 reqs.needs_thread = true;
             }
-            FormatToken::Process => {
+            FormatToken::Process | FormatToken::ProcessName | FormatToken::ProcessId => {
                 reqs.needs_process = true;
             }
+            // `{time:<spec>}` renders from the record's timestamp itself
             FormatToken::Time => {
                 reqs.needs_time = true;
             }
-            FormatToken::Level | FormatToken::LevelWidth(_) => {
+            FormatToken::Level
+            | FormatToken::LevelWidth(_)
+            | FormatToken::LevelNo
+            | FormatToken::LevelIcon => {
                 reqs.needs_level = true;
             }
             FormatToken::Message => {
@@ -226,21 +250,49 @@ fn compute_requirements(tokens: &[FormatToken]) -> TokenRequirements {
     reqs
 }
 
-/// Parse a template string into tokens
-fn parse_template(template: &str) -> Vec<FormatToken> {
+/// Parse a template string into tokens.
+///
+/// Fails on an invalid `{time:<spec>}` (loguru raises on these too).
+fn parse_template(template: &str) -> Result<Vec<FormatToken>, String> {
     let mut tokens = Vec::new();
     for piece in split_format_markup(template) {
         match piece {
-            MarkupPiece::Text(text) => parse_placeholders(&text, &mut tokens),
+            MarkupPiece::Text(text) => parse_placeholders(&text, &mut tokens)?,
             MarkupPiece::Open(style) => tokens.push(FormatToken::StyleOpen(style)),
             MarkupPiece::Close => tokens.push(FormatToken::StyleClose),
         }
     }
-    tokens
+    Ok(tokens)
+}
+
+/// Token for a placeholder without format spec, if it is a known field
+fn field_token(placeholder: &str) -> Option<FormatToken> {
+    Some(match placeholder {
+        "time" => FormatToken::Time,
+        "message" => FormatToken::Message,
+        "level" | "level.name" => FormatToken::Level,
+        "level.no" => FormatToken::LevelNo,
+        "level.icon" => FormatToken::LevelIcon,
+        "name" => FormatToken::Name,
+        "function" => FormatToken::Function,
+        "line" => FormatToken::Line,
+        "elapsed" => FormatToken::Elapsed,
+        "thread" => FormatToken::Thread,
+        "thread.name" => FormatToken::ThreadName,
+        "thread.id" => FormatToken::ThreadId,
+        "process" => FormatToken::Process,
+        "process.name" => FormatToken::ProcessName,
+        "process.id" => FormatToken::ProcessId,
+        "file" | "file.name" => FormatToken::File,
+        "file.path" => FormatToken::FilePath,
+        "module" => FormatToken::Module,
+        "exception" => FormatToken::Exception,
+        _ => return None,
+    })
 }
 
 /// Parse `{...}` placeholders in a markup-free piece of the template
-fn parse_placeholders(template: &str, tokens: &mut Vec<FormatToken>) {
+fn parse_placeholders(template: &str, tokens: &mut Vec<FormatToken>) -> Result<(), String> {
     let mut chars = template.chars().peekable();
     let mut static_buf = String::new();
 
@@ -259,29 +311,15 @@ fn parse_placeholders(template: &str, tokens: &mut Vec<FormatToken>) {
                 tokens.push(FormatToken::Static(std::mem::take(&mut static_buf)));
             }
 
-            if placeholder == "time" {
-                tokens.push(FormatToken::Time);
-            } else if placeholder == "message" {
-                tokens.push(FormatToken::Message);
-            } else if placeholder == "level" {
-                tokens.push(FormatToken::Level);
-            } else if placeholder == "name" {
-                tokens.push(FormatToken::Name);
-            } else if placeholder == "function" {
-                tokens.push(FormatToken::Function);
-            } else if placeholder == "line" {
-                tokens.push(FormatToken::Line);
-            } else if placeholder == "elapsed" {
-                tokens.push(FormatToken::Elapsed);
-            } else if placeholder == "thread" {
-                tokens.push(FormatToken::Thread);
-            } else if placeholder == "process" {
-                tokens.push(FormatToken::Process);
-            } else if placeholder == "file" {
-                tokens.push(FormatToken::File);
-            } else if placeholder == "module" {
-                tokens.push(FormatToken::Module);
-            } else if let Some(width_str) = placeholder.strip_prefix("level:<") {
+            if let Some(token) = field_token(&placeholder) {
+                tokens.push(token);
+            } else if let Some(spec) = placeholder.strip_prefix("time:") {
+                let spec = TimeSpec::parse(spec)?;
+                tokens.push(FormatToken::TimeFormatted(Box::new(spec)));
+            } else if let Some(width_str) = placeholder
+                .strip_prefix("level:<")
+                .or_else(|| placeholder.strip_prefix("level.name:<"))
+            {
                 if let Ok(width) = width_str.parse::<usize>() {
                     tokens.push(FormatToken::LevelWidth(width));
                 } else {
@@ -305,6 +343,7 @@ fn parse_placeholders(template: &str, tokens: &mut Vec<FormatToken>) {
     if !static_buf.is_empty() {
         tokens.push(FormatToken::Static(static_buf));
     }
+    Ok(())
 }
 
 /// Convert tag name to ANSI escape code (returns static string to avoid allocation)
@@ -577,36 +616,43 @@ pub struct FormatConfig {
     pub time_format: String,
     /// Computed requirements based on tokens
     requirements: TokenRequirements,
+    /// Template places the exception itself (`{exception}`): don't append it
+    has_exception_token: bool,
 }
 
 impl Default for FormatConfig {
     fn default() -> Self {
-        let template = DEFAULT_FORMAT_TEMPLATE.to_string();
-        let tokens = parse_template(&template);
-        let requirements = compute_requirements(&tokens);
-        FormatConfig {
-            template,
-            tokens,
-            serialize: false,
-            time_format: DEFAULT_TIME_FORMAT.to_string(),
-            requirements,
-        }
+        Self::new(None, false)
     }
 }
 
 impl FormatConfig {
-    /// Create a new format config
+    /// Create a new format config.
+    ///
+    /// Panics on an invalid `{time:<spec>}`; use [`FormatConfig::try_new`] for user input.
     pub fn new(template: Option<String>, serialize: bool) -> Self {
+        Self::try_new(template, serialize).unwrap_or_else(|err| panic!("{err}"))
+    }
+
+    /// Create a new format config, failing on an invalid `{time:<spec>}`
+    pub fn try_new(template: Option<String>, serialize: bool) -> Result<Self, String> {
         let template = template.unwrap_or_else(|| DEFAULT_FORMAT_TEMPLATE.to_string());
-        let tokens = parse_template(&template);
+        let tokens = if serialize {
+            // The template is unused for JSON output
+            parse_template(&template).unwrap_or_default()
+        } else {
+            parse_template(&template)?
+        };
         let requirements = compute_requirements(&tokens);
-        FormatConfig {
+        let has_exception_token = tokens.iter().any(|t| matches!(t, FormatToken::Exception));
+        Ok(FormatConfig {
             template,
             tokens,
             serialize,
             time_format: DEFAULT_TIME_FORMAT.to_string(),
             requirements,
-        }
+            has_exception_token,
+        })
     }
 
     /// Get token requirements for this format
@@ -661,6 +707,13 @@ impl FormatConfig {
                         }
                     }
                 }
+                FormatToken::TimeFormatted(spec) => {
+                    if auto {
+                        result.push_str(&dim_text(&spec.format(&record.timestamp)));
+                    } else {
+                        spec.write(&record.timestamp, &mut result);
+                    }
+                }
                 FormatToken::Message => {
                     if !colorize || styles.is_empty() {
                         result.push_str(&apply_color_markup(&record.message, colorize));
@@ -683,6 +736,15 @@ impl FormatConfig {
                         result.push_str(&colorize_text(&padded, level_color, true));
                     } else {
                         let _ = write!(result, "{:<width$}", level_name, width = width);
+                    }
+                }
+                FormatToken::LevelNo => {
+                    let _ = write!(result, "{}", record.level_no());
+                }
+                FormatToken::LevelIcon => result.push_str(record.level_icon()),
+                FormatToken::Exception => {
+                    if let Some(ref exc) = record.exception {
+                        result.push_str(exc);
                     }
                 }
                 FormatToken::Extra(key) => {
@@ -728,6 +790,34 @@ impl FormatConfig {
                         let _ = write!(result, "{}:{}", record.thread.name, record.thread.id);
                     }
                 }
+                FormatToken::ThreadName => {
+                    if auto {
+                        result.push_str(&cyan_text(&record.thread.name));
+                    } else {
+                        result.push_str(&record.thread.name);
+                    }
+                }
+                FormatToken::ThreadId => {
+                    if auto {
+                        result.push_str(&cyan_text(&record.thread.id.to_string()));
+                    } else {
+                        let _ = write!(result, "{}", record.thread.id);
+                    }
+                }
+                FormatToken::ProcessName => {
+                    if auto {
+                        result.push_str(&cyan_text(&record.process.name));
+                    } else {
+                        result.push_str(&record.process.name);
+                    }
+                }
+                FormatToken::ProcessId => {
+                    if auto {
+                        result.push_str(&cyan_text(&record.process.id.to_string()));
+                    } else {
+                        let _ = write!(result, "{}", record.process.id);
+                    }
+                }
                 FormatToken::Process => {
                     if auto {
                         let process_str = format!("{}:{}", record.process.name, record.process.id);
@@ -737,6 +827,13 @@ impl FormatConfig {
                     }
                 }
                 FormatToken::File => {
+                    if auto {
+                        result.push_str(&cyan_text(record.caller.file_name()));
+                    } else {
+                        result.push_str(record.caller.file_name());
+                    }
+                }
+                FormatToken::FilePath => {
                     if auto {
                         result.push_str(&cyan_text(&record.caller.file));
                     } else {
@@ -752,7 +849,10 @@ impl FormatConfig {
             result.push_str("\x1b[0m");
         }
 
-        if let Some(ref exc) = record.exception {
+        // `{exception}` in the template already placed it
+        if let Some(ref exc) = record.exception
+            && !self.has_exception_token
+        {
             result.push('\n');
             result.push_str(exc);
         }
@@ -920,7 +1020,7 @@ mod tests {
 
     #[test]
     fn test_parse_template() {
-        let tokens = parse_template(DEFAULT_FORMAT_TEMPLATE);
+        let tokens = parse_template(DEFAULT_FORMAT_TEMPLATE).unwrap();
         // Template: "{time} | {level:<8} | {name}:{function}:{line} - {message}"
         assert_eq!(tokens.len(), 11);
         assert!(matches!(tokens[0], FormatToken::Time));
@@ -938,7 +1038,7 @@ mod tests {
 
     #[test]
     fn test_parse_template_extra() {
-        let tokens = parse_template("{message} user={extra[user_id]}");
+        let tokens = parse_template("{message} user={extra[user_id]}").unwrap();
         assert_eq!(tokens.len(), 3);
         assert!(matches!(tokens[0], FormatToken::Message));
         assert!(matches!(&tokens[1], FormatToken::Static(s) if s == " user="));
@@ -1058,6 +1158,132 @@ mod tests {
             config.format_record(&record, true),
             // Markup color replaces the default level style; message resets keep <level>
             "\x1b[32mWARNING\x1b[0m|\x1b[1;33m\x1b[31mr\x1b[0m\x1b[1;33m t\x1b[0m|\x1b[1;33mWARNING\x1b[0m"
+        );
+    }
+
+    #[test]
+    fn test_time_spec_token() {
+        let config = FormatConfig::new(Some("[{time:YYYY-MM-DD}] {message}".into()), false);
+        let record = LogRecord::new(LogLevel::Info, "m".into());
+        let expected = format!("[{}] m", record.timestamp.format("%Y-%m-%d"));
+        assert_eq!(config.format_record(&record, false), expected);
+        // The default `{time}` string is not computed for spec-only formats
+        assert!(!config.requirements().needs_time);
+        assert!(matches!(
+            parse_template("{time:HH}").unwrap()[0],
+            FormatToken::TimeFormatted(_)
+        ));
+        // Colorized like {time}
+        let colored = config.format_record(&record, true);
+        assert!(colored.starts_with("[\x1b[2m"));
+    }
+
+    #[test]
+    fn test_invalid_time_spec_rejected() {
+        assert!(FormatConfig::try_new(Some("{time:SSSSSSS}".into()), false).is_err());
+        assert!(FormatConfig::try_new(Some("{time:%Q}".into()), false).is_err());
+        // Unused template of a JSON sink is not validated
+        assert!(FormatConfig::try_new(Some("{time:SSSSSSS}".into()), true).is_ok());
+    }
+
+    #[test]
+    fn test_plain_time_unchanged() {
+        let config = FormatConfig::new(Some("{time}".into()), false);
+        let record = LogRecord::new(LogLevel::Info, "m".into());
+        assert_eq!(
+            config.format_record(&record, false),
+            record.timestamp.format(DEFAULT_TIME_FORMAT).to_string()
+        );
+    }
+
+    #[test]
+    fn test_level_fields() {
+        let config = FormatConfig::new(
+            Some("{level.name}|{level.no}|{level.icon}|{message}".into()),
+            false,
+        );
+        let record = LogRecord::new(LogLevel::Warning, "m".into());
+        assert_eq!(
+            config.format_record(&record, false),
+            "WARNING|30|\u{26A0}\u{FE0F}|m"
+        );
+        assert!(config.requirements().needs_level);
+
+        let info = LevelInfo::new("NOTICE".into(), 35, None, Some("!".into()));
+        let record = LogRecord::with_custom_level(info, "m".into(), empty_context(), None);
+        assert_eq!(config.format_record(&record, false), "NOTICE|35|!|m");
+
+        let info = LevelInfo::new("PLAIN".into(), 36, None, None);
+        let record = LogRecord::with_custom_level(info, "m".into(), empty_context(), None);
+        assert_eq!(config.format_record(&record, false), "PLAIN|36||m");
+
+        let config = FormatConfig::new(Some("{level.name:<8}|".into()), false);
+        let record = LogRecord::new(LogLevel::Info, "m".into());
+        assert_eq!(config.format_record(&record, false), "INFO    |");
+    }
+
+    #[test]
+    fn test_thread_process_fields() {
+        let record = LogRecord::with_all(
+            LogLevel::Info,
+            "m".into(),
+            empty_context(),
+            None,
+            CallerInfo::default(),
+            ThreadInfo {
+                name: "worker".into(),
+                id: 42,
+            },
+            ProcessInfo {
+                name: "app".into(),
+                id: 7,
+            },
+        );
+        let config = FormatConfig::new(
+            Some("{thread.name}/{thread.id} {process.name}/{process.id}".into()),
+            false,
+        );
+        assert_eq!(config.format_record(&record, false), "worker/42 app/7");
+        let reqs = config.requirements();
+        assert!(reqs.needs_thread && reqs.needs_process && !reqs.needs_caller);
+    }
+
+    #[test]
+    fn test_file_fields() {
+        let caller = CallerInfo::with_file("mod".into(), "f".into(), 1, "/src/pkg/app.py".into());
+        let record =
+            LogRecord::with_caller(LogLevel::Info, "m".into(), empty_context(), None, caller);
+        let config = FormatConfig::new(Some("{file}|{file.name}|{file.path}".into()), false);
+        assert_eq!(
+            config.format_record(&record, false),
+            "app.py|app.py|/src/pkg/app.py"
+        );
+        assert!(config.requirements().needs_caller);
+    }
+
+    #[test]
+    fn test_exception_token_replaces_auto_append() {
+        let exception = Some("Traceback: boom\n".to_string());
+        let record =
+            LogRecord::with_exception(LogLevel::Error, "Failed".into(), empty_context(), exception);
+        let config = FormatConfig::new(Some("{message}\n{exception}--".into()), false);
+        assert_eq!(
+            config.format_record(&record, false),
+            "Failed\nTraceback: boom\n--"
+        );
+
+        // Without exception, {exception} renders empty
+        let record = LogRecord::new(LogLevel::Error, "ok".into());
+        assert_eq!(config.format_record(&record, false), "ok\n--");
+    }
+
+    #[test]
+    fn test_dotted_fields_with_unknown_attribute_stay_literal() {
+        let config = FormatConfig::new(Some("{level.color} {thread.x}".into()), false);
+        let record = LogRecord::new(LogLevel::Info, "m".into());
+        assert_eq!(
+            config.format_record(&record, false),
+            "{level.color} {thread.x}"
         );
     }
 }

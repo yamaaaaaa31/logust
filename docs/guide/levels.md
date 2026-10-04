@@ -80,7 +80,7 @@ Every call returns a `Level(name, no, color, icon)` named tuple.
 from logust import logger
 
 logger.level("INFO")
-# Level(name='INFO', no=20, color='green', icon='')
+# Level(name='INFO', no=20, color='green', icon='ℹ️')
 
 logger.level("INFO", color="blue")  # Built-in INFO is now blue on the console
 logger.level("NOTICE", icon="*")  # Keeps NOTICE's severity and color

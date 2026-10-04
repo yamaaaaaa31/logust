@@ -10,25 +10,43 @@ import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from ._logust import apply_color_markup, colorize_level, level_style, split_format_markup
+from ._logust import (
+    TimeFormatter,
+    apply_color_markup,
+    colorize_level,
+    level_details,
+    level_style,
+    split_format_markup,
+)
 
 if TYPE_CHECKING:
     pass
 
 # Known format tokens (shared with _logger.py for auto-detect)
-# Order doesn't matter; used to build regex pattern
+# Order doesn't matter; used to build regex pattern (it requires the closing brace,
+# so "level" and "level.no" don't shadow each other)
 KNOWN_TOKENS: tuple[str, ...] = (
     "time",
     "level",
+    "level.name",
+    "level.no",
+    "level.icon",
     "name",
     "module",
     "function",
     "line",
     "file",
+    "file.name",
+    "file.path",
     "elapsed",
     "thread",
+    "thread.name",
+    "thread.id",
     "process",
+    "process.name",
+    "process.id",
     "message",
+    "exception",
 )
 
 _RESET = "\x1b[0m"
@@ -36,18 +54,33 @@ _RESET = "\x1b[0m"
 # Must match the console token styles in src/format.rs.
 _TOKEN_STYLES: dict[str, str] = {
     "time": "\x1b[2m",
+    "time:spec": "\x1b[2m",
     "elapsed": "\x1b[2m",
     "name": "\x1b[36m",
     "module": "\x1b[36m",
     "function": "\x1b[36m",
     "line": "\x1b[36m",
     "file": "\x1b[36m",
+    "file.path": "\x1b[36m",
     "thread": "\x1b[36m",
+    "thread.name": "\x1b[36m",
+    "thread.id": "\x1b[36m",
     "process": "\x1b[36m",
+    "process.name": "\x1b[36m",
+    "process.id": "\x1b[36m",
 }
 
 # Tokens that require caller info collection
-CALLER_TOKENS: frozenset[str] = frozenset({"name", "module", "function", "line", "file"})
+CALLER_TOKENS: frozenset[str] = frozenset(
+    {"name", "module", "function", "line", "file", "file.name", "file.path"}
+)
+# Tokens that require thread / process info collection
+THREAD_TOKENS: frozenset[str] = frozenset({"thread", "thread.name", "thread.id"})
+PROCESS_TOKENS: frozenset[str] = frozenset({"process", "process.name", "process.id"})
+# Tokens rendered exactly like another token (segment key is the target)
+_TOKEN_ALIASES: dict[str, str] = {"level.name": "level", "file.name": "file"}
+# Segment key of `{time:<spec>}` (rendered through a compiled TimeFormatter)
+_TIME_SPEC_KEY = "time:spec"
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,6 +100,8 @@ class TokenSegment:
     extra_key: str | None = None
     # Inside template color markup: the markup's color wins over the default token style
     in_markup: bool = False
+    # Compiled `{time:<spec>}` (key "time:spec"; the spec is a loguru time format)
+    time_formatter: TimeFormatter | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,6 +135,7 @@ class ParsedCallableTemplate:
 
     __slots__ = (
         "_colorize",
+        "_has_exception",
         "_needed_tokens",
         "_needs_extra",
         "_needs_process",
@@ -112,7 +148,7 @@ class ParsedCallableTemplate:
     # extra[...] allows any characters except ] (supports hyphens, dots, unicode, etc.)
     # Built from KNOWN_TOKENS to ensure consistency with auto-detect
     _TOKEN_PATTERN = re.compile(
-        r"\{(" + "|".join(re.escape(t) for t in KNOWN_TOKENS) + r"|extra\[[^\]]+\])(?::([^}]+))?\}"
+        r"\{(" + "|".join(re.escape(t) for t in KNOWN_TOKENS) + r"|extra\[[^\]]+\])(?::([^}]*))?\}"
     )
 
     def __init__(self, template: str, colorize: bool = False) -> None:
@@ -132,8 +168,16 @@ class ParsedCallableTemplate:
         if any(isinstance(seg, StyleSegment) and seg.ansi is None for seg in self._segments):
             self._needed_tokens |= {"level"}
         self._needs_extra = "extra" in self._needed_tokens
+        # `{thread}` / `{process}` render "name:id" (pre-formatted once per record)
         self._needs_thread = "thread" in self._needed_tokens
         self._needs_process = "process" in self._needed_tokens
+        # The template places the exception itself: don't append it
+        self._has_exception = "exception" in self._needed_tokens
+
+    @property
+    def needs_file_path(self) -> bool:
+        """Whether the template uses ``{file.path}`` (records must carry ``file_path``)."""
+        return "file.path" in self._needed_tokens
 
     def _parse(self, template: str) -> tuple[Segment, ...]:
         """Parse template into literal, token, and color markup segments.
@@ -179,7 +223,13 @@ class ParsedCallableTemplate:
             if key.startswith("extra["):
                 extra_key = key[6:-1]  # Extract key from extra[key]
                 segments.append(TokenSegment("extra", spec, True, extra_key, in_markup))
+            elif key == "time" and spec is not None:
+                # Compiled once here; raises ValueError for an invalid spec (like loguru)
+                segments.append(
+                    TokenSegment(_TIME_SPEC_KEY, None, False, None, in_markup, TimeFormatter(spec))
+                )
             else:
+                key = _TOKEN_ALIASES.get(key, key)
                 segments.append(TokenSegment(key, spec, False, None, in_markup))
 
             last_end = match.end()
@@ -192,21 +242,23 @@ class ParsedCallableTemplate:
         """Booleans for Rust `FormattedSinkRequirements` / `build_mini_record_dict`.
 
         Order: timestamp, level, name, function, line, file, elapsed, thread, process,
-        message, nested extra. Must match ``src/lib.rs`` ``FormattedSinkRequirements``.
+        message, nested extra, file path. Must match ``src/lib.rs``
+        ``FormattedSinkRequirements``.
         """
         nt = self._needed_tokens
         return (
-            "time" in nt,
-            "level" in nt,
+            "time" in nt or _TIME_SPEC_KEY in nt,
+            "level" in nt or "level.no" in nt or "level.icon" in nt,
             ("name" in nt) or ("module" in nt),
             "function" in nt,
             "line" in nt,
             "file" in nt,
             "elapsed" in nt,
-            self._needs_thread,
-            self._needs_process,
+            bool(nt & THREAD_TOKENS),
+            bool(nt & PROCESS_TOKENS),
             "message" in nt,
             self._needs_extra,
+            "file.path" in nt,
         )
 
     def lightweight_extra_keys_for_rust(self) -> tuple[str, ...]:
@@ -295,8 +347,10 @@ class ParsedCallableTemplate:
                             value = apply_color_markup(message, True, "".join(styles))
                         else:
                             value = apply_color_markup(message, self._colorize)
+                    # Fields added after the ones above: checked last so existing
+                    # templates pay nothing for them
                     else:
-                        value = ""
+                        value = self._new_field_value(seg, record)
 
                 if seg.spec:
                     try:
@@ -327,8 +381,34 @@ class ParsedCallableTemplate:
             parts.append(_RESET)
 
         exception = record.get("exception")
-        if exception:
+        if exception and not self._has_exception:
             parts.append("\n")
             parts.append(exception)
 
         return "".join(parts)
+
+    @staticmethod
+    def _new_field_value(seg: TokenSegment, record: dict[str, Any]) -> Any:
+        """Value of a `{time:<spec>}`, `{level.*}`, `{file.path}`, `{thread.*}`,
+        `{process.*}` or `{exception}` token."""
+        key = seg.key
+        if seg.time_formatter is not None:
+            return seg.time_formatter.format_rfc3339(record.get("timestamp", ""))
+        if key == "level.no" or key == "level.icon":
+            details = level_details(str(record.get("level", "")))
+            if details is None:
+                return ""
+            return details[0] if key == "level.no" else details[1]
+        if key == "file.path":
+            return record.get("file_path", "")
+        if key == "thread.name":
+            return record.get("thread_name", "")
+        if key == "thread.id":
+            return record.get("thread_id", 0)
+        if key == "process.name":
+            return record.get("process_name", "")
+        if key == "process.id":
+            return record.get("process_id", 0)
+        if key == "exception":
+            return record.get("exception") or ""
+        return ""
