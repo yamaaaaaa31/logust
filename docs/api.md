@@ -37,7 +37,7 @@ handler_id = logger.add(
     sink,                    # File path (str or Path), sys.stdout/stderr, or callable
     level=None,              # Minimum level (LogLevel or str)
     format=None,             # Format string
-    rotation=None,           # "500 MB", "daily", "hourly" (files only)
+    rotation=None,           # "500 MB", "daily", "hourly", timedelta, time (files only)
     retention=None,          # "10 days" or count (int) (files only)
     compression=False,       # Gzip compression (files only)
     serialize=False,         # JSON output
@@ -56,6 +56,7 @@ logger.add(sys.stderr, serialize=True)  # stderr with JSON
 logger.add(lambda msg: print(msg))
 logger.add(my_function, format="{level} | {message}")
 logger.add(send_to_slack, level="ERROR", serialize=True)
+# Coroutine functions (async def) are rejected with TypeError
 
 logger.remove(handler_id)    # Remove specific
 logger.remove()              # Remove all
@@ -77,12 +78,15 @@ logger.is_enabled()          # Check if enabled
 ### Custom levels
 
 ```python
-logger.level(
+level = logger.level(
     name,           # Level name (str)
-    no,             # Numeric value (int)
+    no=None,        # Numeric value (int); omit to look up or update a level
     color=None,     # Color name (str)
     icon=None,      # Icon symbol (str)
-)
+)  # -> Level(name, no, color, icon)
+
+logger.level("INFO")                # Look up; ValueError if unknown
+logger.level("INFO", color="blue")  # Update an existing level
 ```
 
 ### Context
@@ -111,9 +115,19 @@ logger.patch(f1).patch(f2).info("Both patchers applied")
     exception=Exception,     # Exception type(s)
     level="ERROR",           # Log level
     reraise=False,           # Re-raise after logging
+    onerror=None,            # Called with the exception after logging
+    exclude=None,            # Exception type(s) to let through unlogged
+    default=None,            # Return value when an exception was caught
     message="An error occurred",
 )
 def function():
+    pass
+
+@logger.catch                # Without parentheses
+def other():
+    pass
+
+with logger.catch():         # As a context manager
     pass
 ```
 
@@ -396,6 +410,12 @@ from logust import parse
 
 for record in parse("app.log", r"(?P<level>\w+) \| (?P<message>.*)"):
     print(record["level"], record["message"])
+
+# Also available as logger.parse(), like loguru
+from logust import logger
+
+for record in logger.parse("app.log", r"(?P<count>\d+)", cast={"count": int}):
+    print(record["count"])
 ```
 
 ### parse_json()

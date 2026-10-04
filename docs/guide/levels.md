@@ -70,6 +70,26 @@ logger.log("NOTICE", "This is a notice")
 | `color` | str | Color name for console output |
 | `icon` | str | Icon symbol (optional) |
 
+### Look up or update a level
+
+Call `level()` with only a name to get its information, or without `no` to
+update the color or icon of an existing level (built-in levels included).
+Every call returns a `Level(name, no, color, icon)` named tuple.
+
+```python
+from logust import logger
+
+logger.level("INFO")
+# Level(name='INFO', no=20, color='green', icon='')
+
+logger.level("INFO", color="blue")  # Built-in INFO is now blue on the console
+logger.level("NOTICE", icon="*")  # Keeps NOTICE's severity and color
+
+logger.level("MISSING")  # ValueError: Level 'MISSING' does not exist
+```
+
+The same works in `configure(levels=[{"name": "INFO", "color": "blue"}])`.
+
 ### Available colors
 
 - `black`, `red`, `green`, `yellow`, `blue`, `magenta`, `cyan`, `white`

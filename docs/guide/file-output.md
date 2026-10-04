@@ -138,6 +138,23 @@ logger.add("app.log", rotation="hourly")
 | `"1 GB"` | Rotate when file reaches 1 GB |
 | `"daily"` | Rotate daily at midnight |
 | `"hourly"` | Rotate every hour |
+| `timedelta(days=1)` | Same as `"daily"` |
+| `timedelta(hours=1)` | Same as `"hourly"` |
+| `time(0, 0)` | Same as `"daily"` |
+
+`datetime.timedelta` and `datetime.time` values are accepted for loguru
+compatibility. Time-based rotation is aligned to the clock (midnight, or the
+start of each hour), so a `timedelta(days=1)` file rotates at the next midnight,
+not 24 hours after it was opened. Other intervals and times of day raise
+`ValueError` instead of being approximated.
+
+```python
+from datetime import time, timedelta
+
+logger.add("app.log", rotation=timedelta(hours=1))
+logger.add("app.log", rotation=time(0, 0))
+logger.add("app.log", rotation=timedelta(days=7))  # ValueError
+```
 
 ## Retention
 
