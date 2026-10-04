@@ -74,6 +74,7 @@ In this run, `loguru`'s `enqueue=True` path remained far slower than its sync pa
 | Callable sinks | Yes | Yes |
 | Stack info (module, function, line) | Yes | Yes |
 | Process/thread info | Yes | Yes |
+| Format fields (`{time:<spec>}`, `{level.icon}`, `{file.path}`, `{exception}`, ...) | Yes | Yes |
 
 ## API differences
 
@@ -110,6 +111,17 @@ logger.add(lambda msg: print(msg))
 ```
 
 Keeping `end=""` with logust joins every log line into one. Stream sinks (objects with a `write()` method, such as `sys.stdout` or `io.StringIO`) get a trailing newline in both libraries.
+
+### Format strings
+
+loguru format strings work as is, including `{time:YYYY-MM-DD}`, `{level.icon}`, `{thread.name}`,
+and `{file.path}` (see [Formatting](guide/formatting.md#format-tokens)). Differences:
+
+- `{exception}` places the traceback once. loguru appends `"\n{exception}"` to every string
+  format, so a loguru format containing `{exception}` prints it twice.
+- Plain `{time}` gives `2025-12-24 12:00:00.123` (loguru: ISO 8601); use `{time:}` for ISO 8601.
+- `{thread}` / `{process}` give `name:id` (loguru: the id); use `{thread.id}` / `{process.id}`.
+- The `zz` time token gives the UTC offset instead of a time zone abbreviation, except with `!UTC`.
 
 ### Other differences
 

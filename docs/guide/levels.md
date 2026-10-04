@@ -68,7 +68,27 @@ logger.log("NOTICE", "This is a notice")
 | `name` | str | Level name (uppercase recommended) |
 | `no` | int | Numeric severity (higher = more severe) |
 | `color` | str | Color name for console output |
-| `icon` | str | Icon symbol (optional) |
+| `icon` | str | Icon symbol (optional), shown by `{level.icon}` |
+
+### Level icons
+
+`{level.icon}` in a format shows the level's icon, `{level.no}` its severity:
+
+```python
+logger.add("app.log", format="{level.icon} {level.name:<8} | {message}")
+```
+
+Built-in levels use loguru's default icons:
+
+| Level | Icon | | Level | Icon |
+|-------|------|-|-------|------|
+| TRACE | ✏️ | | WARNING | ⚠️ |
+| DEBUG | 🐞 | | ERROR | ❌ |
+| INFO | ℹ️ | | FAIL | ✖️ |
+| SUCCESS | ✅ | | CRITICAL | ☠️ |
+
+`FAIL` is Logust-only, so its icon has no loguru counterpart. A custom level without
+`icon` renders `{level.icon}` as an empty string.
 
 ### Look up or update a level
 

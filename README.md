@@ -184,17 +184,22 @@ logger.add("custom.log", format="[{level}] {message}")
 
 # Available placeholders:
 # {time}       - Timestamp
-# {level}      - Log level name
+# {time:YYYY-MM-DD HH:mm:ss} - Timestamp with loguru time tokens
+# {level}      - Log level name (also {level.name})
 # {level:<8}   - Level with width specifier
+# {level.no}   - Numeric severity
+# {level.icon} - Level icon
 # {message}    - Log message
 # {name}       - Module name
 # {module}     - Module name (alias for {name})
 # {function}   - Function name
 # {line}       - Line number
-# {file}       - Source file name
+# {file}       - Source file name (also {file.name})
+# {file.path}  - Source file path
 # {elapsed}    - Time since logger start (HH:MM:SS.mmm)
-# {thread}     - Thread name:id
-# {process}    - Process name:id
+# {thread}     - Thread name:id ({thread.name}, {thread.id})
+# {process}    - Process name:id ({process.name}, {process.id})
+# {exception}  - Traceback, placed here instead of appended
 # {extra[key]} - Extra context fields
 ```
 
