@@ -688,12 +688,63 @@ impl HandlerType {
     }
 }
 
+/// What to do when a handler fails to emit a record (loguru's `catch=`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CatchMode {
+    /// Drop the error silently (logust's historical default, `catch=None`).
+    #[default]
+    Silent,
+    /// Print a report to stderr and continue (`catch=True`).
+    Report,
+    /// Raise the error from the logging call as `OSError` (`catch=False`).
+    Raise,
+}
+
+impl CatchMode {
+    pub fn from_option(catch: Option<bool>) -> Self {
+        match catch {
+            None => CatchMode::Silent,
+            Some(true) => CatchMode::Report,
+            Some(false) => CatchMode::Raise,
+        }
+    }
+}
+
 /// Handler entry with ID and optional filter
 pub struct HandlerEntry {
     pub id: u64,
     pub handler: HandlerType,
     /// Optional filter callable (Python lambda/function)
     pub filter: Option<Py<PyAny>>,
+    /// Error policy; only consulted when `handle` fails.
+    pub catch: CatchMode,
+}
+
+impl HandlerEntry {
+    /// Apply the catch policy to a failed emit. Only reached on the error path.
+    #[cold]
+    pub fn on_error(&self, err: io::Error, record: &LogRecord, first_error: &mut Option<PyErr>) {
+        match self.catch {
+            CatchMode::Silent => {}
+            CatchMode::Report => {
+                eprintln!(
+                    "--- Logging error in Logust Handler #{} ---\n\
+                     Record was: {} | {}\n\
+                     OSError: {}\n\
+                     --- End of logging error ---",
+                    self.id,
+                    record.level_name(),
+                    record.message,
+                    err
+                );
+            }
+            CatchMode::Raise => {
+                if first_error.is_none() {
+                    *first_error = Some(PyErr::from(err));
+                }
+            }
+        }
+    }
 }
 
 /// Console handler for terminal output

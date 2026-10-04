@@ -66,13 +66,22 @@ class PyLogger:
         format: str | None = None,
         rotation: str | None = None,
         retention: str | None = None,
-        compression: bool | None = None,
+        compression: bool | str | None = None,
         serialize: bool | None = None,
         filter: Callable[[dict[str, Any]], bool] | None = None,
         enqueue: bool | None = None,
         colorize: bool | None = None,
+        mode: str | None = None,
+        delay: bool | None = None,
+        catch: bool | None = None,
     ) -> int:
-        """Add a file handler and return its ID."""
+        """Add a file handler and return its ID.
+
+        ``compression`` accepts a bool (``True`` = gzip) or one of
+        ``"gz"``, ``"bz2"``, ``"zip"``, ``"tar"``, ``"tar.gz"``, ``"tar.bz2"``.
+        ``mode`` is ``"a"`` (default) or ``"w"``. ``catch``: ``None`` drops
+        write errors, ``True`` reports them to stderr, ``False`` raises.
+        """
         ...
 
     def add_console(
@@ -83,6 +92,7 @@ class PyLogger:
         serialize: bool | None = None,
         filter: Callable[[dict[str, Any]], bool] | None = None,
         colorize: bool | None = None,
+        catch: bool | None = None,
     ) -> int:
         """Add a console handler (stdout or stderr)."""
         ...
@@ -133,10 +143,13 @@ class PyLogger:
         callback: Callable[[dict[str, Any]], None],
         level: LogLevel | None = None,
         file_path: bool = False,
+        raise_errors: bool = False,
     ) -> int:
         """Add a callback to receive log records.
 
         file_path adds the caller's source file path as ``file_path`` to the records.
+        With ``raise_errors=True`` an exception raised by the callback
+        propagates to the logging call; otherwise it is dropped.
         """
         ...
 
@@ -144,6 +157,7 @@ class PyLogger:
         self,
         callback: Callable[[dict[str, Any]], None],
         level: LogLevel | None = None,
+        raise_errors: bool = False,
     ) -> int:
         """Add a serialized callable sink with typed JSON extras."""
         ...
@@ -154,6 +168,7 @@ class PyLogger:
         requirements: tuple[bool, ...],
         extra_keys: tuple[str, ...],
         level: LogLevel | None = None,
+        raise_errors: bool = False,
     ) -> int:
         """Add a formatted callable sink (minimal record dict for templates)."""
         ...

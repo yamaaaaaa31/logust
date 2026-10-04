@@ -15,11 +15,11 @@ use pyo3::types::{PyDict, PyTuple};
 
 pub use format::{FormatConfig, LOGGER_START_TIME, TokenRequirements, format_elapsed};
 pub use handler::{
-    CallerInfo, ConsoleHandler, ExtraMap, ExtraValue, FileHandler, HandlerEntry, HandlerType,
-    LogRecord, ProcessInfo, ThreadInfo, empty_context, serde_json_to_py,
+    CallerInfo, CatchMode, ConsoleHandler, ExtraMap, ExtraValue, FileHandler, HandlerEntry,
+    HandlerType, LogRecord, ProcessInfo, ThreadInfo, empty_context, serde_json_to_py,
 };
 pub use level::{LevelInfo, LogLevel, get_level_by_no, get_level_info, register_level};
-pub use sink::{FileSink, FileSinkConfig, Rotation};
+pub use sink::{CompressionFormat, FileSink, FileSinkConfig, Rotation};
 
 struct RwLock<T>(std::sync::RwLock<T>);
 
@@ -142,6 +142,55 @@ pub struct CallbackEntry {
     pub callback: Py<PyAny>,
     pub level: LogLevel,
     pub kind: CallbackKind,
+    /// Propagate exceptions raised by the callback to the logging call
+    /// (callable sinks with `catch=False`). Otherwise they are dropped.
+    pub raise_errors: bool,
+}
+
+impl CallbackEntry {
+    /// Only reached when the callback raised.
+    #[cold]
+    fn on_error(&self, err: PyErr, first_error: &mut Option<PyErr>) {
+        if self.raise_errors && first_error.is_none() {
+            *first_error = Some(err);
+        }
+    }
+}
+
+/// Convert `compression=` (bool or loguru format string) into a format.
+fn extract_compression(compression: Option<&Bound<'_, PyAny>>) -> PyResult<CompressionFormat> {
+    let Some(value) = compression else {
+        return Ok(CompressionFormat::None);
+    };
+    if value.is_none() {
+        return Ok(CompressionFormat::None);
+    }
+    if let Ok(enabled) = value.cast::<pyo3::types::PyBool>() {
+        return Ok(if enabled.is_true() {
+            CompressionFormat::Gzip
+        } else {
+            CompressionFormat::None
+        });
+    }
+    if let Ok(format) = value.extract::<String>() {
+        return sink::parse_compression(&format).map_err(pyo3::exceptions::PyValueError::new_err);
+    }
+    Err(pyo3::exceptions::PyTypeError::new_err(format!(
+        "compression must be a bool or a format string ({}), got {}",
+        sink::SUPPORTED_COMPRESSION_FORMATS,
+        value.get_type().name()?
+    )))
+}
+
+/// Convert loguru's `mode=` into "truncate on first open".
+fn extract_truncate(mode: Option<&str>) -> PyResult<bool> {
+    match mode {
+        None | Some("a") => Ok(false),
+        Some("w") => Ok(true),
+        Some(other) => Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "Invalid file mode: '{other}'; logust file sinks support 'a' (append) and 'w' (truncate)"
+        ))),
+    }
 }
 
 /// Merge handler + callback token requirements eligible when emitting at severity `emit_no`
@@ -237,6 +286,7 @@ impl PyLogger {
             id: handler::next_handler_id(),
             handler: HandlerType::Console(console_handler),
             filter: None,
+            catch: CatchMode::Silent,
         };
         logger.handlers.write().push(entry);
         logger.update_min_level_cache();
@@ -247,7 +297,7 @@ impl PyLogger {
 
     /// Add a file handler
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (path, level=None, format=None, rotation=None, retention=None, compression=None, serialize=None, filter=None, enqueue=None, colorize=None))]
+    #[pyo3(signature = (path, level=None, format=None, rotation=None, retention=None, compression=None, serialize=None, filter=None, enqueue=None, colorize=None, mode=None, delay=None, catch=None))]
     fn add(
         &self,
         path: String,
@@ -255,12 +305,17 @@ impl PyLogger {
         format: Option<String>,
         rotation: Option<String>,
         retention: Option<String>,
-        compression: Option<bool>,
+        compression: Option<&Bound<'_, PyAny>>,
         serialize: Option<bool>,
         filter: Option<Py<PyAny>>,
         enqueue: Option<bool>,
         colorize: Option<bool>,
+        mode: Option<&str>,
+        delay: Option<bool>,
+        catch: Option<bool>,
     ) -> PyResult<u64> {
+        let compression = extract_compression(compression)?;
+        let truncate = extract_truncate(mode)?;
         let level = level.unwrap_or(LogLevel::Debug);
         let serialize = serialize.unwrap_or(false);
         let format_config = FormatConfig::try_new(format, serialize)
@@ -282,8 +337,10 @@ impl PyLogger {
             max_size,
             retention_days,
             retention_count,
-            compression: compression.unwrap_or(false),
+            compression,
             enqueue: enqueue.unwrap_or(false),
+            truncate,
+            delay: delay.unwrap_or(false),
         };
 
         let sink = FileSink::new(config)
@@ -296,6 +353,7 @@ impl PyLogger {
             id,
             handler: HandlerType::File(file_handler),
             filter,
+            catch: CatchMode::from_option(catch),
         };
 
         self.handlers.write().push(entry);
@@ -305,7 +363,8 @@ impl PyLogger {
     }
 
     /// Add a console handler (stdout or stderr)
-    #[pyo3(signature = (stream, level=None, format=None, serialize=None, filter=None, colorize=None))]
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (stream, level=None, format=None, serialize=None, filter=None, colorize=None, catch=None))]
     fn add_console(
         &self,
         stream: String,
@@ -314,6 +373,7 @@ impl PyLogger {
         serialize: Option<bool>,
         filter: Option<Py<PyAny>>,
         colorize: Option<bool>,
+        catch: Option<bool>,
     ) -> PyResult<u64> {
         let level = level.unwrap_or(LogLevel::Debug);
         let serialize = serialize.unwrap_or(false);
@@ -334,6 +394,7 @@ impl PyLogger {
             id,
             handler: HandlerType::Console(console_handler),
             filter,
+            catch: CatchMode::from_option(catch),
         };
 
         self.handlers.write().push(entry);
@@ -544,6 +605,7 @@ impl PyLogger {
                     id: handler::next_handler_id(),
                     handler: HandlerType::Console(console_handler),
                     filter: None,
+                    catch: CatchMode::Silent,
                 };
                 handlers.push(entry);
             }
@@ -576,14 +638,21 @@ impl PyLogger {
     /// Add a callback to receive full log record dicts (raw callback).
     ///
     /// `file_path` adds the caller's source path as `file_path` to the dicts.
-    #[pyo3(signature = (callback, level=None, file_path=false))]
-    fn add_callback(&self, callback: Py<PyAny>, level: Option<LogLevel>, file_path: bool) -> u64 {
+    #[pyo3(signature = (callback, level=None, file_path=false, raise_errors=false))]
+    fn add_callback(
+        &self,
+        callback: Py<PyAny>,
+        level: Option<LogLevel>,
+        file_path: bool,
+        raise_errors: bool,
+    ) -> u64 {
         let id = handler::next_handler_id();
         let entry = CallbackEntry {
             id,
             callback,
             level: level.unwrap_or(LogLevel::Debug),
             kind: CallbackKind::Raw { file_path },
+            raise_errors,
         };
         self.callbacks.write().push(entry);
         self.update_min_level_cache();
@@ -592,14 +661,20 @@ impl PyLogger {
     }
 
     /// Add a serialized callable sink callback (full record dict with typed JSON extras).
-    #[pyo3(signature = (callback, level=None))]
-    fn add_serialized_callback(&self, callback: Py<PyAny>, level: Option<LogLevel>) -> u64 {
+    #[pyo3(signature = (callback, level=None, raise_errors=false))]
+    fn add_serialized_callback(
+        &self,
+        callback: Py<PyAny>,
+        level: Option<LogLevel>,
+        raise_errors: bool,
+    ) -> u64 {
         let id = handler::next_handler_id();
         let entry = CallbackEntry {
             id,
             callback,
             level: level.unwrap_or(LogLevel::Debug),
             kind: CallbackKind::Serialized,
+            raise_errors,
         };
         self.callbacks.write().push(entry);
         self.update_min_level_cache();
@@ -608,13 +683,14 @@ impl PyLogger {
     }
 
     /// Add a formatted callable sink callback (minimal dict + Python `ParsedCallableTemplate`).
-    #[pyo3(signature = (callback, requirements, extra_keys, level=None))]
+    #[pyo3(signature = (callback, requirements, extra_keys, level=None, raise_errors=false))]
     fn add_formatted_sink_callback(
         &self,
         callback: Py<PyAny>,
         requirements: Bound<'_, PyTuple>,
         extra_keys: Bound<'_, PyTuple>,
         level: Option<LogLevel>,
+        raise_errors: bool,
     ) -> PyResult<u64> {
         let req = FormattedSinkRequirements::from_python_tuples(&requirements, &extra_keys)?;
         let id = handler::next_handler_id();
@@ -623,6 +699,7 @@ impl PyLogger {
             callback,
             level: level.unwrap_or(LogLevel::Debug),
             kind: CallbackKind::FormattedLight(req),
+            raise_errors,
         };
         self.callbacks.write().push(entry);
         self.update_min_level_cache();
@@ -679,7 +756,7 @@ impl PyLogger {
         thread_id: Option<u64>,
         process_name: Option<String>,
         process_id: Option<u32>,
-    ) {
+    ) -> PyResult<()> {
         self._log(
             LogLevel::Trace,
             message,
@@ -692,7 +769,7 @@ impl PyLogger {
             thread_id,
             process_name,
             process_id,
-        );
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -709,7 +786,7 @@ impl PyLogger {
         thread_id: Option<u64>,
         process_name: Option<String>,
         process_id: Option<u32>,
-    ) {
+    ) -> PyResult<()> {
         self._log(
             LogLevel::Debug,
             message,
@@ -722,7 +799,7 @@ impl PyLogger {
             thread_id,
             process_name,
             process_id,
-        );
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -739,7 +816,7 @@ impl PyLogger {
         thread_id: Option<u64>,
         process_name: Option<String>,
         process_id: Option<u32>,
-    ) {
+    ) -> PyResult<()> {
         self._log(
             LogLevel::Info,
             message,
@@ -752,7 +829,7 @@ impl PyLogger {
             thread_id,
             process_name,
             process_id,
-        );
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -769,7 +846,7 @@ impl PyLogger {
         thread_id: Option<u64>,
         process_name: Option<String>,
         process_id: Option<u32>,
-    ) {
+    ) -> PyResult<()> {
         self._log(
             LogLevel::Success,
             message,
@@ -782,7 +859,7 @@ impl PyLogger {
             thread_id,
             process_name,
             process_id,
-        );
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -799,7 +876,7 @@ impl PyLogger {
         thread_id: Option<u64>,
         process_name: Option<String>,
         process_id: Option<u32>,
-    ) {
+    ) -> PyResult<()> {
         self._log(
             LogLevel::Warning,
             message,
@@ -812,7 +889,7 @@ impl PyLogger {
             thread_id,
             process_name,
             process_id,
-        );
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -829,7 +906,7 @@ impl PyLogger {
         thread_id: Option<u64>,
         process_name: Option<String>,
         process_id: Option<u32>,
-    ) {
+    ) -> PyResult<()> {
         self._log(
             LogLevel::Error,
             message,
@@ -842,7 +919,7 @@ impl PyLogger {
             thread_id,
             process_name,
             process_id,
-        );
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -859,7 +936,7 @@ impl PyLogger {
         thread_id: Option<u64>,
         process_name: Option<String>,
         process_id: Option<u32>,
-    ) {
+    ) -> PyResult<()> {
         self._log(
             LogLevel::Fail,
             message,
@@ -872,7 +949,7 @@ impl PyLogger {
             thread_id,
             process_name,
             process_id,
-        );
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -889,7 +966,7 @@ impl PyLogger {
         thread_id: Option<u64>,
         process_name: Option<String>,
         process_id: Option<u32>,
-    ) {
+    ) -> PyResult<()> {
         self._log(
             LogLevel::Critical,
             message,
@@ -902,7 +979,7 @@ impl PyLogger {
             thread_id,
             process_name,
             process_id,
-        );
+        )
     }
 
     /// Register a custom log level
@@ -964,7 +1041,7 @@ impl PyLogger {
             thread_id,
             process_name,
             process_id,
-        );
+        )?;
         Ok(())
     }
 }
@@ -1055,7 +1132,7 @@ impl PyLogger {
         thread_id: Option<u64>,
         process_name: Option<String>,
         process_id: Option<u32>,
-    ) {
+    ) -> PyResult<()> {
         let handlers = self.handlers.read();
         let callbacks = self.callbacks.read();
 
@@ -1072,7 +1149,7 @@ impl PyLogger {
         let has_eligible_callback = callbacks.iter().any(|e| level >= e.level);
 
         if !has_eligible_handler && !has_eligible_callback {
-            return;
+            return Ok(());
         }
 
         let has_callbacks = !callbacks.is_empty() && has_eligible_callback;
@@ -1098,6 +1175,9 @@ impl PyLogger {
         };
 
         let record = LogRecord::with_all(level, message, extra, exception, caller, thread, process);
+
+        // Only filled on an error path for handlers/sinks with catch=False.
+        let mut first_error: Option<PyErr> = None;
 
         if needs_gil {
             Python::attach(|py| {
@@ -1139,19 +1219,24 @@ impl PyLogger {
                     }
                     match &entry.kind {
                         CallbackKind::Raw { .. } => {
-                            if let Some(full) = shared_text_full.as_ref() {
-                                let _ = entry.callback.call1(py, (full.clone(),));
+                            if let Some(full) = shared_text_full.as_ref()
+                                && let Err(err) = entry.callback.call1(py, (full.clone(),))
+                            {
+                                entry.on_error(err, &mut first_error);
                             }
                         }
                         CallbackKind::Serialized => {
-                            if let Some(full) = shared_json_full.as_ref() {
-                                let _ = entry.callback.call1(py, (full.clone(),));
+                            if let Some(full) = shared_json_full.as_ref()
+                                && let Err(err) = entry.callback.call1(py, (full.clone(),))
+                            {
+                                entry.on_error(err, &mut first_error);
                             }
                         }
                         CallbackKind::FormattedLight(req) => {
                             if let Ok(mini) = Self::build_mini_record_dict(py, level, &record, req)
+                                && let Err(err) = entry.callback.call1(py, (mini,))
                             {
-                                let _ = entry.callback.call1(py, (mini,));
+                                entry.on_error(err, &mut first_error);
                             }
                         }
                     }
@@ -1172,14 +1257,20 @@ impl PyLogger {
                             continue;
                         }
                     }
-                    let _ = entry.handler.handle(&record);
+                    if let Err(err) = entry.handler.handle(&record) {
+                        entry.on_error(err, &record, &mut first_error);
+                    }
                 }
             });
         } else {
             for entry in handlers.iter() {
-                let _ = entry.handler.handle(&record);
+                if let Err(err) = entry.handler.handle(&record) {
+                    entry.on_error(err, &record, &mut first_error);
+                }
             }
         }
+
+        first_error.map_or(Ok(()), Err)
     }
 
     /// Build a Python dict from log record for callbacks/filters
@@ -1344,7 +1435,7 @@ impl PyLogger {
         thread_id: Option<u64>,
         process_name: Option<String>,
         process_id: Option<u32>,
-    ) {
+    ) -> PyResult<()> {
         let handlers = self.handlers.read();
         let callbacks = self.callbacks.read();
 
@@ -1362,7 +1453,7 @@ impl PyLogger {
         let has_eligible_callback = callbacks.iter().any(|e| level_no >= e.level as u32);
 
         if !has_eligible_handler && !has_eligible_callback {
-            return;
+            return Ok(());
         }
 
         let has_callbacks = !callbacks.is_empty() && has_eligible_callback;
@@ -1396,6 +1487,9 @@ impl PyLogger {
             thread,
             process,
         );
+
+        // Only filled on an error path for handlers/sinks with catch=False.
+        let mut first_error: Option<PyErr> = None;
 
         if needs_gil {
             Python::attach(|py| {
@@ -1439,8 +1533,10 @@ impl PyLogger {
                             CallbackKind::Serialized => shared_json_full.as_ref(),
                             _ => shared_text_full.as_ref(),
                         };
-                        if let Some(full) = full {
-                            let _ = entry.callback.call1(py, (full.clone(),));
+                        if let Some(full) = full
+                            && let Err(err) = entry.callback.call1(py, (full.clone(),))
+                        {
+                            entry.on_error(err, &mut first_error);
                         }
                     }
                 }
@@ -1460,14 +1556,20 @@ impl PyLogger {
                             continue;
                         }
                     }
-                    let _ = entry.handler.handle(&record);
+                    if let Err(err) = entry.handler.handle(&record) {
+                        entry.on_error(err, &record, &mut first_error);
+                    }
                 }
             });
         } else {
             for entry in handlers.iter() {
-                let _ = entry.handler.handle(&record);
+                if let Err(err) = entry.handler.handle(&record) {
+                    entry.on_error(err, &record, &mut first_error);
+                }
             }
         }
+
+        first_error.map_or(Ok(()), Err)
     }
 
     /// Build a Python dict from custom level record for callbacks/filters

@@ -1,5 +1,5 @@
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, BufWriter, Write};
+use std::io::{self, BufWriter, Read, Seek, Write};
 #[cfg(unix)]
 use std::os::fd::AsRawFd;
 #[cfg(unix)]
@@ -16,6 +16,7 @@ use std::sync::{LazyLock, OnceLock, Weak};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use bzip2::write::BzEncoder;
 use chrono::{DateTime, Local, Timelike};
 use crossbeam_channel::{RecvTimeoutError, Sender, bounded};
 use flate2::Compression;
@@ -71,6 +72,78 @@ pub enum RetentionPolicy {
     Forever = 0,
 }
 
+/// Archive/compression format applied to rotated files.
+///
+/// Names follow loguru's `compression=` strings. Compression only runs at
+/// rotation time, so the chosen format never affects the per-write path.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum CompressionFormat {
+    /// Keep rotated files as-is
+    #[default]
+    None,
+    /// `.gz` (gzip)
+    Gzip,
+    /// `.bz2` (bzip2)
+    Bzip2,
+    /// `.zip` (single deflated entry)
+    Zip,
+    /// `.tar` (uncompressed tarball)
+    Tar,
+    /// `.tar.gz`
+    TarGz,
+    /// `.tar.bz2`
+    TarBz2,
+}
+
+impl CompressionFormat {
+    /// Every format logust can produce (used for retention matching).
+    pub const ALL: [CompressionFormat; 6] = [
+        CompressionFormat::Gzip,
+        CompressionFormat::Bzip2,
+        CompressionFormat::Zip,
+        CompressionFormat::Tar,
+        CompressionFormat::TarGz,
+        CompressionFormat::TarBz2,
+    ];
+
+    /// File extension appended to the rotated file name (without leading dot).
+    pub fn extension(self) -> Option<&'static str> {
+        match self {
+            CompressionFormat::None => None,
+            CompressionFormat::Gzip => Some("gz"),
+            CompressionFormat::Bzip2 => Some("bz2"),
+            CompressionFormat::Zip => Some("zip"),
+            CompressionFormat::Tar => Some("tar"),
+            CompressionFormat::TarGz => Some("tar.gz"),
+            CompressionFormat::TarBz2 => Some("tar.bz2"),
+        }
+    }
+}
+
+/// Supported `compression=` strings, for error messages.
+pub const SUPPORTED_COMPRESSION_FORMATS: &str = "gz, bz2, zip, tar, tar.gz, tar.bz2";
+
+/// Parse a loguru-style compression format string ("gz", ".zip", "tar.gz", ...).
+pub fn parse_compression(format: &str) -> Result<CompressionFormat, String> {
+    let normalized = format.trim().trim_start_matches('.').to_ascii_lowercase();
+    match normalized.as_str() {
+        "gz" => Ok(CompressionFormat::Gzip),
+        "bz2" => Ok(CompressionFormat::Bzip2),
+        "zip" => Ok(CompressionFormat::Zip),
+        "tar" => Ok(CompressionFormat::Tar),
+        "tar.gz" => Ok(CompressionFormat::TarGz),
+        "tar.bz2" => Ok(CompressionFormat::TarBz2),
+        "xz" | "lzma" | "tar.xz" => Err(format!(
+            "compression format '{format}' is not supported by logust \
+             (no LZMA encoder is bundled); supported formats: {SUPPORTED_COMPRESSION_FORMATS}"
+        )),
+        _ => Err(format!(
+            "Invalid compression format: '{format}'; supported formats: \
+             {SUPPORTED_COMPRESSION_FORMATS}"
+        )),
+    }
+}
+
 /// File sink configuration
 #[derive(Clone)]
 pub struct FileSinkConfig {
@@ -79,10 +152,16 @@ pub struct FileSinkConfig {
     pub max_size: Option<u64>,
     pub retention_days: Option<u32>,
     pub retention_count: Option<u32>,
-    pub compression: bool,
+    pub compression: CompressionFormat,
     /// If true, writes are queued and processed asynchronously (thread-safe)
     /// If false, writes are synchronous (faster for single-threaded use)
     pub enqueue: bool,
+    /// Truncate the file when it is first opened (loguru `mode="w"`).
+    /// Re-opens after rotation or fork always append.
+    pub truncate: bool,
+    /// Defer creating/opening the file until the first message is written
+    /// (loguru `delay=True`).
+    pub delay: bool,
 }
 
 impl Default for FileSinkConfig {
@@ -93,8 +172,10 @@ impl Default for FileSinkConfig {
             max_size: None,
             retention_days: None,
             retention_count: None,
-            compression: false,
+            compression: CompressionFormat::None,
             enqueue: false,
+            truncate: false,
+            delay: false,
         }
     }
 }
@@ -525,6 +606,9 @@ struct FileSinkInner {
     creation_pid: AtomicU32,
     pending_rotation: StdMutex<Option<PendingRotation>>,
     pending_rotation_active: AtomicBool,
+    /// `mode="w"` with `delay=True`: truncate when the backend is first opened.
+    /// Only consulted on open paths, never per write.
+    truncate_on_open: AtomicBool,
 }
 
 /// File sink with optional async writing support
@@ -537,29 +621,47 @@ impl FileSink {
     pub fn new(config: FileSinkConfig) -> io::Result<Self> {
         let path = config.path.clone();
 
-        if let Some(parent) = path.parent()
-            && !parent.as_os_str().is_empty()
-        {
-            fs::create_dir_all(parent)?;
+        if !config.delay {
+            FileSinkInner::create_parent_dirs(&path)?;
+            if config.truncate {
+                FileSinkInner::truncate_log_file(&path)?;
+            }
         }
 
-        let current_size = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+        let current_size = if config.truncate {
+            0
+        } else {
+            fs::metadata(&path).map(|m| m.len()).unwrap_or(0)
+        };
 
         #[cfg(unix)]
         if config.enqueue {
             ensure_atfork_registered()?;
         }
 
+        // With `delay`, the backend starts unopened; the existing lazy-open
+        // path in `ensure_backend_ready_locked` opens it on the first write.
         let backend = if config.enqueue {
-            WriterBackend::Async(FileSinkInner::create_async_writer_state(
-                &path,
-                FileSinkInner::rotation_coordination_enabled_for_config(&config),
-            )?)
+            if config.delay {
+                WriterBackend::Async(AsyncWriterState {
+                    sender: None,
+                    handle: None,
+                    file_identity: Arc::new(SharedFileIdentity::default()),
+                })
+            } else {
+                WriterBackend::Async(FileSinkInner::create_async_writer_state(
+                    &path,
+                    FileSinkInner::rotation_coordination_enabled_for_config(&config),
+                )?)
+            }
+        } else if config.delay {
+            WriterBackend::Sync(SyncWriterState { writer: None })
         } else {
             WriterBackend::Sync(SyncWriterState {
                 writer: Some(FileSinkInner::open_sync_writer(&path)?),
             })
         };
+        let truncate_on_open = config.delay && config.truncate;
 
         let now = Local::now();
         let next_boundary = FileSinkInner::calculate_next_rotation_boundary(&config.rotation, &now);
@@ -575,6 +677,7 @@ impl FileSink {
             creation_pid: AtomicU32::new(std::process::id()),
             pending_rotation: StdMutex::new(None),
             pending_rotation_active: AtomicBool::new(false),
+            truncate_on_open: AtomicBool::new(truncate_on_open),
         });
 
         #[cfg(unix)]
@@ -619,8 +722,34 @@ impl FileSinkInner {
         PathBuf::from(lock_path)
     }
 
+    fn create_parent_dirs(path: &Path) -> io::Result<()> {
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            fs::create_dir_all(parent)?;
+        }
+        Ok(())
+    }
+
+    fn truncate_log_file(path: &Path) -> io::Result<()> {
+        OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(path)
+            .map(drop)
+    }
+
     fn open_log_file(path: &Path) -> io::Result<File> {
-        OpenOptions::new().create(true).append(true).open(path)
+        match OpenOptions::new().create(true).append(true).open(path) {
+            // The parent directory may not exist yet with `delay=True`, or may
+            // have been removed since the sink was added: create it and retry.
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {
+                Self::create_parent_dirs(path)?;
+                OpenOptions::new().create(true).append(true).open(path)
+            }
+            result => result,
+        }
     }
 
     fn open_rotation_lock_file(path: &Path) -> io::Result<File> {
@@ -631,6 +760,29 @@ impl FileSinkInner {
             .read(true)
             .write(true)
             .open(lock_path)
+    }
+
+    /// `mode="w"` + `delay=True`: truncate once, right before the first open.
+    fn apply_pending_truncate(&self) -> io::Result<()> {
+        if self.truncate_on_open.load(Ordering::Acquire)
+            && self.truncate_on_open.swap(false, Ordering::AcqRel)
+        {
+            Self::create_parent_dirs(&self.config.path)?;
+            Self::truncate_log_file(&self.config.path)?;
+            self.current_size.store(0, Ordering::Relaxed);
+        }
+        Ok(())
+    }
+
+    /// True while a `delay=True` sink has not opened its file yet (or the
+    /// backend was torn down and nothing is buffered).
+    fn backend_unopened(state: &FileSinkState) -> bool {
+        match &state.backend {
+            WriterBackend::Async(async_state) => {
+                async_state.sender.is_none() || async_state.handle.is_none()
+            }
+            WriterBackend::Sync(sync_state) => sync_state.writer.is_none(),
+        }
     }
 
     fn open_sync_writer(path: &Path) -> io::Result<RotatingFileWriter> {
@@ -775,6 +927,11 @@ impl FileSinkInner {
 
         let maybe_sender = {
             let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            // Nothing can be buffered in an unopened backend; returning early
+            // also keeps `delay=True` sinks from creating the file on flush.
+            if Self::backend_unopened(&state) {
+                return Ok(());
+            }
             self.ensure_backend_ready_locked(&mut state)?;
 
             match &mut state.backend {
@@ -859,6 +1016,7 @@ impl FileSinkInner {
                     // Forked children inherit enqueue=True configuration but avoid
                     // creating a new writer thread in the post-fork process.
                     Self::stop_async_writer_locked(async_state, false);
+                    self.apply_pending_truncate()?;
                     state.backend = WriterBackend::Sync(SyncWriterState {
                         writer: Some(Self::open_sync_writer(&self.config.path)?),
                     });
@@ -869,6 +1027,7 @@ impl FileSinkInner {
                     if let Some(writer) = sync_state.writer.take() {
                         std::mem::forget(writer);
                     }
+                    self.apply_pending_truncate()?;
                     sync_state.writer = Some(Self::open_sync_writer(&self.config.path)?);
                     self.creation_pid.store(current_pid, Ordering::Release);
                     self.sync_rotation_state_from_path();
@@ -894,6 +1053,7 @@ impl FileSinkInner {
                         self.sync_rotation_state_from_path();
                     }
                 } else {
+                    self.apply_pending_truncate()?;
                     sync_state.writer = Some(Self::open_sync_writer(&self.config.path)?);
                     self.creation_pid.store(current_pid, Ordering::Release);
                     self.sync_rotation_state_from_path();
@@ -909,6 +1069,7 @@ impl FileSinkInner {
         async_state: &mut AsyncWriterState,
         current_pid: u32,
     ) -> io::Result<()> {
+        self.apply_pending_truncate()?;
         *async_state = Self::create_async_writer_state(
             &self.config.path,
             self.rotation_coordination_enabled(),
@@ -1145,6 +1306,7 @@ impl FileSinkInner {
                 self.restart_async_writer_locked(async_state, std::process::id())
             }
             WriterBackend::Sync(sync_state) => {
+                self.apply_pending_truncate()?;
                 sync_state.writer = Some(Self::open_sync_writer(&self.config.path)?);
                 self.creation_pid
                     .store(std::process::id(), Ordering::Release);
@@ -1224,7 +1386,8 @@ impl FileSinkInner {
         let mut pending = PendingRotation {
             rotated_path: rotated_path.clone(),
             rotation_time: now,
-            needs_compression: self.config.compression && rotated_path.exists(),
+            needs_compression: self.config.compression != CompressionFormat::None
+                && rotated_path.exists(),
             needs_retention: self.config.retention_count.is_some()
                 || self.config.retention_days.is_some(),
         };
@@ -1287,25 +1450,9 @@ impl FileSinkInner {
             .unwrap_or_else(|| PathBuf::from(&filename))
     }
 
-    /// Compress a file using gzip (streaming to avoid loading entire file into memory)
+    /// Compress a rotated file into the configured archive format.
     fn compress_file(&self, path: &Path) -> io::Result<()> {
-        let gz_path = path.with_extension(format!(
-            "{}.gz",
-            path.extension().and_then(|e| e.to_str()).unwrap_or("")
-        ));
-
-        let input_file = File::open(path)?;
-        let mut reader = io::BufReader::new(input_file);
-
-        let output_file = File::create(&gz_path)?;
-        let mut encoder = GzEncoder::new(output_file, Compression::default());
-
-        io::copy(&mut reader, &mut encoder)?;
-        encoder.finish()?;
-
-        fs::remove_file(path)?;
-
-        Ok(())
+        compress_rotated_file(path, self.config.compression).map(drop)
     }
 
     /// Apply retention policy (O(n log n) instead of O(n²))
@@ -1381,13 +1528,20 @@ impl FileSinkInner {
             return false;
         };
 
+        // Rotated files keep the log extension and may carry any archive
+        // extension logust produces, regardless of the current setting (the
+        // compression format may have changed between runs).
         let suffix = format!(".{extension}");
-        let gzip_suffix = format!(".{extension}.gz");
-        let rotation_id = if let Some(value) = rest.strip_suffix(&gzip_suffix) {
-            value
-        } else if let Some(value) = rest.strip_suffix(&suffix) {
-            value
-        } else {
+        let rotation_id = CompressionFormat::ALL
+            .iter()
+            .filter_map(|format| format.extension())
+            .find_map(|archive_ext| {
+                rest.strip_suffix(archive_ext)
+                    .and_then(|value| value.strip_suffix('.'))
+                    .and_then(|value| value.strip_suffix(&suffix))
+            })
+            .or_else(|| rest.strip_suffix(&suffix));
+        let Some(rotation_id) = rotation_id else {
             return false;
         };
 
@@ -1581,6 +1735,361 @@ pub fn parse_retention(retention_str: &str) -> (Option<u32>, Option<u32>) {
     (None, None)
 }
 
+/// Compress `path` into `<path>.<ext>` using `format`, then remove `path`.
+///
+/// Runs only at rotation time. On failure the partial archive is removed and
+/// the original file is left in place so the pending rotation can retry.
+/// Returns the archive path (or `None` when `format` is `None`).
+pub(crate) fn compress_rotated_file(
+    path: &Path,
+    format: CompressionFormat,
+) -> io::Result<Option<PathBuf>> {
+    let Some(ext) = format.extension() else {
+        return Ok(None);
+    };
+
+    let mut archive_name = path.as_os_str().to_os_string();
+    archive_name.push(".");
+    archive_name.push(ext);
+    let archive_path = PathBuf::from(archive_name);
+
+    let input = File::open(path)?;
+    let metadata = input.metadata()?;
+    let size = metadata.len();
+    let mtime: DateTime<Local> = metadata
+        .modified()
+        .map(DateTime::<Local>::from)
+        .unwrap_or_else(|_| Local::now());
+    let entry_name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "log".to_string());
+    let mut reader = io::BufReader::new(input);
+
+    let output = File::create(&archive_path)?;
+    let result = write_compressed(output, format, &entry_name, &mut reader, size, mtime);
+    if let Err(err) = result {
+        let _ = fs::remove_file(&archive_path);
+        return Err(err);
+    }
+
+    fs::remove_file(path)?;
+    Ok(Some(archive_path))
+}
+
+fn write_compressed<R: Read>(
+    output: File,
+    format: CompressionFormat,
+    entry_name: &str,
+    reader: &mut R,
+    size: u64,
+    mtime: DateTime<Local>,
+) -> io::Result<()> {
+    let mtime_secs = u64::try_from(mtime.timestamp()).unwrap_or(0);
+    match format {
+        CompressionFormat::None => Ok(()),
+        CompressionFormat::Gzip => {
+            let mut encoder = GzEncoder::new(output, Compression::default());
+            copy_exact(reader, &mut encoder, size)?;
+            encoder.finish().map(drop)
+        }
+        CompressionFormat::Bzip2 => {
+            let mut encoder = BzEncoder::new(output, bzip2::Compression::default());
+            copy_exact(reader, &mut encoder, size)?;
+            encoder.finish().map(drop)
+        }
+        CompressionFormat::Tar => {
+            let mut writer = BufWriter::new(output);
+            write_tar_archive(&mut writer, entry_name, reader, size, mtime_secs)?;
+            finish_buffered(writer)
+        }
+        CompressionFormat::TarGz => {
+            let mut encoder = GzEncoder::new(BufWriter::new(output), Compression::default());
+            write_tar_archive(&mut encoder, entry_name, reader, size, mtime_secs)?;
+            finish_buffered(encoder.finish()?)
+        }
+        CompressionFormat::TarBz2 => {
+            let mut encoder = BzEncoder::new(BufWriter::new(output), bzip2::Compression::default());
+            write_tar_archive(&mut encoder, entry_name, reader, size, mtime_secs)?;
+            finish_buffered(encoder.finish()?)
+        }
+        CompressionFormat::Zip => {
+            let mut writer = BufWriter::new(output);
+            write_zip_archive(&mut writer, entry_name, reader, size, mtime, false)?;
+            finish_buffered(writer)
+        }
+    }
+}
+
+fn finish_buffered(writer: BufWriter<File>) -> io::Result<()> {
+    writer
+        .into_inner()
+        .map(drop)
+        .map_err(|err| err.into_error())
+}
+
+/// Copy exactly `size` bytes; a short read means the file changed under us.
+fn copy_exact<R: Read, W: Write>(reader: &mut R, writer: &mut W, size: u64) -> io::Result<()> {
+    let copied = io::copy(&mut reader.by_ref().take(size), writer)?;
+    if copied != size {
+        return Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            format!("rotated file shrank during compression ({copied} of {size} bytes)"),
+        ));
+    }
+    Ok(())
+}
+
+const TAR_BLOCK: usize = 512;
+/// Archives are padded to 20 blocks, matching GNU tar and Python's tarfile.
+const TAR_RECORD: usize = TAR_BLOCK * 20;
+
+/// Write a single-entry GNU tar archive (long names via `././@LongLink`,
+/// sizes >= 8 GiB via base-256).
+fn write_tar_archive<R: Read, W: Write>(
+    out: &mut W,
+    name: &str,
+    reader: &mut R,
+    size: u64,
+    mtime: u64,
+) -> io::Result<()> {
+    let name_bytes = name.as_bytes();
+    let mut written: u64 = 0;
+
+    if name_bytes.len() > 100 {
+        let mut long_name = name_bytes.to_vec();
+        long_name.push(0);
+        out.write_all(&tar_header(
+            b"././@LongLink",
+            long_name.len() as u64,
+            0,
+            b'L',
+        ))?;
+        out.write_all(&long_name)?;
+        let padding = tar_padding(long_name.len() as u64);
+        out.write_all(&[0u8; TAR_BLOCK][..padding])?;
+        written += (TAR_BLOCK + long_name.len() + padding) as u64;
+    }
+
+    let short_name = &name_bytes[..name_bytes.len().min(100)];
+    out.write_all(&tar_header(short_name, size, mtime, b'0'))?;
+    copy_exact(reader, out, size)?;
+    let padding = tar_padding(size);
+    out.write_all(&[0u8; TAR_BLOCK][..padding])?;
+    written += TAR_BLOCK as u64 + size + padding as u64;
+
+    // End-of-archive marker (two zero blocks), then pad to a full record.
+    out.write_all(&[0u8; TAR_BLOCK * 2])?;
+    written += (TAR_BLOCK * 2) as u64;
+    let record = TAR_RECORD as u64;
+    let record_padding = ((record - written % record) % record) as usize;
+    out.write_all(&vec![0u8; record_padding])?;
+    Ok(())
+}
+
+fn tar_padding(len: u64) -> usize {
+    let rem = (len % TAR_BLOCK as u64) as usize;
+    (TAR_BLOCK - rem) % TAR_BLOCK
+}
+
+fn tar_header(name: &[u8], size: u64, mtime: u64, typeflag: u8) -> [u8; TAR_BLOCK] {
+    let mut header = [0u8; TAR_BLOCK];
+    header[..name.len()].copy_from_slice(name);
+    tar_octal(&mut header[100..108], 0o644); // mode
+    tar_octal(&mut header[108..116], 0); // uid
+    tar_octal(&mut header[116..124], 0); // gid
+    tar_numeric(&mut header[124..136], size);
+    tar_numeric(&mut header[136..148], mtime);
+    header[148..156].fill(b' '); // checksum placeholder
+    header[156] = typeflag;
+    header[257..265].copy_from_slice(b"ustar  \0"); // GNU magic + version
+
+    let checksum: u32 = header.iter().map(|&b| u32::from(b)).sum();
+    let checksum = format!("{checksum:06o}\0 ");
+    header[148..156].copy_from_slice(checksum.as_bytes());
+    header
+}
+
+/// Zero-padded octal digits followed by NUL.
+fn tar_octal(field: &mut [u8], value: u64) {
+    let digits = field.len() - 1;
+    let text = format!("{value:0digits$o}");
+    field[..digits].copy_from_slice(text.as_bytes());
+    field[digits] = 0;
+}
+
+/// Octal when it fits, otherwise GNU base-256 (big-endian with 0x80 marker).
+fn tar_numeric(field: &mut [u8], value: u64) {
+    let digits = field.len() - 1;
+    if value < 1u64 << (3 * digits as u32) {
+        tar_octal(field, value);
+    } else {
+        field.fill(0);
+        field[0] = 0x80;
+        let bytes = value.to_be_bytes();
+        let len = field.len();
+        field[len - bytes.len()..].copy_from_slice(&bytes);
+    }
+}
+
+/// Above this size the entry is written with ZIP64 fields. Kept below
+/// `u32::MAX` so deflate overhead on incompressible data can't overflow.
+const ZIP64_THRESHOLD: u64 = 0xFFF0_0000;
+
+/// Write a single-entry deflated ZIP archive. Sizes and CRC are patched into
+/// the local header after streaming, so no data descriptor is needed.
+fn write_zip_archive<R: Read, W: Write + Seek>(
+    out: &mut W,
+    name: &str,
+    reader: &mut R,
+    size: u64,
+    mtime: DateTime<Local>,
+    force_zip64: bool,
+) -> io::Result<()> {
+    use chrono::Datelike;
+    use flate2::write::DeflateEncoder;
+    use io::SeekFrom;
+
+    let zip64 = force_zip64 || size >= ZIP64_THRESHOLD;
+    let name_bytes = name.as_bytes();
+    let name_len = u16::try_from(name_bytes.len())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "file name too long for zip"))?;
+    let flags: u16 = if name.is_ascii() { 0 } else { 0x0800 }; // UTF-8 names
+    let version_needed: u16 = if zip64 { 45 } else { 20 };
+    let version_made_by: u16 = (3 << 8) | version_needed; // UNIX
+    let extra_len: u16 = if zip64 { 20 } else { 0 };
+    let (dos_time, dos_date) = if mtime.year() < 1980 {
+        (0, (1 << 5) | 1)
+    } else {
+        (
+            ((mtime.hour() as u16) << 11)
+                | ((mtime.minute() as u16) << 5)
+                | (mtime.second() as u16 / 2),
+            (((mtime.year() - 1980).min(127) as u16) << 9)
+                | ((mtime.month() as u16) << 5)
+                | mtime.day() as u16,
+        )
+    };
+    let size32 = |value: u64| if zip64 { u32::MAX } else { value as u32 };
+
+    let start = out.stream_position()?;
+    // Local file header; CRC and sizes are patched below.
+    out.write_all(&0x0403_4b50u32.to_le_bytes())?;
+    out.write_all(&version_needed.to_le_bytes())?;
+    out.write_all(&flags.to_le_bytes())?;
+    out.write_all(&8u16.to_le_bytes())?; // deflate
+    out.write_all(&dos_time.to_le_bytes())?;
+    out.write_all(&dos_date.to_le_bytes())?;
+    out.write_all(&[0u8; 12])?; // crc, compressed size, uncompressed size
+    out.write_all(&name_len.to_le_bytes())?;
+    out.write_all(&extra_len.to_le_bytes())?;
+    out.write_all(name_bytes)?;
+    if zip64 {
+        out.write_all(&1u16.to_le_bytes())?;
+        out.write_all(&16u16.to_le_bytes())?;
+        out.write_all(&[0u8; 16])?;
+    }
+
+    let data_start = out.stream_position()?;
+    let mut crc = flate2::Crc::new();
+    let mut remaining = size;
+    {
+        let mut encoder = DeflateEncoder::new(&mut *out, Compression::default());
+        let mut buf = vec![0u8; 64 * 1024];
+        while remaining > 0 {
+            let want = buf
+                .len()
+                .min(usize::try_from(remaining).unwrap_or(usize::MAX));
+            let read = reader.read(&mut buf[..want])?;
+            if read == 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "rotated file shrank during compression",
+                ));
+            }
+            crc.update(&buf[..read]);
+            encoder.write_all(&buf[..read])?;
+            remaining -= read as u64;
+        }
+        encoder.finish()?;
+    }
+    let data_end = out.stream_position()?;
+    let compressed = data_end - data_start;
+    if !zip64 && (compressed > u64::from(u32::MAX) || data_end > u64::from(u32::MAX)) {
+        return Err(io::Error::other("zip entry exceeded 4 GiB without ZIP64"));
+    }
+    let crc = crc.sum();
+
+    out.seek(SeekFrom::Start(start + 14))?;
+    out.write_all(&crc.to_le_bytes())?;
+    out.write_all(&size32(compressed).to_le_bytes())?;
+    out.write_all(&size32(size).to_le_bytes())?;
+    if zip64 {
+        out.seek(SeekFrom::Start(start + 30 + u64::from(name_len) + 4))?;
+        out.write_all(&size.to_le_bytes())?;
+        out.write_all(&compressed.to_le_bytes())?;
+    }
+    out.seek(SeekFrom::Start(data_end))?;
+
+    // Central directory
+    let cd_start = data_end;
+    out.write_all(&0x0201_4b50u32.to_le_bytes())?;
+    out.write_all(&version_made_by.to_le_bytes())?;
+    out.write_all(&version_needed.to_le_bytes())?;
+    out.write_all(&flags.to_le_bytes())?;
+    out.write_all(&8u16.to_le_bytes())?;
+    out.write_all(&dos_time.to_le_bytes())?;
+    out.write_all(&dos_date.to_le_bytes())?;
+    out.write_all(&crc.to_le_bytes())?;
+    out.write_all(&size32(compressed).to_le_bytes())?;
+    out.write_all(&size32(size).to_le_bytes())?;
+    out.write_all(&name_len.to_le_bytes())?;
+    out.write_all(&extra_len.to_le_bytes())?;
+    out.write_all(&0u16.to_le_bytes())?; // comment length
+    out.write_all(&0u16.to_le_bytes())?; // disk number start
+    out.write_all(&0u16.to_le_bytes())?; // internal attributes
+    out.write_all(&(0o100644u32 << 16).to_le_bytes())?; // external attributes
+    out.write_all(&u32::try_from(start).unwrap_or(u32::MAX).to_le_bytes())?;
+    out.write_all(name_bytes)?;
+    if zip64 {
+        out.write_all(&1u16.to_le_bytes())?;
+        out.write_all(&16u16.to_le_bytes())?;
+        out.write_all(&size.to_le_bytes())?;
+        out.write_all(&compressed.to_le_bytes())?;
+    }
+    let cd_end = out.stream_position()?;
+    let cd_size = cd_end - cd_start;
+
+    if zip64 {
+        // ZIP64 end of central directory record + locator
+        out.write_all(&0x0606_4b50u32.to_le_bytes())?;
+        out.write_all(&44u64.to_le_bytes())?;
+        out.write_all(&version_made_by.to_le_bytes())?;
+        out.write_all(&version_needed.to_le_bytes())?;
+        out.write_all(&0u32.to_le_bytes())?;
+        out.write_all(&0u32.to_le_bytes())?;
+        out.write_all(&1u64.to_le_bytes())?;
+        out.write_all(&1u64.to_le_bytes())?;
+        out.write_all(&cd_size.to_le_bytes())?;
+        out.write_all(&cd_start.to_le_bytes())?;
+        out.write_all(&0x0706_4b50u32.to_le_bytes())?;
+        out.write_all(&0u32.to_le_bytes())?;
+        out.write_all(&cd_end.to_le_bytes())?;
+        out.write_all(&1u32.to_le_bytes())?;
+    }
+
+    // End of central directory record
+    out.write_all(&0x0605_4b50u32.to_le_bytes())?;
+    out.write_all(&0u16.to_le_bytes())?;
+    out.write_all(&0u16.to_le_bytes())?;
+    out.write_all(&1u16.to_le_bytes())?;
+    out.write_all(&1u16.to_le_bytes())?;
+    out.write_all(&(cd_size as u32).to_le_bytes())?;
+    out.write_all(&size32(cd_start).to_le_bytes())?;
+    out.write_all(&0u16.to_le_bytes())?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1626,6 +2135,26 @@ mod tests {
         ));
         assert!(FileSinkInner::is_generated_rotated_log_filename(
             "app.2000-01-01_00-00-00_000000.pid123.log.gz",
+            "app",
+            "log"
+        ));
+        for archive in ["bz2", "zip", "tar", "tar.gz", "tar.bz2"] {
+            assert!(
+                FileSinkInner::is_generated_rotated_log_filename(
+                    &format!("app.2000-01-01_00-00-00_000000.pid123.log.{archive}"),
+                    "app",
+                    "log"
+                ),
+                "{archive} archives must be matched by retention"
+            );
+        }
+        assert!(!FileSinkInner::is_generated_rotated_log_filename(
+            "app.2000-01-01_00-00-00_000000.pid123.log.7z",
+            "app",
+            "log"
+        ));
+        assert!(!FileSinkInner::is_generated_rotated_log_filename(
+            "app.2000-01-01_00-00-00_000000.pid123.tar.gz",
             "app",
             "log"
         ));
@@ -1728,5 +2257,338 @@ mod tests {
         ));
 
         fs::remove_dir(&path).unwrap();
+    }
+
+    fn write_test_log(dir: &Path, name: &str, contents: &[u8]) -> PathBuf {
+        fs::create_dir_all(dir).unwrap();
+        let path = dir.join(name);
+        fs::write(&path, contents).unwrap();
+        path
+    }
+
+    fn sample_log_bytes() -> Vec<u8> {
+        (0..2000)
+            .map(|i| format!("line {i} with some text\n"))
+            .collect::<String>()
+            .into_bytes()
+    }
+
+    fn read_u16(buf: &[u8], at: usize) -> u16 {
+        u16::from_le_bytes(buf[at..at + 2].try_into().unwrap())
+    }
+
+    fn read_u32(buf: &[u8], at: usize) -> u32 {
+        u32::from_le_bytes(buf[at..at + 4].try_into().unwrap())
+    }
+
+    fn read_u64(buf: &[u8], at: usize) -> u64 {
+        u64::from_le_bytes(buf[at..at + 8].try_into().unwrap())
+    }
+
+    /// Minimal single-entry tar reader: (name, data) after validating checksums.
+    fn read_tar(archive: &[u8]) -> (String, Vec<u8>) {
+        assert_eq!(archive.len() % TAR_RECORD, 0, "tar must be record aligned");
+        let mut offset = 0;
+        let mut long_name = None;
+        loop {
+            let header = &archive[offset..offset + TAR_BLOCK];
+            let stored =
+                u32::from_str_radix(std::str::from_utf8(&header[148..154]).unwrap().trim(), 8)
+                    .unwrap();
+            let mut copy = header.to_vec();
+            copy[148..156].fill(b' ');
+            assert_eq!(stored, copy.iter().map(|&b| u32::from(b)).sum::<u32>());
+            let size = if header[124] & 0x80 != 0 {
+                u64::from_be_bytes(header[128..136].try_into().unwrap())
+            } else {
+                u64::from_str_radix(std::str::from_utf8(&header[124..135]).unwrap(), 8).unwrap()
+            } as usize;
+            let data = &archive[offset + TAR_BLOCK..offset + TAR_BLOCK + size];
+            offset += TAR_BLOCK + size + tar_padding(size as u64);
+            if header[156] == b'L' {
+                long_name = Some(String::from_utf8(data[..data.len() - 1].to_vec()).unwrap());
+                continue;
+            }
+            let name = long_name.take().unwrap_or_else(|| {
+                let end = header[..100].iter().position(|&b| b == 0).unwrap_or(100);
+                String::from_utf8(header[..end].to_vec()).unwrap()
+            });
+            assert!(
+                archive[offset..offset + 2 * TAR_BLOCK]
+                    .iter()
+                    .all(|&b| b == 0)
+            );
+            return (name, data.to_vec());
+        }
+    }
+
+    /// Minimal single-entry zip reader: (name, data) after validating the CRC.
+    fn read_zip(archive: &[u8]) -> (String, Vec<u8>) {
+        use flate2::read::DeflateDecoder;
+
+        let eocd = archive.len() - 22;
+        assert_eq!(read_u32(archive, eocd), 0x0605_4b50);
+        assert_eq!(read_u16(archive, eocd + 10), 1, "one entry");
+        let mut cd = read_u32(archive, eocd + 16) as usize;
+        if cd == u32::MAX as usize {
+            let locator = eocd - 20;
+            assert_eq!(read_u32(archive, locator), 0x0706_4b50);
+            let record = read_u64(archive, locator + 8) as usize;
+            assert_eq!(read_u32(archive, record), 0x0606_4b50);
+            cd = read_u64(archive, record + 48) as usize;
+        }
+        assert_eq!(read_u32(archive, cd), 0x0201_4b50);
+        let crc = read_u32(archive, cd + 16);
+        let name_len = read_u16(archive, cd + 28) as usize;
+        let extra_len = read_u16(archive, cd + 30) as usize;
+        let name = String::from_utf8(archive[cd + 46..cd + 46 + name_len].to_vec()).unwrap();
+        let mut compressed = read_u32(archive, cd + 20) as u64;
+        let mut size = read_u32(archive, cd + 24) as u64;
+        if extra_len > 0 {
+            let extra = cd + 46 + name_len;
+            assert_eq!(read_u16(archive, extra), 1, "zip64 extra id");
+            size = read_u64(archive, extra + 4);
+            compressed = read_u64(archive, extra + 12);
+        }
+
+        assert_eq!(read_u32(archive, 0), 0x0403_4b50);
+        assert_eq!(read_u32(archive, 14), crc, "local header crc patched");
+        let data_start = 30 + read_u16(archive, 26) as usize + read_u16(archive, 28) as usize;
+        let mut data = Vec::new();
+        DeflateDecoder::new(&archive[data_start..data_start + compressed as usize])
+            .read_to_end(&mut data)
+            .unwrap();
+        assert_eq!(data.len() as u64, size);
+        let mut actual_crc = flate2::Crc::new();
+        actual_crc.update(&data);
+        assert_eq!(actual_crc.sum(), crc);
+        (name, data)
+    }
+
+    #[test]
+    fn test_parse_compression() {
+        assert_eq!(parse_compression("gz"), Ok(CompressionFormat::Gzip));
+        assert_eq!(parse_compression(".zip"), Ok(CompressionFormat::Zip));
+        assert_eq!(parse_compression(" TAR.GZ "), Ok(CompressionFormat::TarGz));
+        assert_eq!(parse_compression("bz2"), Ok(CompressionFormat::Bzip2));
+        assert_eq!(parse_compression("tar"), Ok(CompressionFormat::Tar));
+        assert_eq!(parse_compression("tar.bz2"), Ok(CompressionFormat::TarBz2));
+        for unsupported in ["xz", "lzma", "tar.xz"] {
+            let err = parse_compression(unsupported).unwrap_err();
+            assert!(err.contains("not supported"), "{err}");
+        }
+        assert!(parse_compression("rar").unwrap_err().contains("Invalid"));
+    }
+
+    #[test]
+    fn test_compress_rotated_file_all_formats_round_trip() {
+        use flate2::read::GzDecoder;
+
+        let dir = unique_temp_path("compress-formats");
+        let contents = sample_log_bytes();
+
+        for format in CompressionFormat::ALL {
+            let ext = format.extension().unwrap();
+            let name = format!("app.{}.log", ext.replace('.', "-"));
+            let path = write_test_log(&dir, &name, &contents);
+            let archive_path = compress_rotated_file(&path, format).unwrap().unwrap();
+
+            assert!(!path.exists(), "{format:?}: source must be removed");
+            assert_eq!(
+                archive_path.file_name().unwrap().to_str().unwrap(),
+                format!("{name}.{ext}")
+            );
+
+            let raw = fs::read(&archive_path).unwrap();
+            let mut decoded = Vec::new();
+            match format {
+                CompressionFormat::Gzip | CompressionFormat::TarGz => {
+                    GzDecoder::new(raw.as_slice())
+                        .read_to_end(&mut decoded)
+                        .unwrap();
+                }
+                CompressionFormat::Bzip2 | CompressionFormat::TarBz2 => {
+                    bzip2::read::BzDecoder::new(raw.as_slice())
+                        .read_to_end(&mut decoded)
+                        .unwrap();
+                }
+                _ => decoded = raw,
+            }
+
+            let (entry, data) = match format {
+                CompressionFormat::Gzip | CompressionFormat::Bzip2 => (name.clone(), decoded),
+                CompressionFormat::Tar | CompressionFormat::TarGz | CompressionFormat::TarBz2 => {
+                    read_tar(&decoded)
+                }
+                CompressionFormat::Zip => read_zip(&decoded),
+                CompressionFormat::None => unreachable!(),
+            };
+            assert_eq!(entry, name, "{format:?}");
+            assert_eq!(data, contents, "{format:?}");
+        }
+
+        assert_eq!(
+            compress_rotated_file(&dir.join("missing.log"), CompressionFormat::None).unwrap(),
+            None
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_zip64_layout_round_trips() {
+        let contents = sample_log_bytes();
+        let mut archive = io::Cursor::new(Vec::new());
+        write_zip_archive(
+            &mut archive,
+            "app.log",
+            &mut contents.as_slice(),
+            contents.len() as u64,
+            Local::now(),
+            true,
+        )
+        .unwrap();
+        let archive = archive.into_inner();
+        assert_eq!(read_u32(&archive, archive.len() - 22 + 16), u32::MAX);
+        let (name, data) = read_zip(&archive);
+        assert_eq!(name, "app.log");
+        assert_eq!(data, contents);
+    }
+
+    #[test]
+    fn test_tar_long_name_and_base256_size() {
+        let long_name = format!("{}.log", "n".repeat(150));
+        let mut archive = Vec::new();
+        write_tar_archive(&mut archive, &long_name, &mut &b"hello\n"[..], 6, 0).unwrap();
+        let (name, data) = read_tar(&archive);
+        assert_eq!(name, long_name);
+        assert_eq!(data, b"hello\n");
+
+        let mut field = [0u8; 12];
+        tar_numeric(&mut field, 8u64.pow(11) - 1);
+        assert_eq!(&field, b"77777777777\0");
+        tar_numeric(&mut field, 8u64.pow(11));
+        assert_eq!(field[0], 0x80);
+        assert_eq!(
+            u64::from_be_bytes(field[4..].try_into().unwrap()),
+            8u64.pow(11)
+        );
+    }
+
+    #[test]
+    fn test_compress_failure_keeps_source() {
+        let dir = unique_temp_path("compress-failure");
+        let path = write_test_log(&dir, "app.log", b"data\n");
+        // A directory squatting on the archive path makes File::create fail.
+        fs::create_dir_all(dir.join("app.log.zip")).unwrap();
+        assert!(compress_rotated_file(&path, CompressionFormat::Zip).is_err());
+        assert!(path.exists(), "source must survive a failed compression");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_rotation_with_zip_compression_and_retention() {
+        let dir = unique_temp_path("rotation-zip-retention");
+        let path = dir.join("app.log");
+        let sink = FileSink::new(FileSinkConfig {
+            path: path.clone(),
+            max_size: Some(1),
+            retention_count: Some(2),
+            compression: CompressionFormat::Zip,
+            ..FileSinkConfig::default()
+        })
+        .unwrap();
+
+        for i in 0..6 {
+            sink.write(&format!("message {i}")).unwrap();
+        }
+        sink.flush().unwrap();
+
+        let archives: Vec<_> = fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.ends_with(".log.zip"))
+            .collect();
+        assert_eq!(
+            archives.len(),
+            2,
+            "retention keeps 2 archives: {archives:?}"
+        );
+        for name in &archives {
+            let (_, data) = read_zip(&fs::read(dir.join(name)).unwrap());
+            assert!(data.starts_with(b"message "));
+        }
+
+        drop(sink);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_delay_defers_file_creation_until_first_write() {
+        for enqueue in [false, true] {
+            let dir = unique_temp_path(&format!("delay-{enqueue}"));
+            let path = dir.join("nested").join("app.log");
+            let sink = FileSink::new(FileSinkConfig {
+                path: path.clone(),
+                delay: true,
+                enqueue,
+                ..FileSinkConfig::default()
+            })
+            .unwrap();
+
+            assert!(!dir.exists(), "delay must not create directories or files");
+            sink.flush().unwrap();
+            assert!(!path.exists(), "flush must not open a delayed sink");
+
+            sink.write("first").unwrap();
+            sink.flush().unwrap();
+            assert_eq!(fs::read_to_string(&path).unwrap(), "first\n");
+
+            drop(sink);
+            let _ = fs::remove_dir_all(&dir);
+        }
+    }
+
+    #[test]
+    fn test_truncate_mode_replaces_existing_content() {
+        for (delay, enqueue) in [(false, false), (true, false), (false, true), (true, true)] {
+            let dir = unique_temp_path(&format!("truncate-{delay}-{enqueue}"));
+            let path = write_test_log(&dir, "app.log", b"old content\n");
+            let sink = FileSink::new(FileSinkConfig {
+                path: path.clone(),
+                truncate: true,
+                delay,
+                enqueue,
+                ..FileSinkConfig::default()
+            })
+            .unwrap();
+
+            let expected_before = if delay { "old content\n" } else { "" };
+            assert_eq!(fs::read_to_string(&path).unwrap(), expected_before);
+
+            sink.write("new").unwrap();
+            sink.write("more").unwrap();
+            sink.flush().unwrap();
+            assert_eq!(fs::read_to_string(&path).unwrap(), "new\nmore\n");
+
+            drop(sink);
+            let _ = fs::remove_dir_all(&dir);
+        }
+    }
+
+    #[test]
+    fn test_append_mode_keeps_existing_content() {
+        let dir = unique_temp_path("append");
+        let path = write_test_log(&dir, "app.log", b"old\n");
+        let sink = FileSink::new(FileSinkConfig {
+            path: path.clone(),
+            ..FileSinkConfig::default()
+        })
+        .unwrap();
+        sink.write("new").unwrap();
+        sink.flush().unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "old\nnew\n");
+        drop(sink);
+        let _ = fs::remove_dir_all(&dir);
     }
 }
