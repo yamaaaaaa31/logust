@@ -155,8 +155,9 @@ pub fn write_default_time(dt: &DateTime<Local>, out: &mut String) {
         c0, c1, y0, y1, b'-', mo0, mo1, b'-', d0, d1, b' ', h0, h1, b':', mi0, mi1, b':', s0, s1,
         b'.', ms0, ms1, ms2,
     ];
-    // Only ASCII digits and punctuation: always valid UTF-8
-    out.push_str(std::str::from_utf8(&buf).expect("timestamp is ASCII"));
+    // SAFETY: `buf` holds only ASCII digits and punctuation, which is valid UTF-8
+    // (`from_utf8` would validate the 23 bytes on every record)
+    out.push_str(unsafe { std::str::from_utf8_unchecked(&buf) });
 }
 
 /// The default `{time}` rendering of `dt` as a new string
