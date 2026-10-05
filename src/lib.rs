@@ -1407,7 +1407,8 @@ impl PyLogger {
                             }
                         }
                         CallbackKind::FormattedLight(req) => {
-                            if let Ok(mini) = Self::build_mini_record_dict(py, level, rec, req)
+                            if let Ok(mini) =
+                                Self::build_mini_record_dict(py, level.as_str(), rec, req)
                                 && let Err(err) = entry.callback.call1(py, (mini,))
                             {
                                 entry.on_error(err, &mut first_error);
@@ -1597,7 +1598,7 @@ impl PyLogger {
     /// Minimal Python dict for formatted callable sinks (matches `ParsedCallableTemplate.format` keys).
     fn build_mini_record_dict<'py>(
         py: Python<'py>,
-        level: LogLevel,
+        level_name: &str,
         record: &LogRecord,
         req: &FormattedSinkRequirements,
     ) -> PyResult<Bound<'py, PyDict>> {
@@ -1607,7 +1608,7 @@ impl PyLogger {
             let _ = dict.set_item(intern!(py, "timestamp"), record.timestamp.to_rfc3339());
         }
         if req.needs_level {
-            let _ = dict.set_item(intern!(py, "level"), level.as_str());
+            let _ = dict.set_item(intern!(py, "level"), level_name);
         }
         if req.needs_name {
             let _ = dict.set_item(intern!(py, "name"), &record.caller.name);
@@ -1742,36 +1743,28 @@ impl PyLogger {
 
         if needs_gil {
             Python::attach(|py| {
-                let need_text_full_dict = has_eligible_filtered_handler
-                    || callbacks.iter().any(|e| {
-                        level_no >= e.level as u32 && !matches!(&e.kind, CallbackKind::Serialized)
-                    });
+                let mut need_text_full_dict = has_eligible_filtered_handler;
+                let mut with_file_path = false;
+                for e in callbacks.iter() {
+                    if level_no >= e.level as u32
+                        && let CallbackKind::Raw { file_path, .. } = e.kind
+                    {
+                        need_text_full_dict = true;
+                        with_file_path |= file_path;
+                    }
+                }
                 let need_json_full_dict = callbacks.iter().any(|e| {
                     level_no >= e.level as u32 && matches!(&e.kind, CallbackKind::Serialized)
                 });
 
-                let with_file_path = need_text_full_dict
-                    && callbacks.iter().any(|e| {
-                        level_no >= e.level as u32
-                            && match &e.kind {
-                                CallbackKind::Raw { file_path, .. } => *file_path,
-                                CallbackKind::FormattedLight(req) => req.needs_file_path,
-                                CallbackKind::Serialized => false,
-                            }
-                    });
-                // Formatted callable sinks also read this dict for custom levels, but
-                // only filters and raw callbacks need the loguru-shaped values.
-                let compat = has_eligible_filtered_handler
-                    || callbacks.iter().any(|e| {
-                        level_no >= e.level as u32 && matches!(&e.kind, CallbackKind::Raw { .. })
-                    });
                 let shared_text_full: Option<Bound<'_, PyDict>> = if need_text_full_dict {
+                    // Filters and raw callbacks are the only consumers of this dict
                     Self::build_custom_record_dict(
                         py,
                         &record,
                         RecordExtraView::Text,
                         with_file_path,
-                        compat,
+                        true,
                     )
                     .ok()
                 } else {
@@ -1783,39 +1776,55 @@ impl PyLogger {
                 } else {
                     None
                 };
+                let level_name = level_info.name.as_str();
 
                 for entry in callbacks.iter() {
-                    if level_no >= entry.level as u32 {
-                        let (shared, view) = match &entry.kind {
-                            CallbackKind::Serialized => {
-                                (shared_json_full.as_ref(), RecordExtraView::Json)
+                    if level_no < entry.level as u32 {
+                        continue;
+                    }
+                    let rec = record_for(&record, alt, entry.exc_variant);
+                    // Only for sinks given a different traceback than the record's
+                    let own_full = if std::ptr::eq(rec, &record)
+                        || matches!(entry.kind, CallbackKind::FormattedLight(_))
+                    {
+                        None
+                    } else {
+                        let view = match &entry.kind {
+                            CallbackKind::Serialized => RecordExtraView::Json,
+                            _ => RecordExtraView::Text,
+                        };
+                        Self::build_custom_record_dict(
+                            py,
+                            rec,
+                            view,
+                            with_file_path,
+                            // Raw callbacks get loguru-shaped values, serialized sinks plain ones
+                            !matches!(entry.kind, CallbackKind::Serialized),
+                        )
+                        .ok()
+                    };
+                    match &entry.kind {
+                        CallbackKind::Raw { extra_repr, .. } => {
+                            if let Some(full) = own_full.as_ref().or(shared_text_full.as_ref())
+                                && let Err(err) =
+                                    Self::call_full(py, &entry.callback, full, *extra_repr, rec)
+                            {
+                                entry.on_error(err, &mut first_error);
                             }
-                            _ => (shared_text_full.as_ref(), RecordExtraView::Text),
-                        };
-                        let rec = record_for(&record, alt, entry.exc_variant);
-                        // Only for sinks given a different traceback than the record's
-                        let own_full = if std::ptr::eq(rec, &record) {
-                            None
-                        } else {
-                            Self::build_custom_record_dict(
-                                py,
-                                rec,
-                                view,
-                                with_file_path,
-                                compat && !matches!(entry.kind, CallbackKind::Serialized),
-                            )
-                            .ok()
-                        };
-                        let extra_repr = match &entry.kind {
-                            CallbackKind::Raw { extra_repr, .. } => *extra_repr,
-                            CallbackKind::FormattedLight(req) => req.needs_extra_repr,
-                            CallbackKind::Serialized => false,
-                        };
-                        if let Some(full) = own_full.as_ref().or(shared)
-                            && let Err(err) =
-                                Self::call_full(py, &entry.callback, full, extra_repr, rec)
-                        {
-                            entry.on_error(err, &mut first_error);
+                        }
+                        CallbackKind::Serialized => {
+                            if let Some(full) = own_full.as_ref().or(shared_json_full.as_ref())
+                                && let Err(err) = entry.callback.call1(py, (full.clone(),))
+                            {
+                                entry.on_error(err, &mut first_error);
+                            }
+                        }
+                        CallbackKind::FormattedLight(req) => {
+                            if let Ok(mini) = Self::build_mini_record_dict(py, level_name, rec, req)
+                                && let Err(err) = entry.callback.call1(py, (mini,))
+                            {
+                                entry.on_error(err, &mut first_error);
+                            }
                         }
                     }
                 }
