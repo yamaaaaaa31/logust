@@ -2233,20 +2233,32 @@ class Logger:
             return result or callbacks_removed > 0
         return result
 
-    def _with_inner(self, inner: PyLogger) -> Logger:
-        """Logger sharing this one's state, logging through ``inner``."""
-        return Logger(
-            inner,
-            patchers=self._patchers,
-            context=self._context,
-            collect_options=self._collect_options,
-            callback_ids=self._callback_ids,
-            filter_ids=self._filter_ids,
-            raw_callback_ids=self._raw_callback_ids,
-            requirements_cache_box=self._requirements_cache_box,
-            aggregated_options_box=self._aggregated_options_box,
-            activation=self._activation,
-        )
+    def _with_inner(
+        self,
+        inner: PyLogger,
+        *,
+        context: dict[str, Any] | None = None,
+        patchers: list[Callable[[dict[str, Any]], None]] | None = None,
+    ) -> Logger:
+        """Logger sharing this one's handler state, logging through ``inner``.
+
+        ``context`` defaults to a copy of this logger's and ``patchers`` to the
+        same list; the handler bookkeeping is shared like ``bind()`` does.
+        Attributes are assigned directly because ``bind()`` runs per message
+        and ``__init__``'s keyword plumbing costs more than the copy itself.
+        """
+        new = Logger.__new__(Logger)
+        new._inner = inner
+        new._activation = self._activation
+        new._patchers = self._patchers if patchers is None else patchers
+        new._context = dict(self._context) if context is None else context
+        new._collect_options = self._collect_options
+        new._callback_ids = self._callback_ids
+        new._filter_ids = self._filter_ids
+        new._raw_callback_ids = self._raw_callback_ids
+        new._requirements_cache_box = self._requirements_cache_box
+        new._aggregated_options_box = self._aggregated_options_box
+        return new
 
     def bind(self, **kwargs: Any) -> Logger:
         """Create a new logger with bound context values.
@@ -2262,19 +2274,10 @@ class Logger:
             >>> user_logger.info("User action")
             # Output includes extra context in JSON mode
         """
-        new_inner = self._inner.bind(kwargs)
-        new_context = {**self._context, **kwargs}
-        return Logger(
-            new_inner,
+        return self._with_inner(
+            self._inner.bind(kwargs),
+            context={**self._context, **kwargs},
             patchers=self._patchers.copy(),
-            context=new_context,
-            collect_options=self._collect_options,
-            callback_ids=self._callback_ids,
-            filter_ids=self._filter_ids,
-            raw_callback_ids=self._raw_callback_ids,
-            requirements_cache_box=self._requirements_cache_box,
-            aggregated_options_box=self._aggregated_options_box,
-            activation=self._activation,
         )
 
     @contextmanager
@@ -2449,20 +2452,7 @@ class Logger:
             >>> # Chain multiple patchers
             >>> logger.patch(add_user_id).patch(add_request_id).info("Log")
         """
-        new_patchers = self._patchers.copy()
-        new_patchers.append(patcher)
-        return Logger(
-            self._inner,
-            patchers=new_patchers,
-            context=self._context,
-            collect_options=self._collect_options,
-            callback_ids=self._callback_ids,
-            filter_ids=self._filter_ids,
-            raw_callback_ids=self._raw_callback_ids,
-            requirements_cache_box=self._requirements_cache_box,
-            aggregated_options_box=self._aggregated_options_box,
-            activation=self._activation,
-        )
+        return self._with_inner(self._inner, patchers=[*self._patchers, patcher])
 
     def configure(
         self,
