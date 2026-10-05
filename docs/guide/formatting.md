@@ -73,6 +73,7 @@ logger.info("{} by {user}", "login", user="alice", request_id="r1")
 | `{elapsed}` | Time since logger start | `00:01:23.456` |
 | `{exception}` | Formatted traceback (empty without one), see [below](#exceptions-in-the-format) | |
 | `{extra[key]}` | Extra context fields | `{extra[user_id]}` |
+| `{extra}` | All extra fields, [like loguru](#all-extra-fields) | `{'user_id': '123'}` |
 
 Placeholders that are not in this table (for example `{level.color}`) are written as is.
 
@@ -162,6 +163,24 @@ Format usage:
 {time} | {level} | {message} | user={extra[user_id]}
 ```
 
+#### All extra fields
+
+`{extra}` writes the whole extra dict, as `str(dict)` does in loguru:
+
+```python
+logger.add(sys.stderr, format="{message} {extra}")
+logger.bind(user="alice", attempt=2).info("Login")
+# Login {'attempt': 2, 'user': 'alice'}
+```
+
+Strings are quoted like `repr()`. `int`, `float`, `bool`, `None`, lists,
+tuples and dicts look the same as in loguru. Differences from loguru:
+
+- Keys are sorted. loguru keeps the order in which they were bound.
+- Other types are written with `str()`: a `datetime` reads
+  `2024-01-02 03:04:05` instead of `datetime.datetime(2024, 1, 2, 3, 4, 5)`.
+- `{extra:<spec>}` is not supported and is written as is.
+
 ## JSON output
 
 For structured logging, use the `serialize` option:
@@ -248,5 +267,18 @@ logger.info("<bold>Important</bold> message")
 | `<underline>` | Underlined text |
 | `<bright_red>`, `<bright_green>`, etc. | Bright colors |
 
-!!! note
-    Color markup only works in console output, not in file handlers.
+Markup is rendered on sinks with `colorize=True` and stripped from the
+others. Unknown tags are written as is.
+
+### Markup as plain text
+
+loguru only parses markup in a message with `opt(colors=True)`. logust always
+parses it (as in earlier releases), and `opt(colors=False)` keeps the tags of
+that message as plain text on every sink:
+
+```python
+logger.opt(colors=False).info("Literal <red>tags</red>")
+# Literal <red>tags</red>
+```
+
+`opt(colors=True)` is accepted and behaves like the default.
