@@ -4,14 +4,14 @@ and ``add_callback`` callbacks.
 The string-like values subclass ``str`` so existing logust code that treats
 ``record["level"]`` or ``record["file"]`` as plain strings keeps working, while
 ported loguru code can use ``record["level"].no``, ``record["file"].path`` and
-so on. Instances are created by the Rust core and cached, so they are shared
-between records: treat them as read-only.
+so on. Instances are cached and shared between records, so their attributes
+are read-only.
 """
 
 from __future__ import annotations
 
 import datetime
-from typing import Any
+from typing import Any, NoReturn
 
 __all__ = [
     "RecordElapsed",
@@ -20,6 +20,10 @@ __all__ = [
     "RecordProcess",
     "RecordThread",
 ]
+
+
+def _read_only(self: object, name: str, value: object) -> NoReturn:
+    raise AttributeError(f"{type(self).__name__} attributes are read-only")
 
 
 class RecordLevelStr(str):
@@ -35,10 +39,13 @@ class RecordLevelStr(str):
 
     def __new__(cls, name: str, no: int, icon: str = "") -> RecordLevelStr:
         self = super().__new__(cls, name)
-        self.name = str(name)
-        self.no = no
-        self.icon = icon
+        object.__setattr__(self, "name", str(name))
+        object.__setattr__(self, "no", no)
+        object.__setattr__(self, "icon", icon)
         return self
+
+    __setattr__ = _read_only
+    __delattr__ = _read_only  # type: ignore[assignment]
 
     def __getnewargs__(self) -> tuple[Any, ...]:
         return (self.name, self.no, self.icon)
@@ -52,60 +59,60 @@ class RecordFile(str):
 
     def __new__(cls, name: str, path: str) -> RecordFile:
         self = super().__new__(cls, name)
-        self.name = str(name)
-        self.path = path
+        object.__setattr__(self, "name", str(name))
+        object.__setattr__(self, "path", path)
         return self
+
+    __setattr__ = _read_only
+    __delattr__ = _read_only  # type: ignore[assignment]
 
     def __getnewargs__(self) -> tuple[Any, ...]:
         return (self.name, self.path)
 
 
-class RecordThread:
+class _IdName:
+    """Read-only ``.id`` / ``.name`` pair formatted like loguru's thread/process values."""
+
+    __slots__ = ("id", "name")
+
+    id: int
+    name: str
+
+    def __init__(self, id: int, name: str) -> None:
+        object.__setattr__(self, "id", id)
+        object.__setattr__(self, "name", name)
+
+    __setattr__ = _read_only
+    __delattr__ = _read_only  # type: ignore[assignment]
+
+    def __repr__(self) -> str:
+        return f"(id={self.id!r}, name={self.name!r})"
+
+    def __format__(self, spec: str) -> str:
+        return format(self.id, spec)
+
+    def __eq__(self, other: object) -> bool:
+        if type(other) is type(self):
+            return self.id == other.id and self.name == other.name
+        return NotImplemented
+
+    def __hash__(self) -> int:
+        return hash((self.id, self.name))
+
+    def __reduce__(self) -> tuple[Any, ...]:
+        return (type(self), (self.id, self.name))
+
+
+class RecordThread(_IdName):
     """Thread information with loguru's ``.id`` and ``.name`` attributes."""
 
-    __slots__ = ("id", "name")
-
-    def __init__(self, id: int, name: str) -> None:
-        self.id = id
-        self.name = name
-
-    def __repr__(self) -> str:
-        return f"(id={self.id!r}, name={self.name!r})"
-
-    def __format__(self, spec: str) -> str:
-        return format(self.id, spec)
-
-    def __eq__(self, other: object) -> bool:
-        if isinstance(other, RecordThread):
-            return self.id == other.id and self.name == other.name
-        return NotImplemented
-
-    def __hash__(self) -> int:
-        return hash((self.id, self.name))
+    __slots__ = ()
 
 
-class RecordProcess:
+class RecordProcess(_IdName):
     """Process information with loguru's ``.id`` and ``.name`` attributes."""
 
-    __slots__ = ("id", "name")
-
-    def __init__(self, id: int, name: str) -> None:
-        self.id = id
-        self.name = name
-
-    def __repr__(self) -> str:
-        return f"(id={self.id!r}, name={self.name!r})"
-
-    def __format__(self, spec: str) -> str:
-        return format(self.id, spec)
-
-    def __eq__(self, other: object) -> bool:
-        if isinstance(other, RecordProcess):
-            return self.id == other.id and self.name == other.name
-        return NotImplemented
-
-    def __hash__(self) -> int:
-        return hash((self.id, self.name))
+    __slots__ = ()
 
 
 class RecordElapsed(datetime.timedelta):

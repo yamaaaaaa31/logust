@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from types import TracebackType
 from typing import TYPE_CHECKING, Any, TextIO, TypeVar, cast, overload
 
-from ._logust import LogLevel, PyLogger
+from ._logust import LogLevel, PyLogger, record_time_fields
 from ._parse import parse as _parse_file
 from ._record import RecordLevelStr, RecordProcess, RecordThread
 from ._template import (
@@ -248,6 +248,33 @@ def _get_process_info() -> tuple[str, int]:
 # ``record["level"]`` values handed to patchers, keyed by (name, no); cleared
 # whenever a level is (re)registered so icon changes are picked up.
 _PATCH_LEVELS: dict[tuple[str, int], RecordLevelStr] = {}
+# ``record["thread"]`` / ``record["process"]`` values handed to patchers, by id
+_PATCH_THREADS: dict[int, RecordThread] = {}
+_PATCH_PROCESSES: dict[int, RecordProcess] = {}
+
+
+def _patch_thread_value() -> RecordThread:
+    """Cached ``record["thread"]`` for patchers."""
+    thread = threading.current_thread()
+    ident = thread.ident or 0
+    value = _PATCH_THREADS.get(ident)
+    if value is None or value.name != thread.name:
+        value = RecordThread(ident, thread.name)
+        if len(_PATCH_THREADS) > 1024:
+            _PATCH_THREADS.clear()
+        _PATCH_THREADS[ident] = value
+    return value
+
+
+def _patch_process_value() -> RecordProcess:
+    """Cached ``record["process"]`` for patchers."""
+    name, pid = _get_process_info()
+    value = _PATCH_PROCESSES.get(pid)
+    if value is None or value.name != name:
+        value = RecordProcess(pid, name)
+        _PATCH_PROCESSES.clear()
+        _PATCH_PROCESSES[pid] = value
+    return value
 
 
 def _to_log_level(level: LogLevel | str) -> LogLevel:
@@ -910,17 +937,16 @@ class Logger:
             base_extra.update(extra)
         original_extra_keys = {str(key) for key in base_extra}
 
-        now = datetime.datetime.now().astimezone()
-        current_thread = threading.current_thread()
-        process_name, process_id = _get_process_info()
+        time, timestamp, elapsed = record_time_fields()
         record: dict[str, Any] = {
             "level": self._patch_level_value(level_name.upper(), level_no),
             "level_no": level_no,
             "message": message_str,
-            "time": now,
-            "timestamp": now.isoformat(),
-            "thread": RecordThread(current_thread.ident or 0, current_thread.name),
-            "process": RecordProcess(process_id, process_name),
+            "time": time,
+            "timestamp": timestamp,
+            "elapsed": elapsed,
+            "thread": _patch_thread_value(),
+            "process": _patch_process_value(),
             "exception": exception,
             "extra": base_extra,
         }

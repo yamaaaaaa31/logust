@@ -275,6 +275,7 @@ class TestPatchers:
         assert isinstance(record["timestamp"], str)
         assert record["thread"].id == threading.current_thread().ident
         assert record["process"].id == os.getpid()
+        assert isinstance(record["elapsed"], RecordElapsed)
         assert record["exception"] is None
 
     def test_patcher_changes_propagate(self) -> None:
@@ -312,13 +313,15 @@ class TestValues:
             RecordLevelStr("INFO", 20, "i"),
             RecordFile("a.py", "/x/a.py"),
             RecordElapsed(seconds=5),
+            RecordThread(1, "T"),
+            RecordProcess(2, "P"),
         ],
     )
     def test_pickle_roundtrip(self, value: object) -> None:
         copy = pickle.loads(pickle.dumps(value))
         assert copy == value
         assert type(copy) is type(value)
-        for attr in ("name", "no", "icon", "path"):
+        for attr in ("name", "no", "icon", "path", "id"):
             if hasattr(value, attr):
                 assert getattr(copy, attr) == getattr(value, attr)
 
@@ -337,3 +340,16 @@ class TestValues:
         logger.info("y")
         assert records[0]["level"] is records[1]["level"]
         assert records[0] is not records[1]
+
+    @pytest.mark.parametrize(
+        ("value", "attr"),
+        [
+            (RecordLevelStr("INFO", 20), "no"),
+            (RecordFile("a.py", "/x/a.py"), "path"),
+            (RecordThread(1, "T"), "name"),
+            (RecordProcess(2, "P"), "id"),
+        ],
+    )
+    def test_shared_values_are_read_only(self, value: object, attr: str) -> None:
+        with pytest.raises(AttributeError):
+            setattr(value, attr, 99)

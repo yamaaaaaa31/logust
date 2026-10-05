@@ -1990,6 +1990,7 @@ fn _logust(py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(split_format_markup, m)?)?;
     m.add_function(wrap_pyfunction!(level_style, m)?)?;
     m.add_function(wrap_pyfunction!(level_details, m)?)?;
+    m.add_function(wrap_pyfunction!(record_compat::record_time_fields, m)?)?;
     m.add_class::<TimeFormatter>()?;
 
     let default_logger = Py::new(py, PyLogger::new(None))?;
