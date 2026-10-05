@@ -58,6 +58,8 @@ handler_id = logger.add(
     encoding=None,           # UTF-8 aliases only; files are always UTF-8 (files only)
     delay=None,              # True: create the file on the first message (files only)
     catch=None,              # Sink errors: None drops, True reports to stderr, False raises
+    backtrace=False,         # Logged tracebacks also show frames above the catch point
+    diagnose=False,          # Logged tracebacks also show variable values (may leak secrets)
 )
 
 # Console sink
@@ -78,6 +80,9 @@ logger.add(
     format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level.icon} {level.name:<8} | "
     "{thread.name} {file.path}:{line} - {message}\n{exception}",
 )
+
+# {extra} writes every extra field: "Login {'user': 'alice'}"
+logger.add(sys.stderr, format="{message} {extra}")
 # An invalid time spec raises ValueError: logger.add("x.log", format="{time:SSSSSSS}")
 ```
 
@@ -183,6 +188,8 @@ opt_logger = logger.opt(
     depth=0,          # Stack frame offset
     backtrace=False,  # Extended traceback
     diagnose=False,   # Show variable values
+    colors=None,      # False: keep message markup as plain text
+    capture=True,     # False: kwargs only format the message, not added to extra
 )
 
 # opt_logger supports all log methods with format arguments:

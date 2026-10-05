@@ -71,6 +71,7 @@ In this run, `loguru`'s `enqueue=True` path remained far slower than its sync pa
 | Context binding | Yes | Yes |
 | Custom levels | Yes | Yes |
 | Exception catching | Yes | Yes |
+| Handler `backtrace` / `diagnose` | Yes (default: off) | Yes (default: on) |
 | Lazy evaluation | Yes | Yes |
 | Message arguments (`"{}"`, `"{name}"`) | Yes | Yes |
 | Async writes | Yes | Yes |
@@ -98,7 +99,7 @@ logger.info("Hello")
 
 ### Keyword arguments and `extra`
 
-`logger.info("{} by {user}", "login", user="alice")` formats the same in both libraries. loguru also copies every keyword argument into `extra`; logust only adds the ones not used by a placeholder, so `user` above is not in `extra`. Use `bind()` when a value should be both in the message and in `extra`.
+`logger.info("{} by {user}", "login", user="alice")` formats the same in both libraries. loguru also copies every keyword argument into `extra`; logust only adds the ones not used by a placeholder, so `user` above is not in `extra`. Use `bind()` when a value should be both in the message and in `extra`. `opt(capture=False)` keeps every keyword argument out of `extra` in both libraries.
 
 ### Callable sinks receive no trailing newline
 
@@ -126,6 +127,27 @@ and `{file.path}` (see [Formatting](guide/formatting.md#format-tokens)). Differe
 - Plain `{time}` gives `2025-12-24 12:00:00.123` (loguru: ISO 8601); use `{time:}` for ISO 8601.
 - `{thread}` / `{process}` give `name:id` (loguru: the id); use `{thread.id}` / `{process.id}`.
 - The `zz` time token gives the UTC offset instead of a time zone abbreviation, except with `!UTC`.
+- `{extra}` sorts the keys (loguru keeps binding order) and writes values other than `str`,
+  numbers, `bool`, `None`, lists, tuples and dicts with `str()` instead of `repr()`.
+
+### Exceptions
+
+- **`backtrace` / `diagnose`**: `add()` accepts both, as in loguru, but both default to `False`.
+  loguru defaults to `True`, which writes variable values (possibly secrets) into the logs.
+  Pass them explicitly for loguru's output detail.
+- **Traceback style**: `diagnose=True` lists the variables used on each line as `| name = value`
+  instead of loguru's annotated source lines, and `backtrace=True` adds the outer frames without
+  loguru's `⥤` marker. Tracebacks are not colorized.
+- `opt(backtrace=True)` / `opt(diagnose=True)` are logust additions: they turn the detail on
+  for one message on every handler.
+
+### Message markup and `opt()`
+
+- **`opt(colors=...)`**: loguru parses color markup in a message only with `opt(colors=True)`.
+  logust always parses it (stripping it on sinks without `colorize`), so `colors=True` changes
+  nothing and `colors=False` keeps the tags as plain text for that message.
+- **`opt(capture=False)`** works as in loguru. `opt(raw=True)` and `opt(record=True)` are not
+  supported yet.
 
 ### File sink options
 

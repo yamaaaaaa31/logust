@@ -114,7 +114,40 @@ def main():
 Coroutine functions and generator functions are supported: the exception is
 caught when the coroutine is awaited or the generator is iterated.
 
-## Enhanced diagnostics
+## Traceback detail per handler
+
+Each handler chooses how much a logged traceback shows. This applies to
+tracebacks captured by `exception()`, `catch()` and `opt(exception=True)`:
+
+```python
+import sys
+from logust import logger
+
+logger.add(sys.stderr)                                  # plain traceback
+logger.add("debug.log", backtrace=True, diagnose=True)  # full detail
+```
+
+| Option | Default | Shows |
+|--------|---------|-------|
+| `backtrace` | `False` | Also the frames above the point where the exception was caught |
+| `diagnose` | `False` | The values of the variables used on each line |
+
+The traceback is formatted once for each variant the handlers need, and only
+when an exception is logged: messages without an exception are not affected.
+Patchers and `add_callback()` callbacks see the plain text (`record["exception"]`).
+A traceback passed explicitly with `exception="..."` is written as is by every handler.
+
+!!! warning "Different defaults from loguru"
+    loguru defaults to `backtrace=True, diagnose=True`. logust keeps both off,
+    because `diagnose` writes variable values (passwords, tokens, personal data)
+    into the logs. Turn it on for development handlers only.
+
+logust's own frames (for example the wrapper added by `@logger.catch`) are
+left out of tracebacks.
+
+## Enhanced diagnostics for one message
+
+`opt()` turns on the same detail for one message, on every handler.
 
 Show variable values at each stack frame:
 
