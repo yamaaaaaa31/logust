@@ -2096,6 +2096,7 @@ class Logger:
 
         # Pre-parse template for efficient single-pass formatting
         parsed_template = ParsedCallableTemplate(template_str, colorize)
+        render = parsed_template.render
 
         def callback_wrapper(record: dict[str, Any]) -> None:
             # Apply filter if provided
@@ -2126,8 +2127,8 @@ class Logger:
                         json_record["exception"] = record["exception"]
                     formatted = json.dumps(json_record)
                 else:
-                    # Format using pre-parsed template (single-pass, ~1-2us faster)
-                    formatted = parsed_template.format(record)
+                    # Format using the pre-parsed template (compiled renderer)
+                    formatted = render(record)
 
                 sink(formatted)
             except Exception:
@@ -2153,7 +2154,7 @@ class Logger:
                             json_record[key] = record[key]
                     sink(json.dumps(json_record))
                 else:
-                    sink(parsed_template.format(record))
+                    sink(render(record))
 
             if catch:
 
