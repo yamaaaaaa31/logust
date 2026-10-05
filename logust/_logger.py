@@ -121,6 +121,17 @@ def _collect_format_roots(format_string: str, consumed: set[str]) -> None:
             _collect_format_roots(format_spec, consumed)
 
 
+@functools.lru_cache(maxsize=1024)
+def _format_roots(format_string: str) -> frozenset[str]:
+    """Root kwarg names referenced by a format string.
+
+    Cached because messages are usually literals reused on every call.
+    """
+    consumed: set[str] = set()
+    _collect_format_roots(format_string, consumed)
+    return frozenset(consumed)
+
+
 def _split_kwargs_for_format(
     message: Any, kwargs: dict[str, Any], args: tuple[Any, ...] = ()
 ) -> tuple[str, dict[str, Any]]:
@@ -140,8 +151,7 @@ def _split_kwargs_for_format(
     message_str = message if isinstance(message, str) else str(message)
     if not kwargs:
         return message_str.format(*args), {}
-    consumed: set[str] = set()
-    _collect_format_roots(message_str, consumed)
+    consumed = _format_roots(message_str)
     formatted_message = message_str.format(*args, **kwargs)
     extra_kwargs = {key: value for key, value in kwargs.items() if key not in consumed}
     return formatted_message, extra_kwargs
