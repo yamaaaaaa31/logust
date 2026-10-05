@@ -137,13 +137,6 @@ _FORMAT_ROOTS_CACHE_SIZE = 1024
 _cached_format_roots = functools.lru_cache(maxsize=_FORMAT_ROOTS_CACHE_SIZE)(_parse_format_roots)
 
 
-def _format_roots(format_string: str) -> frozenset[str]:
-    """Root kwarg names referenced by a format string, cached for short ones."""
-    if len(format_string) <= _FORMAT_ROOTS_MAX_LEN:
-        return _cached_format_roots(format_string)
-    return _parse_format_roots(format_string)
-
-
 def _split_kwargs_for_format(
     message: Any, kwargs: dict[str, Any], args: tuple[Any, ...] = ()
 ) -> tuple[str, dict[str, Any]]:
@@ -163,7 +156,11 @@ def _split_kwargs_for_format(
     message_str = message if isinstance(message, str) else str(message)
     if not kwargs:
         return message_str.format(*args), {}
-    consumed = _format_roots(message_str)
+    consumed = (
+        _cached_format_roots(message_str)
+        if len(message_str) <= _FORMAT_ROOTS_MAX_LEN
+        else _parse_format_roots(message_str)
+    )
     formatted_message = message_str.format(*args, **kwargs)
     extra_kwargs = {key: value for key, value in kwargs.items() if key not in consumed}
     return formatted_message, extra_kwargs
