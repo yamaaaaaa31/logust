@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::sync::LazyLock;
 
-use chrono::{DateTime, Local};
+use chrono::{DateTime, Datelike, Local, Timelike};
 use colored::Color;
 use serde::Serialize;
 
@@ -101,8 +101,57 @@ fn cyan_text(text: &str) -> String {
 /// Default log format template (loguru-compatible with caller info)
 const DEFAULT_FORMAT_TEMPLATE: &str = "{time} | {level:<8} | {name}:{function}:{line} - {message}";
 
-/// Default time format with milliseconds
+/// Default time format with milliseconds (`{time}` without a spec)
 const DEFAULT_TIME_FORMAT: &str = "%Y-%m-%d %H:%M:%S%.3f";
+
+/// Two ASCII decimal digits of `n` (`n` must be < 100)
+#[inline]
+fn two_digits(n: u32) -> [u8; 2] {
+    [b'0' + (n / 10) as u8, b'0' + (n % 10) as u8]
+}
+
+/// Append `dt` as the default `{time}` (`%Y-%m-%d %H:%M:%S%.3f`).
+///
+/// Writes the digits directly instead of going through chrono's strftime
+/// machinery, which re-parses the format string on every record. The output is
+/// byte-identical to `dt.format(DEFAULT_TIME_FORMAT)`: years outside `0..=9999`
+/// (which chrono prints with a sign) fall back to chrono.
+pub fn write_default_time(dt: &DateTime<Local>, out: &mut String) {
+    let local = dt.naive_local();
+    let year = local.year();
+    if !(0..=9999).contains(&year) {
+        let _ = write!(out, "{}", dt.format(DEFAULT_TIME_FORMAT));
+        return;
+    }
+    let nanos = local.nanosecond();
+    // Like chrono's `%S`, a leap second (nanosecond >= 1e9) renders as "60"
+    let second = local.second() + nanos / 1_000_000_000;
+    let millis = nanos / 1_000_000 % 1000;
+
+    let year = year as u32;
+    let [c0, c1] = two_digits(year / 100);
+    let [y0, y1] = two_digits(year % 100);
+    let [mo0, mo1] = two_digits(local.month());
+    let [d0, d1] = two_digits(local.day());
+    let [h0, h1] = two_digits(local.hour());
+    let [mi0, mi1] = two_digits(local.minute());
+    let [s0, s1] = two_digits(second);
+    let [ms1, ms2] = two_digits(millis % 100);
+    let ms0 = b'0' + (millis / 100) as u8;
+    let buf = [
+        c0, c1, y0, y1, b'-', mo0, mo1, b'-', d0, d1, b' ', h0, h1, b':', mi0, mi1, b':', s0, s1,
+        b'.', ms0, ms1, ms2,
+    ];
+    // Only ASCII digits and punctuation: always valid UTF-8
+    out.push_str(std::str::from_utf8(&buf).expect("timestamp is ASCII"));
+}
+
+/// The default `{time}` rendering of `dt` as a new string
+pub fn format_default_time(dt: &DateTime<Local>) -> String {
+    let mut out = String::with_capacity(23);
+    write_default_time(dt, &mut out);
+    out
+}
 
 /// Initial capacity hint for formatted result strings
 const FORMAT_RESULT_CAPACITY: usize = 64;
@@ -615,8 +664,6 @@ pub struct FormatConfig {
     tokens: Vec<FormatToken>,
     /// Whether to serialize as JSON
     pub serialize: bool,
-    /// Time format string
-    pub time_format: String,
     /// Computed requirements based on tokens
     requirements: TokenRequirements,
     /// Template places the exception itself (`{exception}`): don't append it
@@ -652,7 +699,6 @@ impl FormatConfig {
             template,
             tokens,
             serialize,
-            time_format: DEFAULT_TIME_FORMAT.to_string(),
             requirements,
             has_exception_token,
         })
@@ -674,20 +720,12 @@ impl FormatConfig {
 
     /// Format a LogRecord using pre-parsed tokens (O(n) single pass, thread-safe)
     fn format_record_template(&self, record: &LogRecord, colorize: bool) -> String {
-        let reqs = &self.requirements;
-
-        // Lazy computation: only compute if token is needed
         let level_name = record.level_name();
         let level_color = record
             .level_info
             .as_ref()
             .map(|info| info.get_color())
             .unwrap_or_else(|| record.level.color());
-
-        // Lazy time formatting - only compute if {time} token is in format
-        let time_raw = reqs
-            .needs_time
-            .then(|| record.timestamp.format(&self.time_format).to_string());
 
         let mut result = String::with_capacity(self.template.len() + FORMAT_RESULT_CAPACITY);
         // Styles opened by template markup; tokens inside them keep the markup's color
@@ -702,12 +740,10 @@ impl FormatConfig {
             match token {
                 FormatToken::Static(s) => result.push_str(s),
                 FormatToken::Time => {
-                    if let Some(ref raw) = time_raw {
-                        if auto {
-                            result.push_str(&dim_text(raw));
-                        } else {
-                            result.push_str(raw);
-                        }
+                    if auto {
+                        result.push_str(&dim_text(&format_default_time(&record.timestamp)));
+                    } else {
+                        write_default_time(&record.timestamp, &mut result);
                     }
                 }
                 FormatToken::TimeFormatted(spec) => {
@@ -891,7 +927,7 @@ impl FormatConfig {
         }
 
         let json_record = JsonRecord {
-            time: record.timestamp.format(&self.time_format).to_string(),
+            time: format_default_time(&record.timestamp),
             level: record.level_name(),
             message: &record.message,
             name: &record.caller.name,
@@ -1201,6 +1237,47 @@ mod tests {
             config.format_record(&record, false),
             record.timestamp.format(DEFAULT_TIME_FORMAT).to_string()
         );
+    }
+
+    #[test]
+    fn test_default_time_matches_chrono() {
+        use chrono::{NaiveDate, TimeZone};
+
+        let check = |dt: DateTime<Local>| {
+            assert_eq!(
+                format_default_time(&dt),
+                dt.format(DEFAULT_TIME_FORMAT).to_string(),
+                "{dt:?}"
+            );
+        };
+
+        // Sweep instants with varying sub-second parts across several years
+        let base = Local::now();
+        for i in 0..20_000i64 {
+            let dt = base
+                + chrono::Duration::seconds(i * 7_919)
+                + chrono::Duration::nanoseconds(i * 1_234_567);
+            check(dt);
+        }
+        // Milliseconds with leading zeros and exact boundaries
+        for nanos in [0, 999, 1_000_000, 9_999_999, 10_000_000, 999_999_999] {
+            let dt = Local.with_ymd_and_hms(2024, 2, 29, 0, 0, 0).unwrap()
+                + chrono::Duration::nanoseconds(nanos);
+            check(dt);
+        }
+        // Leap second representation renders as second 60
+        let leap = NaiveDate::from_ymd_opt(2016, 12, 31)
+            .unwrap()
+            .and_hms_nano_opt(23, 59, 59, 1_500_000_000)
+            .unwrap()
+            .and_local_timezone(Local)
+            .unwrap();
+        check(leap);
+        assert!(format_default_time(&leap).ends_with(":60.500"));
+        // Years that chrono pads or signs
+        for year in [1, 999, 1000, 9999, -1, 10_000] {
+            check(Local.with_ymd_and_hms(year, 6, 15, 12, 30, 45).unwrap());
+        }
     }
 
     #[test]
