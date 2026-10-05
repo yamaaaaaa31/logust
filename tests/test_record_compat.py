@@ -8,6 +8,7 @@ import os
 import pickle
 import re
 import threading
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +23,7 @@ from logust import (
     RecordProcess,
     RecordThread,
 )
+from logust import _logger as logust_logger_module
 from logust._logust import PyLogger
 
 _ELAPSED_RE = re.compile(r"^\d{2,}:\d{2}:\d{2}\.\d{3}$")
@@ -353,3 +355,133 @@ class TestValues:
     def test_shared_values_are_read_only(self, value: object, attr: str) -> None:
         with pytest.raises(AttributeError):
             setattr(value, attr, 99)
+
+
+_LAZY_KEYS = ("time", "timestamp", "elapsed", "thread", "process")
+
+
+def _patched_record(logger: Logger, patcher: Callable[[dict[str, Any]], None]) -> None:
+    logger.add(lambda _: None, format="{message}")
+    logger.patch(patcher).info("hello")
+
+
+def _count_time_fields(monkeypatch: pytest.MonkeyPatch) -> list[int]:
+    calls: list[int] = []
+    original = logust_logger_module.record_time_fields
+
+    def counting() -> Any:
+        calls.append(1)
+        return original()
+
+    monkeypatch.setattr(logust_logger_module, "record_time_fields", counting)
+    return calls
+
+
+class TestLazyPatcherRecord:
+    def test_extra_only_patcher_computes_nothing(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls = _count_time_fields(monkeypatch)
+        stored: list[bool] = []
+
+        def patcher(record: dict[str, Any]) -> None:
+            record["extra"]["tag"] = "x"
+            stored.extend(dict.__contains__(record, key) for key in _LAZY_KEYS)
+
+        _patched_record(_new_logger(), patcher)
+
+        assert calls == []
+        assert stored == [False] * len(_LAZY_KEYS)
+
+    def test_lazy_keys_computed_once_on_access(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls = _count_time_fields(monkeypatch)
+        seen: dict[str, Any] = {}
+
+        def patcher(record: dict[str, Any]) -> None:
+            seen["time"] = record["time"]
+            seen["elapsed"] = record.get("elapsed")
+            seen["timestamp"] = record["timestamp"]
+            seen["thread_stored"] = dict.__contains__(record, "thread")
+
+        _patched_record(_new_logger(), patcher)
+
+        assert calls == [1]
+        assert isinstance(seen["time"], datetime.datetime)
+        assert isinstance(seen["elapsed"], RecordElapsed)
+        assert seen["timestamp"][:19] == seen["time"].isoformat()[:19]
+        assert seen["thread_stored"] is False
+
+    def test_dict_operations_see_all_keys(self) -> None:
+        results: dict[str, Any] = {}
+        expected = {"level", "level_no", "message", "exception", "extra", *_LAZY_KEYS}
+
+        def patcher(record: dict[str, Any]) -> None:
+            results["contains"] = all(key in record for key in expected)
+            results["len"] = len(record)
+            results["keys"] = set(record.keys())
+            results["iter"] = set(record)
+            results["items"] = {k for k, _ in record.items()}
+            results["values"] = len(list(record.values()))
+            copy = record.copy()
+            results["copy"] = set(copy)
+            results["copy_eq"] = copy == record and record == copy and not (record != copy)
+            results["dict"] = set(dict(record))
+            results["unpack"] = set({**record})
+            results["repr"] = "'time'" in repr(record)
+            results["json"] = '"timestamp"' in json.dumps(record, default=str)
+            results["missing"] = record.get("nope", "dflt")
+            with pytest.raises(KeyError):
+                record["nope"]
+
+        _patched_record(_new_logger(), patcher)
+
+        assert results["contains"]
+        assert results["len"] == len(expected)
+        for key in ("keys", "iter", "items", "copy", "dict", "unpack"):
+            assert results[key] == expected, key
+        assert results["values"] == len(expected)
+        assert results["copy_eq"]
+        assert results["repr"]
+        assert results["json"]
+        assert results["missing"] == "dflt"
+
+    def test_mutations(self) -> None:
+        results: dict[str, Any] = {}
+        sentinel = datetime.datetime(2001, 1, 1, tzinfo=datetime.timezone.utc)
+
+        def patcher(record: dict[str, Any]) -> None:
+            record["time"] = sentinel
+            results["timestamp_is_str"] = isinstance(record["timestamp"], str)
+            results["time_kept"] = record["time"] is sentinel
+            results["setdefault"] = record.setdefault("elapsed", None)
+            results["pop"] = record.pop("process")
+            results["process_gone"] = "process" not in record
+            del record["thread"]
+            results["thread_gone"] = "thread" not in record and record.get("thread") is None
+            record.update(custom=1)
+            results["custom"] = record["custom"]
+            record["message"] = "patched"
+
+        logger = _new_logger()
+        lines: list[str] = []
+        logger.add(lines.append, format="{message}")
+        logger.patch(patcher).info("hello")
+
+        assert results["timestamp_is_str"]
+        assert results["time_kept"]
+        assert isinstance(results["setdefault"], RecordElapsed)
+        assert isinstance(results["pop"], RecordProcess)
+        assert results["process_gone"]
+        assert results["thread_gone"]
+        assert results["custom"] == 1
+        assert lines == ["patched"]
+
+    def test_clear_drops_lazy_keys(self) -> None:
+        results: dict[str, Any] = {}
+
+        def patcher(record: dict[str, Any]) -> None:
+            record.clear()
+            results["len"] = len(record)
+            results["time"] = "time" in record
+
+        _patched_record(_new_logger(), patcher)
+
+        assert results == {"len": 0, "time": False}

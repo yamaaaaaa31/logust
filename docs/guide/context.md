@@ -121,7 +121,9 @@ Differences from loguru:
 - `record["exception"]` is the traceback text, not loguru's `(type, value, traceback)` tuple.
   Test it with `record["exception"] is not None` or search the text.
 - The patcher record has no caller fields (`name`, `module`, `function`, `line`, `file`); they
-  are collected after the patchers run. Its `time` is when the patchers ran.
+  are collected after the patchers run. Its `time`, `timestamp`, `elapsed`, `thread` and
+  `process` are computed when a patcher first reads them (or iterates the record), so patchers
+  that only touch `record["extra"]` don't pay for them; `time` is the moment of that first read.
 - `time`, `elapsed`, `thread` and `process` are not JSON-serializable. A callback that passes
   the whole record to `json.dumps()` should pick the keys it needs, or use `default=str`.
 - The `level`, `file`, `thread` and `process` values are shared between records, so their

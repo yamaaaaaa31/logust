@@ -35,7 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Callable sinks skip markup parsing for messages without `<`**: a `{message}`-only callable sink is a few percent faster.
 - **`record["elapsed"]` is a `timedelta`** in filters, patchers, and callbacks. Its `str()` and `{elapsed}` still give `HH:MM:SS.mmm`, but comparing it to a string no longer matches. `time`, `elapsed`, `thread`, and `process` are not JSON-serializable, so a callback passing the whole record to `json.dumps()` needs `default=str` or a subset of keys. Bound values named `time`, `module`, `thread`, `process`, or `level_no` now stay only in `record["extra"]` instead of also shadowing the top-level key
 - **`record["exception"]` is always present**: `None` when there is no exception (it was missing before), as documented. It is still the traceback text, not loguru's `(type, value, traceback)` tuple
-- **Patcher records gain fields**: `time`, `timestamp` (previously `""`), `elapsed`, `thread`, and `process` are set, and `record["level"]` has `.no`. Changes to `message`, `extra`, and `exception` are still the only ones applied
+- **Patcher records gain fields**: `time`, `timestamp` (previously `""`), `elapsed`, `thread`, and `process` are available, computed on first access so patchers that only touch `record["extra"]` cost the same as before, and `record["level"]` has `.no`. Changes to `message`, `extra`, and `exception` are still the only ones applied
 - **Caller file path is collected without extra cost**: the Python side now passes the code object's path and Rust derives the basename, which also makes formats with caller info slightly faster. `{file}` and the record dicts' `file` key are still the basename.
 
 ### Fixed
