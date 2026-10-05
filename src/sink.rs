@@ -53,10 +53,12 @@ static ASYNC_SINK_REGISTRY: LazyLock<StdMutex<Vec<Weak<FileSinkInner>>>> =
 
 /// PID of the process that imported the extension. A different PID later means
 /// this process is a fork() child.
-static INIT_PID: OnceLock<u32> = OnceLock::new();
+#[cfg(target_vendor = "apple")]
+static INIT_PID: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
 
 /// Record the importing process; called once from the module initializer.
 pub fn record_init_pid() {
+    #[cfg(target_vendor = "apple")]
     let _ = INIT_PID.set(std::process::id());
 }
 
