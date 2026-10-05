@@ -962,6 +962,13 @@ class Logger:
         """
         eff_emit = _coerce_emit_no_u32(emit_no) if emit_no is not None else _EMIT_NO_SUPERSET
 
+        # Return cached result if available (O(1) hot path, keyed by emit severity)
+        cache = self._requirements_cache_box[0]
+        if cache is not None:
+            cached = cache.get(eff_emit)
+            if cached is not None:
+                return cached
+
         if not self._collect_options:
             if emit_no is None:
                 return (
@@ -969,13 +976,7 @@ class Logger:
                     self._inner.needs_thread_info,
                     self._inner.needs_process_info,
                 )
-            e = _coerce_emit_no_u32(emit_no)
-            return self._inner.collect_needs_for_emit_no(e)
-
-        # Return cached result if available (O(1) hot path, keyed by emit severity)
-        cache = self._requirements_cache_box[0]
-        if cache is not None and eff_emit in cache:
-            return cache[eff_emit]
+            return self._inner.collect_needs_for_emit_no(eff_emit)
 
         # Get pre-aggregated options (O(1) if already cached)
         (
@@ -1171,10 +1172,13 @@ class Logger:
 
         inner = self._inner if extra_kwargs is None else self._inner.bind(extra_kwargs)
 
-        # Compute effective requirements considering CollectOptions
-        needs_caller, needs_thread, needs_process = self._compute_effective_requirements(
-            level_value
-        )
+        # Effective requirements considering CollectOptions: the per-emit cache
+        # hit is the common case, a miss computes (and caches) them.
+        cache = self._requirements_cache_box[0]
+        needs = cache.get(level_value) if cache is not None else None
+        if needs is None:
+            needs = self._compute_effective_requirements(level_value)
+        needs_caller, needs_thread, needs_process = needs
 
         if needs_caller is False and needs_thread is False and needs_process is False:
             if exception is None:
@@ -1553,9 +1557,11 @@ class Logger:
         else:
             message = str(message)
 
-        needs_caller, needs_thread, needs_process = self._compute_effective_requirements(
-            resolved_emit
-        )
+        cache = self._requirements_cache_box[0]
+        needs = cache.get(resolved_emit) if cache is not None else None
+        if needs is None:
+            needs = self._compute_effective_requirements(resolved_emit)
+        needs_caller, needs_thread, needs_process = needs
         inner = self._inner if extra_kw is None else self._inner.bind(extra_kw)
 
         if needs_caller is False and needs_thread is False and needs_process is False:
