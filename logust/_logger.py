@@ -1118,11 +1118,12 @@ class Logger:
         extra_out: dict[str, Any] | None
         if patched_extra is None:
             extra_out = None
-        elif isinstance(patched_extra, Mapping):
+        elif type(patched_extra) is dict or isinstance(patched_extra, Mapping):
             extra_out = {str(key): value for key, value in patched_extra.items()}
             # Rust context is additive; blank removed keys so patchers can hide bound values.
-            for key in original_extra_keys - extra_out.keys():
-                extra_out[key] = ""
+            if original_extra_keys:
+                for key in original_extra_keys - extra_out.keys():
+                    extra_out[key] = ""
             if not extra_out:
                 extra_out = None
         else:
