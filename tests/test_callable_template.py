@@ -6,6 +6,8 @@ efficient single-pass formatting instead of multiple .replace() calls.
 
 from __future__ import annotations
 
+import pytest
+
 from logust._template import LiteralSegment, ParsedCallableTemplate, TokenSegment
 
 
@@ -415,3 +417,41 @@ class TestLightweightRequirementsForRust:
     def test_lightweight_extra_keys_order_unique(self) -> None:
         t = ParsedCallableTemplate("{extra[b]} {extra[a]} {extra[b]}")
         assert t.lightweight_extra_keys_for_rust() == ("b", "a")
+
+
+_HOSTILE_TEMPLATES = [
+    '"; import os; os.system("exit 1"); "',
+    "'''\"\"\" {message}",
+    'a\\" {message} \\',
+    "\\N{BULLET} {message}",
+    "x\ny\r\n{message}\t",
+    "{{literal}} {message} }}{{",
+    "{message:>10} {line:#x}",
+    "#{message}#",
+    "{time:YYYY} {level.icon} {thread} {process.id}",
+    "é漢字😀 {level:<8}",
+    '{extra[a"b]}',
+    "{extra[x'); import os; ('] }",
+    "\\x41\\u0042 {message}",
+    'f"{message}" {extra}',
+]
+
+
+@pytest.mark.parametrize("template", _HOSTILE_TEMPLATES)
+def test_compiled_renderer_treats_template_text_as_data(template: str) -> None:
+    """The compiled f-string renderer must render quotes, backslashes and
+    braces in a template literally, exactly like the segment loop."""
+    parsed = ParsedCallableTemplate(template, False)
+    record = {
+        "message": "m<b>x</b>",
+        "level": "INFO",
+        "extra": {'a"b': 1},
+        "timestamp": "2026-01-01T00:00:00+00:00",
+        "line": 7,
+        "thread_name": "T",
+        "thread_id": 1,
+        "process_id": 2,
+    }
+
+    assert parsed.render is not parsed._format_segments
+    assert parsed.render(record) == parsed._format_segments(record)

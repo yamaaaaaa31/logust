@@ -20,7 +20,7 @@ from ._logust import (
 )
 
 if TYPE_CHECKING:
-    pass
+    from collections.abc import Callable
 
 # Known format tokens (shared with _logger.py for auto-detect)
 # Order doesn't matter; used to build regex pattern (it requires the closing brace,
@@ -154,6 +154,7 @@ class ParsedCallableTemplate:
         "_needs_process",
         "_needs_thread",
         "_segments",
+        "render",
     )
 
     # Token pattern: {token} or {token:spec} or {extra[key]} or {extra[key]:spec} or {extra}
@@ -188,6 +189,13 @@ class ParsedCallableTemplate:
         self._needs_process = "process" in self._needed_tokens
         # The template places the exception itself: don't append it
         self._has_exception = "exception" in self._needed_tokens
+        # Fastest renderer for this template: a compiled f-string when the
+        # template has no color markup, otherwise the segment loop
+        self.render: Callable[[dict[str, Any]], str] = self._format_segments
+        if not colorize:
+            compiled = _compile_renderer(self._segments, self._has_exception, self.render)
+            if compiled is not None:
+                self.render = compiled
 
     @property
     def needs_extra_repr(self) -> bool:
@@ -303,17 +311,22 @@ class ParsedCallableTemplate:
         return tuple(keys)
 
     def format(self, record: dict[str, Any]) -> str:
-        """Format the record using pre-parsed template.
-
-        Single-pass formatting using pre-parsed segments.
-        Braces in message content are naturally preserved since
-        we don't do any string replacement on the output.
+        """Format the record using the pre-parsed template.
 
         Args:
             record: Log record dictionary.
 
         Returns:
             Formatted log message string.
+        """
+        return self.render(record)
+
+    def _format_segments(self, record: dict[str, Any]) -> str:
+        """Render segment by segment (color markup, and the compiled renderer's
+        fallback for a value that rejects its format spec).
+
+        Braces in message content are naturally preserved since
+        we don't do any string replacement on the output.
         """
         parts: list[str] = []
 
@@ -447,3 +460,134 @@ class ParsedCallableTemplate:
                 rendered = _py_repr_extra(record.get("extra"))
             return rendered
         return ""
+
+
+# Record lookup for each token of a compiled renderer (``get`` is ``record.get``)
+_COMPILED_TOKEN_EXPRS: dict[str, str] = {
+    "time": "get('timestamp', '')",
+    "level": "get('level', '')",
+    "name": "get('name', '')",
+    "module": "get('name', '')",
+    "function": "get('function', '')",
+    "line": "get('line', 0)",
+    "file": "get('file', '')",
+    "elapsed": "get('elapsed', '00:00:00.000')",
+    "thread": "thread_str",
+    "process": "process_str",
+    "message": "message",
+    "level.no": "level_no",
+    "level.icon": "level_icon",
+    "file.path": "get('file_path', '')",
+    "thread.name": "get('thread_name', '')",
+    "thread.id": "get('thread_id', 0)",
+    "process.name": "get('process_name', '')",
+    "process.id": "get('process_id', 0)",
+    "exception": "(get('exception') or '')",
+    _EXTRA_ALL_KEY: "extra_repr",
+}
+
+# Format specs that can be written into an f-string as they are
+_PLAIN_SPEC = re.compile(r"[^{}\\'\"\n\r]*")
+
+
+def _escape_literal(text: str) -> str:
+    """``text`` as the literal part of a double-quoted f-string."""
+    escaped = text.encode("unicode_escape").decode("ascii").replace('"', '\\"')
+    return escaped.replace("{", "{{").replace("}", "}}")
+
+
+def _compile_renderer(
+    segments: tuple[Segment, ...],
+    has_exception: bool,
+    fallback: Callable[[dict[str, Any]], str],
+) -> Callable[[dict[str, Any]], str] | None:
+    """Compile ``segments`` into one function rendering the whole template as an f-string.
+
+    The result renders exactly what ``_format_segments`` does for templates
+    without color markup, in one pass without the per-segment dispatch. Values
+    the record lacks get the same defaults; a value that rejects its format
+    spec makes the function defer to ``fallback`` (which falls back per
+    segment); ``None`` means the template cannot be compiled (an unusual spec).
+    """
+    namespace: dict[str, Any] = {
+        "apply_color_markup": apply_color_markup,
+        "level_details": level_details,
+        "_py_repr_extra": _py_repr_extra,
+        "fallback": fallback,
+    }
+    pieces: list[str] = []
+    prelude: list[str] = []
+    needed: set[str] = set()
+    for index, seg in enumerate(segments):
+        if isinstance(seg, LiteralSegment):
+            pieces.append(_escape_literal(seg.text))
+            continue
+        if not isinstance(seg, TokenSegment):
+            return None
+        if seg.spec is not None and _PLAIN_SPEC.fullmatch(seg.spec) is None:
+            return None
+        if seg.is_extra:
+            key_name = f"extra_key_{index}"
+            namespace[key_name] = seg.extra_key
+            expr = f"extra.get({key_name}, '')"
+            needed.add("extra")
+        elif seg.time_formatter is not None:
+            fmt_name = f"time_formatter_{index}"
+            namespace[fmt_name] = seg.time_formatter
+            expr = f"{fmt_name}.format_rfc3339(get('timestamp', ''))"
+        else:
+            token_expr = _COMPILED_TOKEN_EXPRS.get(seg.key)
+            if token_expr is None:
+                return None
+            expr = token_expr
+            needed.add(seg.key)
+        spec = f":{seg.spec}" if seg.spec else ""
+        pieces.append(f"{{{expr}{spec}}}")
+
+    if "extra" in needed:
+        prelude.append("extra = get('extra', {})")
+        prelude.append("if not isinstance(extra, dict): extra = {}")
+    if "thread" in needed:
+        prelude.append("thread_str = f\"{get('thread_name', '')}:{get('thread_id', 0)}\"")
+    if "process" in needed:
+        prelude.append("process_str = f\"{get('process_name', '')}:{get('process_id', 0)}\"")
+    if "message" in needed:
+        prelude.append("message = get('message', '')")
+        # No markup, or `opt(colors=False)`: the message as is
+        prelude.append("if '<' in message and 'colors' not in record:")
+        prelude.append("    message = apply_color_markup(message, False)")
+    if "level.no" in needed or "level.icon" in needed:
+        prelude.append("details = level_details(str(get('level', '')))")
+        if "level.no" in needed:
+            prelude.append("level_no = '' if details is None else details[0]")
+        if "level.icon" in needed:
+            prelude.append("level_icon = '' if details is None else details[1]")
+    if _EXTRA_ALL_KEY in needed:
+        prelude.append("extra_repr = get('extra_repr')")
+        prelude.append("if extra_repr is None: extra_repr = _py_repr_extra(get('extra'))")
+
+    if not has_exception:
+        # The template does not place the exception itself: append it
+        epilogue = [
+            "exception = get('exception')",
+            "return out + '\\n' + exception if exception else out",
+        ]
+    else:
+        epilogue = ["return out"]
+    body = [
+        "get = record.get",
+        *prelude,
+        "try:",
+        f'    out = f"{"".join(pieces)}"',
+        "except (ValueError, TypeError):",
+        "    return fallback(record)",
+        *epilogue,
+    ]
+    source = "def render(record):\n" + "".join(f"    {line}\n" for line in body)
+    try:
+        # The source is built only from the parsed template, never from a record
+        exec(source, namespace)
+    except SyntaxError:
+        return None
+    render: Callable[[dict[str, Any]], str] = namespace["render"]
+    return render

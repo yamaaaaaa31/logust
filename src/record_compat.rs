@@ -8,10 +8,11 @@
 //! one `timedelta` construction.
 
 use std::collections::HashMap;
+use std::hash::{BuildHasherDefault, Hasher};
 use std::sync::atomic::Ordering;
 use std::sync::{LazyLock, Mutex};
 
-use chrono::{DateTime, Datelike, Local, Offset, Timelike};
+use chrono::{DateTime, Datelike, Local, NaiveDateTime, Offset, Timelike};
 use pyo3::intern;
 use pyo3::prelude::*;
 use pyo3::sync::PyOnceLock;
@@ -24,6 +25,66 @@ use crate::level::{LEVEL_GENERATION, get_level_info};
 /// Bound the per-value caches so unusual workloads (many threads, generated
 /// file names) cannot grow them without limit.
 const CACHE_LIMIT: usize = 1024;
+
+/// Multiplicative hash (the `rustc-hash` scheme) for the per-value caches.
+///
+/// The keys are level names, source file paths and thread/process ids chosen
+/// by the application itself, and the caches are bounded, so the HashDoS
+/// resistance of the default SipHash is not needed; this hashes a file path in
+/// a few nanoseconds instead of tens.
+#[derive(Default)]
+struct FxHasher(u64);
+
+impl FxHasher {
+    const SEED: u64 = 0x51_7c_c1_b7_27_22_0a_95;
+
+    #[inline]
+    fn add(&mut self, word: u64) {
+        self.0 = (self.0.rotate_left(5) ^ word).wrapping_mul(Self::SEED);
+    }
+}
+
+impl Hasher for FxHasher {
+    #[inline]
+    fn write(&mut self, bytes: &[u8]) {
+        let (chunks, rest) = bytes.as_chunks::<8>();
+        for chunk in chunks {
+            self.add(u64::from_le_bytes(*chunk));
+        }
+        if !rest.is_empty() {
+            let mut buf = [0u8; 8];
+            buf[..rest.len()].copy_from_slice(rest);
+            self.add(u64::from_le_bytes(buf));
+        }
+    }
+
+    #[inline]
+    fn write_u8(&mut self, i: u8) {
+        self.add(u64::from(i));
+    }
+
+    #[inline]
+    fn write_u32(&mut self, i: u32) {
+        self.add(u64::from(i));
+    }
+
+    #[inline]
+    fn write_u64(&mut self, i: u64) {
+        self.add(i);
+    }
+
+    #[inline]
+    fn write_usize(&mut self, i: usize) {
+        self.add(i as u64);
+    }
+
+    #[inline]
+    fn finish(&self) -> u64 {
+        self.0
+    }
+}
+
+type FxMap<K, V> = HashMap<K, V, BuildHasherDefault<FxHasher>>;
 
 /// Python classes from `logust._record`
 struct RecordTypes {
@@ -64,11 +125,11 @@ fn record_types(py: Python<'_>) -> Option<&RecordTypes> {
 struct Caches {
     /// Level registry generation the level cache was built for
     level_generation: u64,
-    levels: HashMap<String, Py<PyAny>>,
+    levels: FxMap<String, Py<PyAny>>,
     /// File path -> (`RecordFile`, module name)
-    files: HashMap<String, (Py<PyAny>, Py<PyAny>)>,
-    threads: HashMap<u64, (String, Py<PyAny>)>,
-    processes: HashMap<u32, (String, Py<PyAny>)>,
+    files: FxMap<String, (Py<PyAny>, Py<PyAny>)>,
+    threads: FxMap<u64, (String, Py<PyAny>)>,
+    processes: FxMap<u32, (String, Py<PyAny>)>,
     /// `datetime.timezone` for the last seen UTC offset (seconds)
     tz: Option<(i32, Py<PyTzInfo>)>,
 }
@@ -79,7 +140,7 @@ fn caches() -> std::sync::MutexGuard<'static, Caches> {
     CACHES.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-fn insert_bounded<K: std::hash::Hash + Eq, V>(map: &mut HashMap<K, V>, key: K, value: V) {
+fn insert_bounded<K: std::hash::Hash + Eq, V>(map: &mut FxMap<K, V>, key: K, value: V) {
     if map.len() >= CACHE_LIMIT {
         map.clear();
     }
@@ -148,18 +209,26 @@ fn time_value<'py>(
     ts: &DateTime<Local>,
     tz: &Bound<'py, PyTzInfo>,
 ) -> PyResult<Bound<'py, PyDateTime>> {
+    // Converted to local time once; each `DateTime` accessor would redo it
+    let local: NaiveDateTime = ts.naive_local();
     PyDateTime::new(
         py,
-        ts.year(),
-        ts.month() as u8,
-        ts.day() as u8,
-        ts.hour() as u8,
-        ts.minute() as u8,
+        local.year(),
+        local.month() as u8,
+        local.day() as u8,
+        local.hour() as u8,
+        local.minute() as u8,
         // Leap seconds are reported by chrono as second 59 + >1s of nanos
-        ts.second().min(59) as u8,
-        (ts.nanosecond() / 1_000).min(999_999),
+        local.second().min(59) as u8,
+        (local.nanosecond() / 1_000).min(999_999),
         Some(tz),
     )
+}
+
+/// Nanoseconds since the Unix epoch, wide enough for any `DateTime`
+#[inline]
+fn epoch_nanos(ts: &DateTime<Local>) -> i128 {
+    i128::from(ts.timestamp()) * 1_000_000_000 + i128::from(ts.timestamp_subsec_nanos())
 }
 
 /// `RecordElapsed` (a `timedelta` subclass) since logger start, clamped at zero
@@ -168,10 +237,9 @@ fn elapsed_value<'py>(
     types: &RecordTypes,
     ts: &DateTime<Local>,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let micros = (*ts - *LOGGER_START_TIME)
-        .num_microseconds()
-        .unwrap_or(i64::MAX)
-        .max(0);
+    static START_NANOS: LazyLock<i128> = LazyLock::new(|| epoch_nanos(&LOGGER_START_TIME));
+    // Whole microseconds of the difference (like `TimeDelta::num_microseconds`)
+    let micros = ((epoch_nanos(ts) - *START_NANOS) / 1_000).clamp(0, i128::from(i64::MAX)) as i64;
     let secs = micros / 1_000_000;
     let days = (secs / 86_400).min(i64::from(i32::MAX)) as i32;
     let secs = (secs % 86_400) as i32;
