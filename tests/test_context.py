@@ -244,3 +244,20 @@ class TestPatch:
         content = log_file.read_text()
         assert "Original" in content
         assert "Patched" in content
+
+
+def test_derived_loggers_carry_every_logger_attribute() -> None:
+    """bind()/patch()/opt(colors=False) copy attributes without running __init__.
+
+    A new attribute added to Logger.__init__ must also be set in _with_inner,
+    or derived loggers silently lose it.
+    """
+    from logust import LogLevel
+    from logust._logust import PyLogger
+
+    logger = Logger(PyLogger(LogLevel.Trace))
+    expected = set(vars(logger))
+
+    assert set(vars(logger.bind(a=1))) == expected
+    assert set(vars(logger.patch(lambda record: None))) == expected
+    assert set(vars(logger._with_inner(logger._inner))) == expected
