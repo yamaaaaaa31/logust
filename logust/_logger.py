@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any, TextIO, TypeVar, cast, overload
 
 from ._logust import LogLevel, PyLogger
 from ._parse import parse as _parse_file
+from ._record import RecordLevelStr, RecordProcess, RecordThread
 from ._template import (
     CALLER_TOKENS,
     KNOWN_TOKENS,
@@ -242,6 +243,11 @@ def _get_process_info() -> tuple[str, int]:
     _CACHED_PROCESS_INFO = (name, current_pid)
     _CACHED_PROCESS_PID = current_pid
     return _CACHED_PROCESS_INFO
+
+
+# ``record["level"]`` values handed to patchers, keyed by (name, no); cleared
+# whenever a level is (re)registered so icon changes are picked up.
+_PATCH_LEVELS: dict[tuple[str, int], RecordLevelStr] = {}
 
 
 def _to_log_level(level: LogLevel | str) -> LogLevel:
@@ -904,11 +910,17 @@ class Logger:
             base_extra.update(extra)
         original_extra_keys = {str(key) for key in base_extra}
 
+        now = datetime.datetime.now().astimezone()
+        current_thread = threading.current_thread()
+        process_name, process_id = _get_process_info()
         record: dict[str, Any] = {
-            "level": level_name.upper(),
+            "level": self._patch_level_value(level_name.upper(), level_no),
             "level_no": level_no,
             "message": message_str,
-            "timestamp": "",
+            "time": now,
+            "timestamp": now.isoformat(),
+            "thread": RecordThread(current_thread.ident or 0, current_thread.name),
+            "process": RecordProcess(process_id, process_name),
             "exception": exception,
             "extra": base_extra,
         }
@@ -940,6 +952,19 @@ class Logger:
             patched_exception,
             extra_out,
         )
+
+    def _patch_level_value(self, name: str, no: int) -> RecordLevelStr:
+        """Cached ``record["level"]`` value for patchers."""
+        key = (name, no)
+        value = _PATCH_LEVELS.get(key)
+        if value is None:
+            info = self._inner.level_info(name)
+            icon = (info[3] or "") if info is not None else ""
+            value = RecordLevelStr(name, no, icon)
+            if len(_PATCH_LEVELS) > 256:
+                _PATCH_LEVELS.clear()
+            _PATCH_LEVELS[key] = value
+        return value
 
     def _log_with_level(
         self,
@@ -1258,6 +1283,7 @@ class Logger:
             if icon is None:
                 icon = existing[3]
         self._inner.level(name, no, color, icon)
+        _PATCH_LEVELS.clear()
         info = self._inner.level_info(name)
         assert info is not None
         return _level_from_info(info)

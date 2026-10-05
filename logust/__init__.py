@@ -62,6 +62,7 @@ from ._logust import LogLevel, PyLogger, Rotation
 from ._logust import logger as _rust_logger
 from ._opt import OptLogger
 from ._parse import parse, parse_json
+from ._record import RecordElapsed, RecordFile, RecordLevelStr, RecordProcess, RecordThread
 from ._types import (
     FilterCallback,
     HandlerConfig,
@@ -116,8 +117,13 @@ __all__ = [
     "PatcherCallback",
     "ProcessInfo",
     "PyLogger",
+    "RecordElapsed",
     "RecordException",
+    "RecordFile",
     "RecordLevel",
+    "RecordLevelStr",
+    "RecordProcess",
+    "RecordThread",
     "Rotation",
     "ThreadInfo",
     "__version__",
