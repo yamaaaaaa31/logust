@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from ._logger import _LEVEL_VALUES
 from ._traceback import capture_exception, current_exc_info
 
 if TYPE_CHECKING:
@@ -39,16 +40,18 @@ class OptLogger:
         self._backtrace = backtrace
         self._diagnose = diagnose
         self._capture = capture
+        # Any of these options means the current exception is captured per call
+        self._auto_exception = exception or backtrace or diagnose
 
     def _resolve_args(self, args: tuple[Any, ...]) -> tuple[Any, ...]:
         """Evaluate callable positional args when ``lazy=True``."""
         if self._lazy and args:
-            return tuple(arg() if callable(arg) else arg for arg in args)
+            return tuple([arg() if callable(arg) else arg for arg in args])
         return args
 
     def _get_exception(self) -> str | None:
         """Get exception traceback with optional enhancements."""
-        if self._exception or self._backtrace or self._diagnose:
+        if self._auto_exception:
             exc_info = current_exc_info()
             if exc_info is not None:
                 return capture_exception(
@@ -70,25 +73,30 @@ class OptLogger:
 
     def _log(self, level: str, message: str, *args: Any, **kwargs: Any) -> None:
         """Internal log method with option processing."""
+        logger = self._logger
+        # ``level`` is a built-in method name here, so this equals
+        # ``logger.is_level_enabled(level)`` without the enum round trip.
+        level_enabled = _LEVEL_VALUES[level] >= logger._inner.min_level
         # For lazy evaluation, skip formatting if level is not enabled
         if self._lazy:
-            if not self._logger.is_level_enabled(level):
+            if not level_enabled:
                 return
             # Skip lazy args for disabled modules (user frame: +1 public method, + depth)
-            activation = self._logger._activation
+            activation = logger._activation
             if activation.rules and activation.caller_disabled(self._depth + 2):
                 return
+            args = self._resolve_args(args)
 
-        exc = kwargs.pop("exception", None) or self._get_exception()
-        log_method = getattr(self._logger, level)
-        args = self._resolve_args(args)
+        exc = kwargs.pop("exception", None)
+        if not exc:
+            exc = self._get_exception() if self._auto_exception else None
         if not self._capture:
-            if not self._logger.is_level_enabled(level):
+            if not level_enabled:
                 return
             message, args, kwargs = self._uncaptured(message, args, kwargs)
         # Formatting (args + kwargs) happens once in Logger, matching loguru.
         # Add depth: +1 for this method, +1 for the caller (trace/debug/etc), + user's depth
-        log_method(
+        getattr(logger, level)(
             message,
             *args,
             exception=exc,

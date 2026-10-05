@@ -121,6 +121,17 @@ def _collect_format_roots(format_string: str, consumed: set[str]) -> None:
             _collect_format_roots(format_spec, consumed)
 
 
+@functools.lru_cache(maxsize=1024)
+def _format_roots(format_string: str) -> frozenset[str]:
+    """Root kwarg names referenced by a format string.
+
+    Cached because messages are usually literals reused on every call.
+    """
+    consumed: set[str] = set()
+    _collect_format_roots(format_string, consumed)
+    return frozenset(consumed)
+
+
 def _split_kwargs_for_format(
     message: Any, kwargs: dict[str, Any], args: tuple[Any, ...] = ()
 ) -> tuple[str, dict[str, Any]]:
@@ -140,8 +151,7 @@ def _split_kwargs_for_format(
     message_str = message if isinstance(message, str) else str(message)
     if not kwargs:
         return message_str.format(*args), {}
-    consumed: set[str] = set()
-    _collect_format_roots(message_str, consumed)
+    consumed = _format_roots(message_str)
     formatted_message = message_str.format(*args, **kwargs)
     extra_kwargs = {key: value for key, value in kwargs.items() if key not in consumed}
     return formatted_message, extra_kwargs
@@ -962,6 +972,13 @@ class Logger:
         """
         eff_emit = _coerce_emit_no_u32(emit_no) if emit_no is not None else _EMIT_NO_SUPERSET
 
+        # Return cached result if available (O(1) hot path, keyed by emit severity)
+        cache = self._requirements_cache_box[0]
+        if cache is not None:
+            cached = cache.get(eff_emit)
+            if cached is not None:
+                return cached
+
         if not self._collect_options:
             if emit_no is None:
                 return (
@@ -969,13 +986,7 @@ class Logger:
                     self._inner.needs_thread_info,
                     self._inner.needs_process_info,
                 )
-            e = _coerce_emit_no_u32(emit_no)
-            return self._inner.collect_needs_for_emit_no(e)
-
-        # Return cached result if available (O(1) hot path, keyed by emit severity)
-        cache = self._requirements_cache_box[0]
-        if cache is not None and eff_emit in cache:
-            return cache[eff_emit]
+            return self._inner.collect_needs_for_emit_no(eff_emit)
 
         # Get pre-aggregated options (O(1) if already cached)
         (
@@ -1107,11 +1118,12 @@ class Logger:
         extra_out: dict[str, Any] | None
         if patched_extra is None:
             extra_out = None
-        elif isinstance(patched_extra, Mapping):
+        elif type(patched_extra) is dict or isinstance(patched_extra, Mapping):
             extra_out = {str(key): value for key, value in patched_extra.items()}
             # Rust context is additive; blank removed keys so patchers can hide bound values.
-            for key in original_extra_keys - extra_out.keys():
-                extra_out[key] = ""
+            if original_extra_keys:
+                for key in original_extra_keys - extra_out.keys():
+                    extra_out[key] = ""
             if not extra_out:
                 extra_out = None
         else:
@@ -1157,26 +1169,33 @@ class Logger:
             if not extra_kwargs:
                 extra_kwargs = None
 
-        message, exception, extra_kwargs = self._apply_patchers(
-            level_name=level_name,
-            level_no=level_value,
-            message=message,
-            exception=exception,
-            extra=extra_kwargs,
-        )
+        # ``message`` is a plain ``str`` from here on (patchers return one too)
+        if self._patchers:
+            message, exception, extra_kwargs = self._apply_patchers(
+                level_name=level_name,
+                level_no=level_value,
+                message=message,
+                exception=exception,
+                extra=extra_kwargs,
+            )
+        else:
+            message = str(message)
 
         inner = self._inner if extra_kwargs is None else self._inner.bind(extra_kwargs)
 
-        # Compute effective requirements considering CollectOptions
-        needs_caller, needs_thread, needs_process = self._compute_effective_requirements(
-            level_value
-        )
+        # Effective requirements considering CollectOptions: the per-emit cache
+        # hit is the common case, a miss computes (and caches) them.
+        cache = self._requirements_cache_box[0]
+        needs = cache.get(level_value) if cache is not None else None
+        if needs is None:
+            needs = self._compute_effective_requirements(level_value)
+        needs_caller, needs_thread, needs_process = needs
 
         if needs_caller is False and needs_thread is False and needs_process is False:
             if exception is None:
-                getattr(inner, level_name)(str(message))
+                getattr(inner, level_name)(message)
             else:
-                getattr(inner, level_name)(str(message), exception=exception)
+                getattr(inner, level_name)(message, exception=exception)
             return
 
         if needs_thread is False and needs_process is False:
@@ -1193,11 +1212,11 @@ class Logger:
                 )
             if exception is None:
                 getattr(inner, level_name)(
-                    str(message), name=name, function=function, line=line, file=file
+                    message, name=name, function=function, line=line, file=file
                 )
             else:
                 getattr(inner, level_name)(
-                    str(message),
+                    message,
                     exception=exception,
                     name=name,
                     function=function,
@@ -1247,7 +1266,7 @@ class Logger:
 
         if exception is None:
             getattr(inner, level_name)(
-                str(message),
+                message,
                 name=c_name,
                 function=c_function,
                 line=c_line,
@@ -1259,7 +1278,7 @@ class Logger:
             )
         else:
             getattr(inner, level_name)(
-                str(message),
+                message,
                 exception=exception,
                 name=c_name,
                 function=c_function,
@@ -1510,18 +1529,21 @@ class Logger:
         resolved_emit = self._inner.try_resolve_emit_level_no(level)
         if resolved_emit is None:
             extra_kw: dict[str, Any] | None = None
-            message, exception, extra_kw = self._apply_patchers(
-                level_name=str(level),
-                level_no=0,
-                message=message,
-                exception=exception,
-                extra=extra_kw,
-            )
+            if self._patchers:
+                message, exception, extra_kw = self._apply_patchers(
+                    level_name=str(level),
+                    level_no=0,
+                    message=message,
+                    exception=exception,
+                    extra=extra_kw,
+                )
+            else:
+                message = str(message)
             inner = self._inner if extra_kw is None else self._inner.bind(extra_kw)
             if exception is None:
-                inner.log(level, str(message))
+                inner.log(level, message)
             else:
-                inner.log(level, str(message), exception=exception)
+                inner.log(level, message, exception=exception)
             return
         if resolved_emit < self._inner.min_level:
             return
@@ -1534,24 +1556,30 @@ class Logger:
             if not extra_kw:
                 extra_kw = None
 
-        message, exception, extra_kw = self._apply_patchers(
-            level_name=str(level),
-            level_no=resolved_emit,
-            message=message,
-            exception=exception,
-            extra=extra_kw,
-        )
+        # ``message`` is a plain ``str`` from here on (patchers return one too)
+        if self._patchers:
+            message, exception, extra_kw = self._apply_patchers(
+                level_name=str(level),
+                level_no=resolved_emit,
+                message=message,
+                exception=exception,
+                extra=extra_kw,
+            )
+        else:
+            message = str(message)
 
-        needs_caller, needs_thread, needs_process = self._compute_effective_requirements(
-            resolved_emit
-        )
+        cache = self._requirements_cache_box[0]
+        needs = cache.get(resolved_emit) if cache is not None else None
+        if needs is None:
+            needs = self._compute_effective_requirements(resolved_emit)
+        needs_caller, needs_thread, needs_process = needs
         inner = self._inner if extra_kw is None else self._inner.bind(extra_kw)
 
         if needs_caller is False and needs_thread is False and needs_process is False:
             if exception is None:
-                inner.log(level, str(message))
+                inner.log(level, message)
             else:
-                inner.log(level, str(message), exception=exception)
+                inner.log(level, message, exception=exception)
             return
 
         if needs_thread is False and needs_process is False:
@@ -1568,11 +1596,11 @@ class Logger:
                     needs_caller.file,
                 )
             if exception is None:
-                inner.log(level, str(message), name=name, function=function, line=line, file=file)
+                inner.log(level, message, name=name, function=function, line=line, file=file)
             else:
                 inner.log(
                     level,
-                    str(message),
+                    message,
                     exception=exception,
                     name=name,
                     function=function,
@@ -1620,7 +1648,7 @@ class Logger:
         if exception is None:
             inner.log(
                 level,
-                str(message),
+                message,
                 name=name_,
                 function=function_,
                 line=line_,
@@ -1633,7 +1661,7 @@ class Logger:
         else:
             inner.log(
                 level,
-                str(message),
+                message,
                 exception=exception,
                 name=name_,
                 function=function_,
@@ -2206,20 +2234,32 @@ class Logger:
             return result or callbacks_removed > 0
         return result
 
-    def _with_inner(self, inner: PyLogger) -> Logger:
-        """Logger sharing this one's state, logging through ``inner``."""
-        return Logger(
-            inner,
-            patchers=self._patchers,
-            context=self._context,
-            collect_options=self._collect_options,
-            callback_ids=self._callback_ids,
-            filter_ids=self._filter_ids,
-            raw_callback_ids=self._raw_callback_ids,
-            requirements_cache_box=self._requirements_cache_box,
-            aggregated_options_box=self._aggregated_options_box,
-            activation=self._activation,
-        )
+    def _with_inner(
+        self,
+        inner: PyLogger,
+        *,
+        context: dict[str, Any] | None = None,
+        patchers: list[Callable[[dict[str, Any]], None]] | None = None,
+    ) -> Logger:
+        """Logger sharing this one's handler state, logging through ``inner``.
+
+        ``context`` defaults to a copy of this logger's and ``patchers`` to the
+        same list; the handler bookkeeping is shared like ``bind()`` does.
+        Attributes are assigned directly because ``bind()`` runs per message
+        and ``__init__``'s keyword plumbing costs more than the copy itself.
+        """
+        new = Logger.__new__(Logger)
+        new._inner = inner
+        new._activation = self._activation
+        new._patchers = self._patchers if patchers is None else patchers
+        new._context = dict(self._context) if context is None else context
+        new._collect_options = self._collect_options
+        new._callback_ids = self._callback_ids
+        new._filter_ids = self._filter_ids
+        new._raw_callback_ids = self._raw_callback_ids
+        new._requirements_cache_box = self._requirements_cache_box
+        new._aggregated_options_box = self._aggregated_options_box
+        return new
 
     def bind(self, **kwargs: Any) -> Logger:
         """Create a new logger with bound context values.
@@ -2235,19 +2275,10 @@ class Logger:
             >>> user_logger.info("User action")
             # Output includes extra context in JSON mode
         """
-        new_inner = self._inner.bind(kwargs)
-        new_context = {**self._context, **kwargs}
-        return Logger(
-            new_inner,
+        return self._with_inner(
+            self._inner.bind(kwargs),
+            context={**self._context, **kwargs},
             patchers=self._patchers.copy(),
-            context=new_context,
-            collect_options=self._collect_options,
-            callback_ids=self._callback_ids,
-            filter_ids=self._filter_ids,
-            raw_callback_ids=self._raw_callback_ids,
-            requirements_cache_box=self._requirements_cache_box,
-            aggregated_options_box=self._aggregated_options_box,
-            activation=self._activation,
         )
 
     @contextmanager
@@ -2422,20 +2453,7 @@ class Logger:
             >>> # Chain multiple patchers
             >>> logger.patch(add_user_id).patch(add_request_id).info("Log")
         """
-        new_patchers = self._patchers.copy()
-        new_patchers.append(patcher)
-        return Logger(
-            self._inner,
-            patchers=new_patchers,
-            context=self._context,
-            collect_options=self._collect_options,
-            callback_ids=self._callback_ids,
-            filter_ids=self._filter_ids,
-            raw_callback_ids=self._raw_callback_ids,
-            requirements_cache_box=self._requirements_cache_box,
-            aggregated_options_box=self._aggregated_options_box,
-            activation=self._activation,
-        )
+        return self._with_inner(self._inner, patchers=[*self._patchers, patcher])
 
     def configure(
         self,
