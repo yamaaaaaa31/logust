@@ -3,13 +3,13 @@ use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::sync::LazyLock;
 
-use chrono::{DateTime, Local};
+use chrono::{DateTime, Datelike, Local, Timelike};
 use colored::Color;
 use serde::Serialize;
 
 use crate::handler::{ExtraMap, LogRecord, write_extra_repr};
 use crate::level::get_level_color;
-use crate::time_format::TimeSpec;
+use crate::time_format::{TimeSpec, push_num};
 
 /// Logger initialization time for elapsed calculation
 pub static LOGGER_START_TIME: LazyLock<DateTime<Local>> = LazyLock::new(Local::now);
@@ -24,11 +24,22 @@ fn write_elapsed(start: &DateTime<Local>, now: &DateTime<Local>, out: &mut Strin
     let hours = total_secs / 3600;
     let minutes = (total_secs % 3600) / 60;
     let seconds = total_secs % 60;
-    let _ = write!(
-        out,
-        "{:02}:{:02}:{:02}.{:03}",
-        hours, minutes, seconds, millis
-    );
+    push_num(out, hours, 2);
+    out.push(':');
+    push_num(out, minutes, 2);
+    out.push(':');
+    push_num(out, seconds, 2);
+    out.push('.');
+    push_num(out, u64::from(millis), 3);
+}
+
+/// Append `text` left-aligned in a field of `width` characters (like `{:<width$}`)
+#[inline]
+fn push_padded(out: &mut String, text: &str, width: usize) {
+    out.push_str(text);
+    for _ in text.chars().count()..width {
+        out.push(' ');
+    }
 }
 
 /// Format elapsed time as HH:MM:SS.mmm
@@ -39,70 +50,121 @@ pub fn format_elapsed(start: &DateTime<Local>, now: &DateTime<Local>) -> String 
     s
 }
 
-/// ANSI SGR color number for `color`.
+/// ANSI SGR prefix for bold text in `color` (`ESC[1;<code>m`)
 #[inline]
-fn color_code(color: Color) -> &'static str {
+fn bold_color_prefix(color: Color) -> &'static str {
     match color {
-        Color::Black => "30",
-        Color::Red => "31",
-        Color::Green => "32",
-        Color::Yellow => "33",
-        Color::Blue => "34",
-        Color::Magenta => "35",
-        Color::Cyan => "36",
-        Color::White => "37",
-        Color::BrightBlack => "90",
-        Color::BrightRed => "91",
-        Color::BrightGreen => "92",
-        Color::BrightYellow => "93",
-        Color::BrightBlue => "94",
-        Color::BrightMagenta => "95",
-        Color::BrightCyan => "96",
-        Color::BrightWhite => "97",
-        _ => "0", // Default/reset
+        Color::Black => "\x1b[1;30m",
+        Color::Red => "\x1b[1;31m",
+        Color::Green => "\x1b[1;32m",
+        Color::Yellow => "\x1b[1;33m",
+        Color::Blue => "\x1b[1;34m",
+        Color::Magenta => "\x1b[1;35m",
+        Color::Cyan => "\x1b[1;36m",
+        Color::White => "\x1b[1;37m",
+        Color::BrightBlack => "\x1b[1;90m",
+        Color::BrightRed => "\x1b[1;91m",
+        Color::BrightGreen => "\x1b[1;92m",
+        Color::BrightYellow => "\x1b[1;93m",
+        Color::BrightBlue => "\x1b[1;94m",
+        Color::BrightMagenta => "\x1b[1;95m",
+        Color::BrightCyan => "\x1b[1;96m",
+        Color::BrightWhite => "\x1b[1;97m",
+        _ => "\x1b[1;0m", // Default/reset
     }
 }
 
-/// Apply ANSI color code to text (thread-safe, no global state)
+/// ANSI reset
+const RESET: &str = "\x1b[0m";
+/// ANSI dim style (default style of `{time}` and `{elapsed}`)
+const DIM: &str = "\x1b[2m";
+/// ANSI cyan (default style of caller, thread and process fields)
+const CYAN: &str = "\x1b[36m";
+
+/// Append what `write` produces, wrapped in `prefix` and a reset when `styled`.
+///
+/// Renders straight into `out`: no intermediate string per token.
 #[inline]
-fn colorize_text(text: &str, color: Color, bold: bool) -> String {
-    let color_code = color_code(color);
-    if bold {
-        format!("\x1b[1;{}m{}\x1b[0m", color_code, text)
-    } else {
-        format!("\x1b[{}m{}\x1b[0m", color_code, text)
+fn write_styled(out: &mut String, styled: bool, prefix: &str, write: impl FnOnce(&mut String)) {
+    if styled {
+        out.push_str(prefix);
+    }
+    write(out);
+    if styled {
+        out.push_str(RESET);
     }
 }
 
 /// Style `text` as the console styles the level `level_name` (bold, level color).
 pub fn colorize_level(text: &str, level_name: &str) -> String {
     let color = get_level_color(level_name).unwrap_or(Color::White);
-    colorize_text(text, color, true)
+    let mut out = String::with_capacity(text.len() + 12);
+    write_styled(&mut out, true, bold_color_prefix(color), |o| {
+        o.push_str(text)
+    });
+    out
 }
 
 /// ANSI prefix that styles text like the level `level_name` (bold, level color).
 pub fn level_style(level_name: &str) -> String {
     let color = get_level_color(level_name).unwrap_or(Color::White);
-    format!("\x1b[1;{}m", color_code(color))
-}
-
-/// Apply dim style to text (thread-safe)
-#[inline]
-fn dim_text(text: &str) -> String {
-    format!("\x1b[2m{}\x1b[0m", text)
-}
-
-/// Apply cyan color to text (thread-safe)
-#[inline]
-fn cyan_text(text: &str) -> String {
-    format!("\x1b[36m{}\x1b[0m", text)
+    bold_color_prefix(color).to_string()
 }
 
 /// Default log format template (loguru-compatible with caller info)
 const DEFAULT_FORMAT_TEMPLATE: &str = "{time} | {level:<8} | {name}:{function}:{line} - {message}";
 
-/// Default time format with milliseconds
+/// Default time format with milliseconds (`{time}` without a spec)
 const DEFAULT_TIME_FORMAT: &str = "%Y-%m-%d %H:%M:%S%.3f";
+
+/// Two ASCII decimal digits of `n` (`n` must be < 100)
+#[inline]
+fn two_digits(n: u32) -> [u8; 2] {
+    [b'0' + (n / 10) as u8, b'0' + (n % 10) as u8]
+}
+
+/// Append `dt` as the default `{time}` (`%Y-%m-%d %H:%M:%S%.3f`).
+///
+/// Writes the digits directly instead of going through chrono's strftime
+/// machinery, which re-parses the format string on every record. The output is
+/// byte-identical to `dt.format(DEFAULT_TIME_FORMAT)`: years outside `0..=9999`
+/// (which chrono prints with a sign) fall back to chrono.
+pub fn write_default_time(dt: &DateTime<Local>, out: &mut String) {
+    let local = dt.naive_local();
+    let year = local.year();
+    if !(0..=9999).contains(&year) {
+        let _ = write!(out, "{}", dt.format(DEFAULT_TIME_FORMAT));
+        return;
+    }
+    let nanos = local.nanosecond();
+    // Like chrono's `%S`, a leap second (nanosecond >= 1e9) renders as "60"
+    let second = local.second() + nanos / 1_000_000_000;
+    let millis = nanos / 1_000_000 % 1000;
+
+    let year = year as u32;
+    let [c0, c1] = two_digits(year / 100);
+    let [y0, y1] = two_digits(year % 100);
+    let [mo0, mo1] = two_digits(local.month());
+    let [d0, d1] = two_digits(local.day());
+    let [h0, h1] = two_digits(local.hour());
+    let [mi0, mi1] = two_digits(local.minute());
+    let [s0, s1] = two_digits(second);
+    let [ms1, ms2] = two_digits(millis % 100);
+    let ms0 = b'0' + (millis / 100) as u8;
+    let buf = [
+        c0, c1, y0, y1, b'-', mo0, mo1, b'-', d0, d1, b' ', h0, h1, b':', mi0, mi1, b':', s0, s1,
+        b'.', ms0, ms1, ms2,
+    ];
+    // Only ASCII digits and punctuation: always valid UTF-8
+    out.push_str(std::str::from_utf8(&buf).expect("timestamp is ASCII"));
+}
+
+/// The default `{time}` rendering of `dt` as a new string
+pub fn format_default_time(dt: &DateTime<Local>) -> String {
+    let mut out = String::with_capacity(23);
+    write_default_time(dt, &mut out);
+    out
+}
 
 /// Initial capacity hint for formatted result strings
 const FORMAT_RESULT_CAPACITY: usize = 64;
@@ -555,15 +617,13 @@ pub fn split_format_markup(template: &str) -> Vec<MarkupPiece> {
 fn push_style(result: &mut String, style: MarkupStyle, level_color: Color) {
     match style {
         MarkupStyle::Ansi(ansi) => result.push_str(ansi),
-        MarkupStyle::Level => {
-            let _ = write!(result, "\x1b[1;{}m", color_code(level_color));
-        }
+        MarkupStyle::Level => result.push_str(bold_color_prefix(level_color)),
     }
 }
 
 /// Reset, then re-apply the styles still open
 fn restore_styles(result: &mut String, styles: &[MarkupStyle], level_color: Color) {
-    result.push_str("\x1b[0m");
+    result.push_str(RESET);
     for &style in styles {
         push_style(result, style, level_color);
     }
@@ -615,8 +675,6 @@ pub struct FormatConfig {
     tokens: Vec<FormatToken>,
     /// Whether to serialize as JSON
     pub serialize: bool,
-    /// Time format string
-    pub time_format: String,
     /// Computed requirements based on tokens
     requirements: TokenRequirements,
     /// Template places the exception itself (`{exception}`): don't append it
@@ -652,7 +710,6 @@ impl FormatConfig {
             template,
             tokens,
             serialize,
-            time_format: DEFAULT_TIME_FORMAT.to_string(),
             requirements,
             has_exception_token,
         })
@@ -674,20 +731,12 @@ impl FormatConfig {
 
     /// Format a LogRecord using pre-parsed tokens (O(n) single pass, thread-safe)
     fn format_record_template(&self, record: &LogRecord, colorize: bool) -> String {
-        let reqs = &self.requirements;
-
-        // Lazy computation: only compute if token is needed
         let level_name = record.level_name();
         let level_color = record
             .level_info
             .as_ref()
             .map(|info| info.get_color())
             .unwrap_or_else(|| record.level.color());
-
-        // Lazy time formatting - only compute if {time} token is in format
-        let time_raw = reqs
-            .needs_time
-            .then(|| record.timestamp.format(&self.time_format).to_string());
 
         let mut result = String::with_capacity(self.template.len() + FORMAT_RESULT_CAPACITY);
         // Styles opened by template markup; tokens inside them keep the markup's color
@@ -699,153 +748,91 @@ impl FormatConfig {
             }
             // Default token styles apply only outside template markup
             let auto = colorize && styles.is_empty();
+            let out = &mut result;
             match token {
-                FormatToken::Static(s) => result.push_str(s),
-                FormatToken::Time => {
-                    if let Some(ref raw) = time_raw {
-                        if auto {
-                            result.push_str(&dim_text(raw));
-                        } else {
-                            result.push_str(raw);
-                        }
-                    }
-                }
-                FormatToken::TimeFormatted(spec) => {
-                    if auto {
-                        result.push_str(&dim_text(&spec.format(&record.timestamp)));
-                    } else {
-                        spec.write(&record.timestamp, &mut result);
-                    }
-                }
+                FormatToken::Static(s) => out.push_str(s),
+                FormatToken::Time => write_styled(out, auto, DIM, |o| {
+                    write_default_time(&record.timestamp, o);
+                }),
+                FormatToken::TimeFormatted(spec) => write_styled(out, auto, DIM, |o| {
+                    spec.write(&record.timestamp, o);
+                }),
                 FormatToken::Message => {
                     if !record.message_markup {
                         // `opt(colors=False)`: markup in the message is plain text
-                        result.push_str(&record.message);
+                        out.push_str(&record.message);
                     } else if !colorize || styles.is_empty() {
-                        result.push_str(&apply_color_markup(&record.message, colorize));
+                        out.push_str(&apply_color_markup(&record.message, colorize));
                     } else {
                         // Keep template styles alive across resets in the message markup
                         let base = styles_prefix(&styles, level_color);
-                        result.push_str(&apply_color_markup_within(&record.message, true, &base));
+                        out.push_str(&apply_color_markup_within(&record.message, true, &base));
                     }
                 }
                 FormatToken::Level => {
-                    if auto {
-                        result.push_str(&colorize_text(level_name, level_color, true));
-                    } else {
-                        result.push_str(level_name);
-                    }
+                    write_styled(out, auto, bold_color_prefix(level_color), |o| {
+                        o.push_str(level_name);
+                    })
                 }
                 FormatToken::LevelWidth(width) => {
-                    if auto {
-                        let padded = format!("{:<width$}", level_name, width = width);
-                        result.push_str(&colorize_text(&padded, level_color, true));
-                    } else {
-                        let _ = write!(result, "{:<width$}", level_name, width = width);
-                    }
+                    write_styled(out, auto, bold_color_prefix(level_color), |o| {
+                        push_padded(o, level_name, *width);
+                    })
                 }
                 FormatToken::LevelNo => {
-                    let _ = write!(result, "{}", record.level_no());
+                    push_num(out, u64::from(record.level_no()), 0);
                 }
-                FormatToken::LevelIcon => result.push_str(record.level_icon()),
+                FormatToken::LevelIcon => out.push_str(record.level_icon()),
                 FormatToken::Exception => {
                     if let Some(ref exc) = record.exception {
-                        result.push_str(exc);
+                        out.push_str(exc);
                     }
                 }
                 FormatToken::Extra(key) => {
                     if let Some(value) = record.extra.get(key) {
-                        result.push_str(value.as_str());
+                        out.push_str(value.as_str());
                     }
                 }
-                FormatToken::ExtraAll => write_extra_repr(&record.extra, &mut result),
+                FormatToken::ExtraAll => write_extra_repr(&record.extra, out),
                 FormatToken::Name | FormatToken::Module => {
-                    if auto {
-                        result.push_str(&cyan_text(&record.caller.name));
-                    } else {
-                        result.push_str(&record.caller.name);
-                    }
+                    write_styled(out, auto, CYAN, |o| o.push_str(&record.caller.name))
                 }
                 FormatToken::Function => {
-                    if auto {
-                        result.push_str(&cyan_text(&record.caller.function));
-                    } else {
-                        result.push_str(&record.caller.function);
-                    }
+                    write_styled(out, auto, CYAN, |o| o.push_str(&record.caller.function))
                 }
-                FormatToken::Line => {
-                    if auto {
-                        let line_str = record.caller.line.to_string();
-                        result.push_str(&cyan_text(&line_str));
-                    } else {
-                        let _ = write!(result, "{}", record.caller.line);
-                    }
-                }
-                FormatToken::Elapsed => {
-                    if auto {
-                        let elapsed = format_elapsed(&LOGGER_START_TIME, &record.timestamp);
-                        result.push_str(&dim_text(&elapsed));
-                    } else {
-                        write_elapsed(&LOGGER_START_TIME, &record.timestamp, &mut result);
-                    }
-                }
-                FormatToken::Thread => {
-                    if auto {
-                        let thread_str = format!("{}:{}", record.thread.name, record.thread.id);
-                        result.push_str(&cyan_text(&thread_str));
-                    } else {
-                        let _ = write!(result, "{}:{}", record.thread.name, record.thread.id);
-                    }
-                }
+                FormatToken::Line => write_styled(out, auto, CYAN, |o| {
+                    push_num(o, u64::from(record.caller.line), 0);
+                }),
+                FormatToken::Elapsed => write_styled(out, auto, DIM, |o| {
+                    write_elapsed(&LOGGER_START_TIME, &record.timestamp, o);
+                }),
+                FormatToken::Thread => write_styled(out, auto, CYAN, |o| {
+                    o.push_str(&record.thread.name);
+                    o.push(':');
+                    push_num(o, record.thread.id, 0);
+                }),
                 FormatToken::ThreadName => {
-                    if auto {
-                        result.push_str(&cyan_text(&record.thread.name));
-                    } else {
-                        result.push_str(&record.thread.name);
-                    }
+                    write_styled(out, auto, CYAN, |o| o.push_str(&record.thread.name))
                 }
-                FormatToken::ThreadId => {
-                    if auto {
-                        result.push_str(&cyan_text(&record.thread.id.to_string()));
-                    } else {
-                        let _ = write!(result, "{}", record.thread.id);
-                    }
-                }
+                FormatToken::ThreadId => write_styled(out, auto, CYAN, |o| {
+                    push_num(o, record.thread.id, 0);
+                }),
                 FormatToken::ProcessName => {
-                    if auto {
-                        result.push_str(&cyan_text(&record.process.name));
-                    } else {
-                        result.push_str(&record.process.name);
-                    }
+                    write_styled(out, auto, CYAN, |o| o.push_str(&record.process.name))
                 }
-                FormatToken::ProcessId => {
-                    if auto {
-                        result.push_str(&cyan_text(&record.process.id.to_string()));
-                    } else {
-                        let _ = write!(result, "{}", record.process.id);
-                    }
-                }
-                FormatToken::Process => {
-                    if auto {
-                        let process_str = format!("{}:{}", record.process.name, record.process.id);
-                        result.push_str(&cyan_text(&process_str));
-                    } else {
-                        let _ = write!(result, "{}:{}", record.process.name, record.process.id);
-                    }
-                }
+                FormatToken::ProcessId => write_styled(out, auto, CYAN, |o| {
+                    push_num(o, u64::from(record.process.id), 0);
+                }),
+                FormatToken::Process => write_styled(out, auto, CYAN, |o| {
+                    o.push_str(&record.process.name);
+                    o.push(':');
+                    push_num(o, u64::from(record.process.id), 0);
+                }),
                 FormatToken::File => {
-                    if auto {
-                        result.push_str(&cyan_text(record.caller.file_name()));
-                    } else {
-                        result.push_str(record.caller.file_name());
-                    }
+                    write_styled(out, auto, CYAN, |o| o.push_str(record.caller.file_name()))
                 }
                 FormatToken::FilePath => {
-                    if auto {
-                        result.push_str(&cyan_text(&record.caller.file));
-                    } else {
-                        result.push_str(&record.caller.file);
-                    }
+                    write_styled(out, auto, CYAN, |o| o.push_str(&record.caller.file))
                 }
                 FormatToken::StyleOpen(_) | FormatToken::StyleClose => {}
             }
@@ -853,7 +840,7 @@ impl FormatConfig {
 
         // Close styles left open by the template
         if colorize && !styles.is_empty() {
-            result.push_str("\x1b[0m");
+            result.push_str(RESET);
         }
 
         // `{exception}` in the template already placed it
@@ -891,7 +878,7 @@ impl FormatConfig {
         }
 
         let json_record = JsonRecord {
-            time: record.timestamp.format(&self.time_format).to_string(),
+            time: format_default_time(&record.timestamp),
             level: record.level_name(),
             message: &record.message,
             name: &record.caller.name,
@@ -1201,6 +1188,47 @@ mod tests {
             config.format_record(&record, false),
             record.timestamp.format(DEFAULT_TIME_FORMAT).to_string()
         );
+    }
+
+    #[test]
+    fn test_default_time_matches_chrono() {
+        use chrono::{NaiveDate, TimeZone};
+
+        let check = |dt: DateTime<Local>| {
+            assert_eq!(
+                format_default_time(&dt),
+                dt.format(DEFAULT_TIME_FORMAT).to_string(),
+                "{dt:?}"
+            );
+        };
+
+        // Sweep instants with varying sub-second parts across several years
+        let base = Local::now();
+        for i in 0..20_000i64 {
+            let dt = base
+                + chrono::Duration::seconds(i * 7_919)
+                + chrono::Duration::nanoseconds(i * 1_234_567);
+            check(dt);
+        }
+        // Milliseconds with leading zeros and exact boundaries
+        for nanos in [0, 999, 1_000_000, 9_999_999, 10_000_000, 999_999_999] {
+            let dt = Local.with_ymd_and_hms(2024, 2, 29, 0, 0, 0).unwrap()
+                + chrono::Duration::nanoseconds(nanos);
+            check(dt);
+        }
+        // Leap second representation renders as second 60
+        let leap = NaiveDate::from_ymd_opt(2016, 12, 31)
+            .unwrap()
+            .and_hms_nano_opt(23, 59, 59, 1_500_000_000)
+            .unwrap()
+            .and_local_timezone(Local)
+            .unwrap();
+        check(leap);
+        assert!(format_default_time(&leap).ends_with(":60.500"));
+        // Years that chrono pads or signs
+        for year in [1, 999, 1000, 9999, -1, 10_000] {
+            check(Local.with_ymd_and_hms(year, 6, 15, 12, 30, 45).unwrap());
+        }
     }
 
     #[test]

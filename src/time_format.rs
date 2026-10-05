@@ -356,7 +356,7 @@ impl TimeSpec {
 }
 
 /// Append `value` in decimal, zero-padded to `width` digits
-fn push_num(out: &mut String, mut value: u64, width: usize) {
+pub(crate) fn push_num(out: &mut String, mut value: u64, width: usize) {
     let mut buf = [0u8; 20];
     let mut start = buf.len();
     loop {
