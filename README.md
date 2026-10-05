@@ -425,6 +425,9 @@ logger.add("errors.log", filter=lambda r: "database" in r.get("message", ""))
 
 # Level-based filter
 logger.add("warnings.log", filter=lambda r: r.get("level") == "WARNING")
+
+# loguru-style record fields work too
+logger.add("important.log", filter=lambda r: r["level"].no >= 30 and r["time"].hour < 6)
 ```
 
 ## Integrations

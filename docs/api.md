@@ -335,24 +335,35 @@ For the full event contract, see [Canonical Events](guide/canonical-events.md).
 
 ### LogRecord
 
+The record dict passed to filters, patchers, and `add_callback()` callbacks
+(see [The record dict](guide/context.md#the-record-dict)).
+
 ```python
 from logust import LogRecord
 
-record: LogRecord = {
-    "level": "INFO",
+def my_filter(record: LogRecord) -> bool:
+    return record["level"].no >= 30
+
+# A record looks like:
+{
+    "level": "INFO",                 # RecordLevelStr: a str with .name, .no, .icon
     "level_no": 20,
     "message": "Hello",
-    "timestamp": "2025-12-24T12:00:00",
-    "name": "__main__",           # Module name
-    "function": "my_function",    # Function name
-    "line": 42,                   # Line number
-    "file": "main.py",            # Source file name
-    "thread_name": "MainThread",  # Thread name
-    "thread_id": 12345,           # Thread ID
-    "process_name": "MainProcess", # Process name
-    "process_id": 1234,           # Process ID
-    "elapsed": "00:01:23.456",    # Time since logger start
-    "exception": None,
+    "time": datetime(2025, 12, 24, 12, 0, tzinfo=...),  # aware datetime
+    "timestamp": "2025-12-24T12:00:00.000000+00:00",
+    "elapsed": RecordElapsed(...),     # timedelta; str() gives "00:01:23.456"
+    "name": "__main__",              # Module name
+    "module": "main",                # File name without extension
+    "function": "my_function",       # Function name
+    "line": 42,                        # Line number
+    "file": "main.py",               # RecordFile: a str with .name, .path
+    "thread": RecordThread(...),       # .id, .name
+    "thread_name": "MainThread",
+    "thread_id": 12345,
+    "process": RecordProcess(...),     # .id, .name
+    "process_name": "MainProcess",
+    "process_id": 1234,
+    "exception": None,                 # Traceback text, or None
     "extra": {"user_id": "123"},
 }
 ```
@@ -431,13 +442,34 @@ process = ProcessInfo(
 
 ### RecordLevel
 
+A named tuple with the same `name`, `no` and `icon` fields as loguru's level record.
+`record["level"]` itself is a `RecordLevelStr`.
+
 ```python
 from logust import RecordLevel
 
 level = RecordLevel(name="INFO", no=20, icon="")
 ```
 
+### RecordLevelStr, RecordFile, RecordThread, RecordProcess, RecordElapsed
+
+The value types of a record's `level`, `file`, `thread`, `process` and `elapsed` keys.
+Their attributes are read-only.
+
+```python
+from logust import RecordElapsed, RecordFile, RecordLevelStr, RecordProcess, RecordThread
+
+level = RecordLevelStr("INFO", 20, "ℹ️")  # level == "INFO"; level.no == 20
+file = RecordFile("main.py", "/app/main.py")  # file == "main.py"; file.path
+thread = RecordThread(12345, "MainThread")  # thread.id, thread.name
+process = RecordProcess(1234, "MainProcess")  # process.id, process.name
+elapsed = RecordElapsed(seconds=83, microseconds=456000)  # str(elapsed) == "00:01:23.456"
+```
+
 ### RecordException
+
+A named tuple shaped like loguru's `record["exception"]`. Logust records hold the traceback
+text instead (see [The record dict](guide/context.md#the-record-dict)).
 
 ```python
 from logust import RecordException

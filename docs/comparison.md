@@ -11,7 +11,6 @@
 ### Loguru
 
 - Rich sink options
-- More built-in record fields
 - Long-established ecosystem
 
 ### logging
@@ -80,6 +79,7 @@ In this run, `loguru`'s `enqueue=True` path remained far slower than its sync pa
 | Process/thread info | Yes | Yes |
 | Format fields (`{time:<spec>}`, `{level.icon}`, `{file.path}`, `{exception}`, ...) | Yes | Yes |
 | Per-module `enable(name)` / `disable(name)` | Yes | Yes |
+| loguru-shaped records in filters and patchers (`record["level"].no`, `record["time"]`, ...) | Yes | Yes |
 
 ## API differences
 
@@ -149,6 +149,19 @@ and `{file.path}` (see [Formatting](guide/formatting.md#format-tokens)). Differe
 - **`opt(capture=False)`** works as in loguru. `opt(raw=True)` and `opt(record=True)` are not
   supported yet.
 
+### Record dicts in filters, patchers, and callbacks
+
+Filters, patchers, and `add_callback()` callbacks get loguru's record keys: `record["level"].no`,
+`record["time"]` (an aware `datetime`), `record["elapsed"]` (a `timedelta`),
+`record["file"].path`, `record["thread"].id`, `record["process"].name`, `record["module"]`
+(see [The record dict](guide/context.md#the-record-dict)). Differences:
+
+- `record["exception"]` is the traceback text or `None`, not a `(type, value, traceback)` tuple.
+- `record["level"]` and `record["file"]` are also strings (`record["level"] == "INFO"` is true),
+  and the record keeps logust's flat keys (`level_no`, `timestamp`, `thread_id`, ...).
+- A patcher's record has no caller fields (`name`, `module`, `function`, `line`, `file`), and only
+  its changes to `message`, `extra` and `exception` are used.
+
 ### File sink options
 
 `compression`, `mode`, `encoding`, `delay` and `catch` use loguru's names, with these differences:
@@ -178,7 +191,7 @@ and `{file.path}` (see [Formatting](guide/formatting.md#format-tokens)). Differe
 ## When to choose loguru
 
 - You need full loguru compatibility for advanced features
-- You need richer built-in record fields or sink options
+- You need loguru's exception records or richer sink options
 
 ## Logust vs standard logging
 
