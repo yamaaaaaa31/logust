@@ -246,13 +246,31 @@ class TestCallSites:
         pair.run(emit)
 
     def test_other_thread(self, pair: Pair) -> None:
-        def emit(logger: Logger) -> None:
-            thread = threading.Thread(target=logger.info, args=("worker",), name="fast-path-worker")
-            thread.start()
-            thread.join()
+        # Both loggers log from the same worker, because thread ids are not
+        # reused between threads on every platform (Windows hands out new ones).
+        idents: list[int | None] = []
 
-        pair.run(emit)
-        assert pair.fast_out == []
+        def worker() -> None:
+            idents.append(threading.get_ident())
+            with (
+                patch("logust._logger._get_caller_info", side_effect=AssertionError("python")),
+                patch("logust._logger._get_thread_info", side_effect=AssertionError("python")),
+                patch("logust._logger._get_process_info", side_effect=AssertionError("python")),
+            ):
+                pair.fast.info("worker")
+            pair.slow.info("worker")
+
+        thread = threading.Thread(target=worker, name="fast-path-worker")
+        thread.start()
+        thread.join()
+
+        assert len(pair.fast_out) == len(pair.slow_out) == 1
+        fast, slow = pair.fast_out[0].split("|"), pair.slow_out[0].split("|")
+        # The two calls sit on consecutive lines; every other field must match
+        assert int(slow[2]) == int(fast[2]) + 1
+        del fast[2], slow[2]
+        assert fast == slow
+        assert fast[3:5] == ["fast-path-worker", str(idents[0])]
 
 
 class TestSlowPathTriggers:
