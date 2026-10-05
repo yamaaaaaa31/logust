@@ -51,6 +51,32 @@ static ATFORK_REGISTRATION: OnceLock<Result<(), i32>> = OnceLock::new();
 static ASYNC_SINK_REGISTRY: LazyLock<StdMutex<Vec<Weak<FileSinkInner>>>> =
     LazyLock::new(|| StdMutex::new(Vec::new()));
 
+/// PID of the process that imported the extension. A different PID later means
+/// this process is a fork() child.
+static INIT_PID: OnceLock<u32> = OnceLock::new();
+
+/// Record the importing process; called once from the module initializer.
+pub fn record_init_pid() {
+    let _ = INIT_PID.set(std::process::id());
+}
+
+/// Whether `enqueue=True` may start a writer thread in this process.
+///
+/// On Apple platforms std's thread parking uses libdispatch, which traps
+/// (SIGTRAP) in a fork() child once the parent has used it. A sink created in a
+/// forked child therefore writes synchronously, the same fallback that
+/// inherited `enqueue=True` sinks already use after fork().
+fn async_writer_allowed() -> bool {
+    #[cfg(target_vendor = "apple")]
+    {
+        INIT_PID.get().is_none_or(|pid| *pid == std::process::id())
+    }
+    #[cfg(not(target_vendor = "apple"))]
+    {
+        true
+    }
+}
+
 /// Rotation strategy
 #[pyclass(eq, eq_int, from_py_object)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -618,7 +644,10 @@ pub struct FileSink {
 
 impl FileSink {
     /// Create a new file sink
-    pub fn new(config: FileSinkConfig) -> io::Result<Self> {
+    pub fn new(mut config: FileSinkConfig) -> io::Result<Self> {
+        if config.enqueue && !async_writer_allowed() {
+            config.enqueue = false;
+        }
         let path = config.path.clone();
 
         if !config.delay {

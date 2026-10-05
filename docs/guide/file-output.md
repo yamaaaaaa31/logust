@@ -308,6 +308,12 @@ logger.add("app.log", enqueue=True)
     Use `enqueue=True` for high-throughput logging where some message loss is acceptable.
     Use `enqueue=False` (default) for reliable logging.
 
+!!! note "Forked child processes"
+    A process created with `fork()` never starts a writer thread: `enqueue=True`
+    sinks inherited from the parent, and on macOS also sinks added in the child,
+    write synchronously. On macOS, Rust's thread parking uses libdispatch, which
+    crashes a forked child (SIGTRAP) once the parent has used it.
+
 ## Handler management
 
 ```python

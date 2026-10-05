@@ -1691,6 +1691,8 @@ impl TimeFormatter {
 
 #[pymodule]
 fn _logust(py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
+    sink::record_init_pid();
+
     m.add_class::<LogLevel>()?;
 
     m.add_class::<Rotation>()?;
