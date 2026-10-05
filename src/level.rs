@@ -259,8 +259,17 @@ pub fn register_level(info: LevelInfo) {
         set_builtin_color(builtin, info.get_color());
     }
     let no = info.no;
-    LEVEL_REGISTRY.write().insert(name.clone(), Arc::new(info));
-    LEVEL_NO_REGISTRY.write().insert(no, name);
+    let previous = LEVEL_REGISTRY.write().insert(name.clone(), Arc::new(info));
+    let mut by_no = LEVEL_NO_REGISTRY.write();
+    // Re-registered under a new `no`: the old number no longer maps to it
+    if let Some(previous) = previous
+        && previous.no != no
+        && by_no.get(&previous.no) == Some(&name)
+    {
+        by_no.remove(&previous.no);
+    }
+    by_no.insert(no, name);
+    drop(by_no);
     LEVEL_GENERATION.fetch_add(1, Ordering::Release);
 }
 
@@ -469,6 +478,14 @@ mod tests {
         assert_eq!(LogLevel::Fail.color(), Color::BrightBlue);
         assert_eq!(LogLevel::Error.color(), Color::Red);
         assert_eq!(get_level_info("fail").unwrap().color, "bright_blue");
+    }
+
+    #[test]
+    fn test_reregistering_with_a_new_no_drops_the_old_number() {
+        register_level(LevelInfo::new("RENUMBERED".into(), 35, None, None));
+        register_level(LevelInfo::new("RENUMBERED".into(), 36, None, None));
+        assert!(get_level_by_no(35).is_none());
+        assert_eq!(get_level_by_no(36).unwrap().name, "RENUMBERED");
     }
 
     #[test]

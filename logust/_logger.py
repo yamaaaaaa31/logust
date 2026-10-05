@@ -580,6 +580,11 @@ class _ModuleActivation:
             self.rules = tuple(rules)
             self.cache = {}
 
+    def has_rule(self, name: str) -> bool:
+        """Whether ``enable(name)`` / ``disable(name)`` left a rule for ``name``."""
+        prefix = name + "." if name else ""
+        return any(rule_prefix == prefix for rule_prefix, _ in self.rules)
+
     def is_disabled(self, name: str) -> bool:
         """Return True if messages from module ``name`` are disabled."""
         cache = self.cache
@@ -1607,6 +1612,10 @@ class Logger:
                 return _level_from_info(existing)
             no = existing[1]
         if existing is not None:
+            if no != existing[1] and name.lower() in _LEVEL_VALUES:
+                raise TypeError(
+                    f"Level '{existing[0]}' already exists, you can't update its severity no"
+                )
             if color is None and existing[2]:
                 color = existing[2]
             if icon is None:
@@ -1861,6 +1870,8 @@ class Logger:
           ``enable("")`` removes every module rule.
         - ``enable()``, ``enable(LogLevel.Info)``, ``enable("INFO")`` or
           ``enable(level="INFO")`` re-enables console output (logust behavior).
+          A built-in level name that ``disable(name)`` made a module rule for
+          (a module called ``info``, say) re-enables that module instead.
 
         A string that is a built-in level name (case-insensitive: ``"trace"``,
         ``"debug"``, ``"info"``, ``"success"``, ``"warning"``, ``"error"``,
@@ -1871,7 +1882,9 @@ class Logger:
             name: Module name, built-in level, or None.
             level: Minimum console level when re-enabling console output.
         """
-        if isinstance(name, str) and name.lower() not in _LEVEL_VALUES:
+        if isinstance(name, str) and (
+            name.lower() not in _LEVEL_VALUES or self._activation.has_rule(name)
+        ):
             if level is not None:
                 raise TypeError("enable() got both a module name and a level")
             self._activation.change(name, True)
