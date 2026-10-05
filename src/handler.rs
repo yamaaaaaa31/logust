@@ -397,7 +397,18 @@ pub struct CallerInfo {
     pub name: String,
     pub function: String,
     pub line: u32,
+    /// Source file path as given by the caller (Python passes `co_filename`)
     pub file: String,
+}
+
+/// Final component of a file path (like `os.path.basename`)
+#[inline]
+pub fn file_basename(path: &str) -> &str {
+    #[cfg(windows)]
+    let sep = path.rfind(['/', '\\']);
+    #[cfg(not(windows))]
+    let sep = path.rfind('/');
+    sep.map_or(path, |i| &path[i + 1..])
 }
 
 impl CallerInfo {
@@ -417,6 +428,12 @@ impl CallerInfo {
             line,
             file,
         }
+    }
+
+    /// Source file basename (`{file}` / `{file.name}`)
+    #[inline]
+    pub fn file_name(&self) -> &str {
+        file_basename(&self.file)
     }
 }
 
@@ -622,6 +639,14 @@ impl LogRecord {
             info.no
         } else {
             self.level as u32
+        }
+    }
+
+    /// Get level icon (empty if the level has none)
+    pub fn level_icon(&self) -> &str {
+        match self.level_info {
+            Some(ref info) => info.icon.as_deref().unwrap_or(""),
+            None => self.level.icon(),
         }
     }
 

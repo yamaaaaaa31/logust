@@ -390,13 +390,26 @@ class TestLightweightRequirementsForRust:
             False,
             True,
             False,
+            False,
         )
 
     def test_extra_nested_flag(self) -> None:
         t = ParsedCallableTemplate("{extra[a]}")
         flags = t.lightweight_requirements_for_rust()
-        assert flags[-1] is True
-        assert flags[-2] is False
+        assert flags[10] is True
+        assert flags[9] is False
+
+    def test_new_field_flags(self) -> None:
+        flags = ParsedCallableTemplate("{level.no}").lightweight_requirements_for_rust()
+        assert flags[1] is True
+        flags = ParsedCallableTemplate("{file.name}").lightweight_requirements_for_rust()
+        assert flags[5] is True and flags[11] is False
+        flags = ParsedCallableTemplate("{file.path}").lightweight_requirements_for_rust()
+        assert flags[5] is False and flags[11] is True
+        flags = ParsedCallableTemplate(
+            "{thread.id} {process.name}"
+        ).lightweight_requirements_for_rust()
+        assert flags[7] is True and flags[8] is True
 
     def test_lightweight_extra_keys_order_unique(self) -> None:
         t = ParsedCallableTemplate("{extra[b]} {extra[a]} {extra[b]}")

@@ -68,7 +68,27 @@ logger.log("NOTICE", "This is a notice")
 | `name` | str | Level name (uppercase recommended) |
 | `no` | int | Numeric severity (higher = more severe) |
 | `color` | str | Color name for console output |
-| `icon` | str | Icon symbol (optional) |
+| `icon` | str | Icon symbol (optional), shown by `{level.icon}` |
+
+### Level icons
+
+`{level.icon}` in a format shows the level's icon, `{level.no}` its severity:
+
+```python
+logger.add("app.log", format="{level.icon} {level.name:<8} | {message}")
+```
+
+Built-in levels use loguru's default icons:
+
+| Level | Icon | | Level | Icon |
+|-------|------|-|-------|------|
+| TRACE | ✏️ | | WARNING | ⚠️ |
+| DEBUG | 🐞 | | ERROR | ❌ |
+| INFO | ℹ️ | | FAIL | ✖️ |
+| SUCCESS | ✅ | | CRITICAL | ☠️ |
+
+`FAIL` is Logust-only, so its icon has no loguru counterpart. A custom level without
+`icon` renders `{level.icon}` as an empty string.
 
 ### Look up or update a level
 
@@ -80,7 +100,7 @@ Every call returns a `Level(name, no, color, icon)` named tuple.
 from logust import logger
 
 logger.level("INFO")
-# Level(name='INFO', no=20, color='green', icon='')
+# Level(name='INFO', no=20, color='green', icon='ℹ️')
 
 logger.level("INFO", color="blue")  # Built-in INFO is now blue on the console
 logger.level("NOTICE", icon="*")  # Keeps NOTICE's severity and color

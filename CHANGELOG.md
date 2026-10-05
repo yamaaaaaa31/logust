@@ -13,14 +13,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`datetime` rotation values**: `add(rotation=...)` accepts `timedelta(days=1)`, `timedelta(hours=1)`, and `time(0, 0)`. Values that can't be honored exactly raise `ValueError`.
 - **`logger.parse()`**: the module-level `parse()` is also available on the logger, as in loguru.
 - **Positional message arguments**: `logger.info("Processed {} items", 42)` now works like loguru on every level method, `log()`, `exception()`, `opt()`, and the module-level functions (`logust.info(...)`). Positional and keyword arguments can be mixed, kwargs not used by a placeholder still go to `extra`, and a message logged without arguments is never formatted. Filtered-out calls now return before any argument handling, making them about 30% faster than in 0.5.0.
+- **loguru format fields**: `{level.name}`, `{level.no}`, `{level.icon}`, `{thread.name}`, `{thread.id}`, `{process.name}`, `{process.id}`, `{file.name}`, and `{file.path}` work in format strings on every sink type, and the caller, thread, and process info they need is collected automatically. Built-in levels get loguru's default icons (`FAIL`, which loguru lacks, gets `✖️`).
+- **`{exception}` in format strings**: the traceback is written where `{exception}` stands and is no longer appended after the message, so it is printed once. It is empty for records without an exception.
 
 ### Changed
 - **`logger.level()` returns the level**: registering a level now returns its `Level` instead of `None`, `no` may be passed positionally, and re-registering keeps the existing color and icon unless new ones are given.
 - **`configure(levels=...)` entries without `no` update existing levels**: previously they were silently skipped; an unknown name now raises `ValueError`.
+- **Caller file path is collected without extra cost**: the Python side now passes the code object's path and Rust derives the basename, which also makes formats with caller info slightly faster. `{file}` and the record dicts' `file` key are still the basename.
 
 ### Fixed
 - **Coroutine function sinks are rejected**: `add()` raises `TypeError` for `async def` sinks (and async callables) instead of accepting them and never awaiting the coroutine.
 - **`opt()` formats the message once**: `logger.opt().info("{} {user}", value, user="bob")` no longer raises `KeyError`, and braces inside a positional value are no longer re-interpreted as placeholders.
+- **`{time:<spec>}` follows the spec**: loguru time tokens (`YYYY-MM-DD HH:mm:ss.SSS`, `A`, `ZZ`, `[escapes]`, `!UTC`, ...) and `%` strftime specs were ignored: file and console sinks wrote `{time:...}` literally and callable sinks wrote the full RFC 3339 timestamp. The spec is compiled once when the handler is added, and an invalid spec raises `ValueError`. Plain `{time}` is unchanged.
 
 ## [0.5.0] - 2026-10-01
 

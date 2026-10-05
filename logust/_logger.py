@@ -20,7 +20,13 @@ from typing import TYPE_CHECKING, Any, TextIO, TypeVar, cast, overload
 
 from ._logust import LogLevel, PyLogger
 from ._parse import parse as _parse_file
-from ._template import CALLER_TOKENS, KNOWN_TOKENS, ParsedCallableTemplate
+from ._template import (
+    CALLER_TOKENS,
+    KNOWN_TOKENS,
+    PROCESS_TOKENS,
+    THREAD_TOKENS,
+    ParsedCallableTemplate,
+)
 from ._types import Level
 
 _F = TypeVar("_F", bound=Callable[..., Any])
@@ -83,7 +89,7 @@ class CollectOptions:
 # Token pattern for format analysis (matches known tokens only)
 # Built from KNOWN_TOKENS to ensure consistency with ParsedCallableTemplate
 _FORMAT_TOKEN_PATTERN = re.compile(
-    r"\{(" + "|".join(re.escape(t) for t in KNOWN_TOKENS) + r"|extra\[[^\]]+\])(?::[^}]+)?\}"
+    r"\{(" + "|".join(re.escape(t) for t in KNOWN_TOKENS) + r"|extra\[[^\]]+\])(?::[^}]*)?\}"
 )
 _FORMATTER = string.Formatter()
 
@@ -161,8 +167,8 @@ def _collect_options_from_format(format_str: str) -> CollectOptions:
         used_tokens.add(key)
 
     needs_caller = bool(used_tokens & CALLER_TOKENS)
-    needs_thread = "thread" in used_tokens
-    needs_process = "process" in used_tokens
+    needs_thread = bool(used_tokens & THREAD_TOKENS)
+    needs_process = bool(used_tokens & PROCESS_TOKENS)
 
     return CollectOptions(
         caller=needs_caller,
@@ -180,22 +186,23 @@ _CACHED_PROCESS_PID: int | None = None
 
 
 def _get_caller_info(depth: int = 1) -> tuple[str, str, int, str]:
-    """Get caller information (module name, function name, line number, file basename).
+    """Get caller information (module name, function name, line number, file path).
+
+    The file path is the code object's ``co_filename``; Rust derives the basename
+    for ``{file}`` / ``{file.name}`` and keeps the path for ``{file.path}``.
 
     Args:
         depth: Number of frames to go back from the caller of this function
 
     Returns:
-        Tuple of (module_name, function_name, line_number, file_basename)
+        Tuple of (module_name, function_name, line_number, file_path)
     """
     try:
         frame = sys._getframe(depth + 1)  # +1 to skip this function itself
         code = frame.f_code
         # Get module name from globals, or use filename as fallback
         module_name = frame.f_globals.get("__name__", code.co_filename)
-        # Get file basename (not full path)
-        file_basename = os.path.basename(code.co_filename)
-        return (module_name, code.co_name, frame.f_lineno, file_basename)
+        return (module_name, code.co_name, frame.f_lineno, code.co_filename)
     except (ValueError, AttributeError):
         return ("", "", 0, "")
 
@@ -1667,7 +1674,11 @@ class Logger:
         # extras; only filterless serialized sinks get the typed JSON dict.
         if serialize and filter is None:
             return self._inner.add_serialized_callback(callback_wrapper, resolved_level)
-        return self._inner.add_callback(callback_wrapper, resolved_level)
+        return self._inner.add_callback(
+            callback_wrapper,
+            resolved_level,
+            file_path=not serialize and parsed_template.needs_file_path,
+        )
 
     def remove(self, handler_id: int | None = None) -> bool:
         """Remove a handler by ID, or all handlers if None.

@@ -45,7 +45,7 @@ logger.info("User {user} did {}", "login", user="alice", request_id="r1")
 handler_id = logger.add(
     sink,                    # File path (str or Path), sys.stdout/stderr, or callable
     level=None,              # Minimum level (LogLevel or str)
-    format=None,             # Format string
+    format=None,             # Format string (fields: docs/guide/formatting.md)
     rotation=None,           # "500 MB", "daily", "hourly", timedelta, time (files only)
     retention=None,          # "10 days" or count (int) (files only)
     compression=False,       # Gzip compression (files only)
@@ -66,6 +66,15 @@ logger.add(lambda msg: print(msg))
 logger.add(my_function, format="{level} | {message}")
 logger.add(send_to_slack, level="ERROR", serialize=True)
 # Coroutine functions (async def) are rejected with TypeError
+
+# Format fields beyond {time}/{level}/{message}: loguru time specs, dotted
+# attributes, and the exception placed in the format (not appended again)
+logger.add(
+    "app.log",
+    format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level.icon} {level.name:<8} | "
+    "{thread.name} {file.path}:{line} - {message}\n{exception}",
+)
+# An invalid time spec raises ValueError: logger.add("x.log", format="{time:SSSSSSS}")
 
 logger.remove(handler_id)    # Remove specific
 logger.remove()              # Remove all

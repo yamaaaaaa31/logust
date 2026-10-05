@@ -2,6 +2,7 @@ mod format;
 mod handler;
 mod level;
 mod sink;
+mod time_format;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -63,6 +64,8 @@ pub struct FormattedSinkRequirements {
     pub needs_process: bool,
     pub needs_message: bool,
     pub needs_nested_extra: bool,
+    /// `{file.path}`: add `file_path` to the dict
+    pub needs_file_path: bool,
     /// Keys referenced as `extra[key]` in the template (empty if none).
     pub extra_keys: Vec<String>,
 }
@@ -72,9 +75,9 @@ impl FormattedSinkRequirements {
         req: &Bound<'_, PyTuple>,
         extra_keys: &Bound<'_, PyTuple>,
     ) -> PyResult<Self> {
-        if req.len() != 11 {
+        if req.len() != 12 {
             return Err(pyo3::exceptions::PyValueError::new_err(
-                "requirements tuple must have 11 bool fields",
+                "requirements tuple must have 12 bool fields",
             ));
         }
         let mut keys = Vec::with_capacity(extra_keys.len());
@@ -93,6 +96,7 @@ impl FormattedSinkRequirements {
             needs_process: req.get_item(8)?.extract()?,
             needs_message: req.get_item(9)?.extract()?,
             needs_nested_extra: req.get_item(10)?.extract()?,
+            needs_file_path: req.get_item(11)?.extract()?,
             extra_keys: keys,
         })
     }
@@ -102,7 +106,8 @@ impl FormattedSinkRequirements {
             needs_caller: self.needs_name
                 || self.needs_function
                 || self.needs_line
-                || self.needs_file,
+                || self.needs_file
+                || self.needs_file_path,
             needs_thread: self.needs_thread,
             needs_process: self.needs_process,
             needs_time: self.needs_timestamp,
@@ -123,7 +128,10 @@ enum RecordExtraView {
 /// dict whose nested `extra` mapping uses typed JSON values; formatted sinks receive
 /// a minimal dict for templates.
 pub enum CallbackKind {
-    Raw,
+    /// `file_path`: add `file_path` to the record dict (`{file.path}` in a filtered sink)
+    Raw {
+        file_path: bool,
+    },
     Serialized,
     FormattedLight(FormattedSinkRequirements),
 }
@@ -156,7 +164,7 @@ fn merge_token_requirements_for_emit_no(
             continue;
         }
         match &entry.kind {
-            CallbackKind::Raw | CallbackKind::Serialized => {
+            CallbackKind::Raw { .. } | CallbackKind::Serialized => {
                 any_raw = true;
             }
             CallbackKind::FormattedLight(req) => {
@@ -255,7 +263,8 @@ impl PyLogger {
     ) -> PyResult<u64> {
         let level = level.unwrap_or(LogLevel::Debug);
         let serialize = serialize.unwrap_or(false);
-        let format_config = FormatConfig::new(format, serialize);
+        let format_config = FormatConfig::try_new(format, serialize)
+            .map_err(pyo3::exceptions::PyValueError::new_err)?;
 
         let (time_rotation, max_size) = rotation
             .as_ref()
@@ -309,7 +318,8 @@ impl PyLogger {
         let level = level.unwrap_or(LogLevel::Debug);
         let serialize = serialize.unwrap_or(false);
         let colorize = colorize.unwrap_or(!serialize);
-        let format_config = FormatConfig::new(format, serialize);
+        let format_config = FormatConfig::try_new(format, serialize)
+            .map_err(pyo3::exceptions::PyValueError::new_err)?;
         if stream != "stdout" && stream != "stderr" {
             return Err(pyo3::exceptions::PyValueError::new_err(
                 "stream must be 'stdout' or 'stderr'",
@@ -564,14 +574,16 @@ impl PyLogger {
     }
 
     /// Add a callback to receive full log record dicts (raw callback).
-    #[pyo3(signature = (callback, level=None))]
-    fn add_callback(&self, callback: Py<PyAny>, level: Option<LogLevel>) -> u64 {
+    ///
+    /// `file_path` adds the caller's source path as `file_path` to the dicts.
+    #[pyo3(signature = (callback, level=None, file_path=false))]
+    fn add_callback(&self, callback: Py<PyAny>, level: Option<LogLevel>, file_path: bool) -> u64 {
         let id = handler::next_handler_id();
         let entry = CallbackEntry {
             id,
             callback,
             level: level.unwrap_or(LogLevel::Debug),
-            kind: CallbackKind::Raw,
+            kind: CallbackKind::Raw { file_path },
         };
         self.callbacks.write().push(entry);
         self.update_min_level_cache();
@@ -1089,21 +1101,34 @@ impl PyLogger {
 
         if needs_gil {
             Python::attach(|py| {
-                let need_text_full_dict = has_eligible_filtered_handler
-                    || callbacks
-                        .iter()
-                        .any(|e| level >= e.level && matches!(&e.kind, CallbackKind::Raw));
+                let mut need_text_full_dict = has_eligible_filtered_handler;
+                let mut with_file_path = false;
+                for e in callbacks.iter() {
+                    if level >= e.level
+                        && let CallbackKind::Raw { file_path } = e.kind
+                    {
+                        need_text_full_dict = true;
+                        with_file_path |= file_path;
+                    }
+                }
                 let need_json_full_dict = callbacks
                     .iter()
                     .any(|e| level >= e.level && matches!(&e.kind, CallbackKind::Serialized));
 
                 let shared_text_full: Option<Bound<'_, PyDict>> = if need_text_full_dict {
-                    Self::build_record_dict(py, level, &record, RecordExtraView::Text).ok()
+                    Self::build_record_dict(
+                        py,
+                        level,
+                        &record,
+                        RecordExtraView::Text,
+                        with_file_path,
+                    )
+                    .ok()
                 } else {
                     None
                 };
                 let shared_json_full: Option<Bound<'_, PyDict>> = if need_json_full_dict {
-                    Self::build_record_dict(py, level, &record, RecordExtraView::Json).ok()
+                    Self::build_record_dict(py, level, &record, RecordExtraView::Json, false).ok()
                 } else {
                     None
                 };
@@ -1113,7 +1138,7 @@ impl PyLogger {
                         continue;
                     }
                     match &entry.kind {
-                        CallbackKind::Raw => {
+                        CallbackKind::Raw { .. } => {
                             if let Some(full) = shared_text_full.as_ref() {
                                 let _ = entry.callback.call1(py, (full.clone(),));
                             }
@@ -1164,6 +1189,7 @@ impl PyLogger {
         level: LogLevel,
         record: &LogRecord,
         extra_view: RecordExtraView,
+        with_file_path: bool,
     ) -> PyResult<Bound<'py, PyDict>> {
         let dict = PyDict::new(py);
 
@@ -1184,7 +1210,10 @@ impl PyLogger {
         let _ = dict.set_item(intern!(py, "name"), &record.caller.name);
         let _ = dict.set_item(intern!(py, "function"), &record.caller.function);
         let _ = dict.set_item(intern!(py, "line"), record.caller.line);
-        let _ = dict.set_item(intern!(py, "file"), &record.caller.file);
+        let _ = dict.set_item(intern!(py, "file"), record.caller.file_name());
+        if with_file_path {
+            let _ = dict.set_item(intern!(py, "file_path"), &record.caller.file);
+        }
 
         // Thread/process info
         let _ = dict.set_item(intern!(py, "thread_name"), &record.thread.name);
@@ -1255,7 +1284,10 @@ impl PyLogger {
             let _ = dict.set_item(intern!(py, "line"), record.caller.line);
         }
         if req.needs_file {
-            let _ = dict.set_item(intern!(py, "file"), &record.caller.file);
+            let _ = dict.set_item(intern!(py, "file"), record.caller.file_name());
+        }
+        if req.needs_file_path {
+            let _ = dict.set_item(intern!(py, "file_path"), &record.caller.file);
         }
         if req.needs_elapsed {
             let _ = dict.set_item(
@@ -1375,13 +1407,28 @@ impl PyLogger {
                     level_no >= e.level as u32 && matches!(&e.kind, CallbackKind::Serialized)
                 });
 
+                let with_file_path = need_text_full_dict
+                    && callbacks.iter().any(|e| {
+                        level_no >= e.level as u32
+                            && match &e.kind {
+                                CallbackKind::Raw { file_path } => *file_path,
+                                CallbackKind::FormattedLight(req) => req.needs_file_path,
+                                CallbackKind::Serialized => false,
+                            }
+                    });
                 let shared_text_full: Option<Bound<'_, PyDict>> = if need_text_full_dict {
-                    Self::build_custom_record_dict(py, &record, RecordExtraView::Text).ok()
+                    Self::build_custom_record_dict(
+                        py,
+                        &record,
+                        RecordExtraView::Text,
+                        with_file_path,
+                    )
+                    .ok()
                 } else {
                     None
                 };
                 let shared_json_full: Option<Bound<'_, PyDict>> = if need_json_full_dict {
-                    Self::build_custom_record_dict(py, &record, RecordExtraView::Json).ok()
+                    Self::build_custom_record_dict(py, &record, RecordExtraView::Json, false).ok()
                 } else {
                     None
                 };
@@ -1429,6 +1476,7 @@ impl PyLogger {
         py: Python<'py>,
         record: &LogRecord,
         extra_view: RecordExtraView,
+        with_file_path: bool,
     ) -> PyResult<Bound<'py, PyDict>> {
         let dict = PyDict::new(py);
         // Using intern!() to cache key strings for better performance
@@ -1447,7 +1495,10 @@ impl PyLogger {
         let _ = dict.set_item(intern!(py, "name"), &record.caller.name);
         let _ = dict.set_item(intern!(py, "function"), &record.caller.function);
         let _ = dict.set_item(intern!(py, "line"), record.caller.line);
-        let _ = dict.set_item(intern!(py, "file"), &record.caller.file);
+        let _ = dict.set_item(intern!(py, "file"), record.caller.file_name());
+        if with_file_path {
+            let _ = dict.set_item(intern!(py, "file_path"), &record.caller.file);
+        }
         let _ = dict.set_item(intern!(py, "thread_name"), &record.thread.name);
         let _ = dict.set_item(intern!(py, "thread_id"), record.thread.id);
         let _ = dict.set_item(intern!(py, "process_name"), &record.process.name);
@@ -1505,6 +1556,37 @@ fn level_style(level: &str) -> String {
     format::level_style(level)
 }
 
+/// `(no, icon)` of the level `level` (custom first, then built-in), or None if unknown.
+#[pyfunction]
+fn level_details(level: &str) -> Option<(u32, String)> {
+    get_level_info(level).map(|info| (info.no, info.icon.unwrap_or_default()))
+}
+
+/// A compiled loguru `{time:<spec>}` format, for callable sink templates.
+#[pyclass(frozen)]
+struct TimeFormatter {
+    spec: time_format::TimeSpec,
+}
+
+#[pymethods]
+impl TimeFormatter {
+    /// Compile `spec`; raises ValueError if it is invalid.
+    #[new]
+    fn new(spec: &str) -> PyResult<Self> {
+        let spec =
+            time_format::TimeSpec::parse(spec).map_err(pyo3::exceptions::PyValueError::new_err)?;
+        Ok(Self { spec })
+    }
+
+    /// Format an RFC 3339 timestamp (as found in record dicts); unparsable input is returned as is.
+    fn format_rfc3339(&self, timestamp: &str) -> String {
+        match chrono::DateTime::parse_from_rfc3339(timestamp) {
+            Ok(dt) => self.spec.format(&dt),
+            Err(_) => timestamp.to_string(),
+        }
+    }
+}
+
 #[pymodule]
 fn _logust(py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<LogLevel>()?;
@@ -1517,6 +1599,8 @@ fn _logust(py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(colorize_level, m)?)?;
     m.add_function(wrap_pyfunction!(split_format_markup, m)?)?;
     m.add_function(wrap_pyfunction!(level_style, m)?)?;
+    m.add_function(wrap_pyfunction!(level_details, m)?)?;
+    m.add_class::<TimeFormatter>()?;
 
     let default_logger = Py::new(py, PyLogger::new(None))?;
     m.add("logger", default_logger)?;

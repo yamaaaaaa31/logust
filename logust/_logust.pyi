@@ -132,8 +132,12 @@ class PyLogger:
         self,
         callback: Callable[[dict[str, Any]], None],
         level: LogLevel | None = None,
+        file_path: bool = False,
     ) -> int:
-        """Add a callback to receive log records."""
+        """Add a callback to receive log records.
+
+        file_path adds the caller's source file path as ``file_path`` to the records.
+        """
         ...
 
     def add_serialized_callback(
@@ -402,5 +406,20 @@ def split_format_markup(template: str) -> list[tuple[str, str]]:
 def level_style(level: str) -> str:
     """ANSI prefix that styles text in the bold color of the named level."""
     ...
+
+def level_details(level: str) -> tuple[int, str] | None:
+    """(no, icon) of the named level (icon is "" if it has none), or None if unknown."""
+    ...
+
+class TimeFormatter:
+    """A compiled loguru ``{time:<spec>}`` format."""
+
+    def __init__(self, spec: str) -> None:
+        """Compile spec; raises ValueError if it is invalid."""
+        ...
+
+    def format_rfc3339(self, timestamp: str) -> str:
+        """Format an RFC 3339 timestamp; unparsable input is returned unchanged."""
+        ...
 
 logger: PyLogger

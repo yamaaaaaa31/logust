@@ -55,13 +55,77 @@ logger.info("{} by {user}", "login", user="alice", request_id="r1")
 | Token | Description | Example |
 |-------|-------------|---------|
 | `{time}` | Timestamp | `2025-12-24 12:00:00.123` |
-| `{level}` | Log level name | `INFO` |
-| `{level:<8}` | Aligned level (width 8) | `INFO    ` |
+| `{time:<spec>}` | Timestamp in a [custom format](#time-formatting) | `{time:HH:mm:ss}` → `12:00:00` |
+| `{level}`, `{level.name}` | Log level name | `INFO` |
+| `{level:<8}`, `{level.name:<8}` | Aligned level (width 8) | `INFO    ` |
+| `{level.no}` | Numeric severity | `20` |
+| `{level.icon}` | Level icon ([defaults](levels.md#level-icons)) | `ℹ️` |
 | `{message}` | Log message | `Hello, world!` |
-| `{name}` | Module/logger name | `__main__`, `myapp.utils` |
+| `{name}`, `{module}` | Module/logger name | `__main__`, `myapp.utils` |
 | `{function}` | Function name | `process_request` |
 | `{line}` | Line number | `42` |
+| `{file}`, `{file.name}` | Source file name | `handler.py` |
+| `{file.path}` | Source file path | `/srv/myapp/handler.py` |
+| `{thread}` | Thread name and id | `MainThread:8601235520` |
+| `{thread.name}`, `{thread.id}` | Thread name / id | `MainThread`, `8601235520` |
+| `{process}` | Process name and id | `MainProcess:4242` |
+| `{process.name}`, `{process.id}` | Process name / id | `MainProcess`, `4242` |
+| `{elapsed}` | Time since logger start | `00:01:23.456` |
+| `{exception}` | Formatted traceback (empty without one), see [below](#exceptions-in-the-format) | |
 | `{extra[key]}` | Extra context fields | `{extra[user_id]}` |
+
+Placeholders that are not in this table (for example `{level.color}`) are written as is.
+
+Logust only collects what the format uses: caller info for `{name}`, `{function}`, `{line}`,
+and `{file*}`, thread info for `{thread*}`, process info for `{process*}`.
+
+### Time formatting
+
+`{time:<spec>}` takes [loguru's time tokens](https://loguru.readthedocs.io/en/stable/api/logger.html#time):
+
+```python
+logger.add("app.log", format="{time:YYYY-MM-DD HH:mm:ss.SSS ZZ} | {level} | {message}")
+# 2025-12-24 12:00:00.123 +0900 | INFO | Hello
+```
+
+| Token | Output | | Token | Output |
+|-------|--------|-|-------|--------|
+| `YYYY` / `YY` | `2025` / `25` | | `HH` / `H` | Hour `09` / `9` |
+| `Q` | Quarter `1`-`4` | | `hh` / `h` | 12-hour clock `09` / `9` |
+| `MMMM` / `MMM` | `December` / `Dec` | | `mm` / `m` | Minute `05` / `5` |
+| `MM` / `M` | `03` / `3` | | `ss` / `s` | Second `07` / `7` |
+| `DDDD` / `DDD` | Day of year `058` / `58` | | `S` … `SSSSSS` | Fraction of second, 1 to 6 digits |
+| `DD` / `D` | Day of month `05` / `5` | | `A` | `AM` / `PM` |
+| `dddd` / `ddd` | `Monday` / `Mon` | | `Z` / `ZZ` | UTC offset `+09:00` / `+0900` |
+| `d` / `E` | Weekday, Monday `0` / `1` | | `zz` | Time zone name (see below) |
+| `X` / `x` | Unix time in seconds / microseconds | | | |
+
+- Wrap a token in brackets to write it literally: `{time:[YYYY]}` gives `YYYY`.
+- End the spec with `!UTC` to convert to UTC first: `{time:HH:mm!UTC}`.
+- A spec containing `%` is a strftime format: `{time:%Y-%m-%d %H:%M:%S.%f}`.
+- `{time:}` (empty spec) gives ISO 8601: `2025-12-24T12:00:00.123456+0900`.
+- An invalid spec (more than six `S`, an unknown `%` directive) raises `ValueError` in `add()`.
+
+Plain `{time}` is unchanged: `2025-12-24 12:00:00.123` in file and console sinks, the
+record's RFC 3339 timestamp in callable sinks. `{time:<spec>}` gives the same output in all of them.
+
+!!! note "Differences from loguru"
+    `zz` gives `UTC` with `!UTC`, otherwise the UTC offset (`+09:00`), since Logust has
+    no time zone abbreviation for local time. Month and day names are always English.
+
+### Exceptions in the format
+
+Without `{exception}`, a traceback is appended on its own line after the formatted
+message. With `{exception}`, the traceback is written at that position and nothing
+is appended, so it is never printed twice:
+
+```python
+logger.add("app.log", format="{time} | {level} | {message}\n{exception}")
+```
+
+`{exception}` is empty for records without an exception. loguru appends
+`"\n{exception}"` to every string format, so a loguru format with `{exception}`
+prints the traceback twice; Logust prints it once.
 
 ### Caller information
 
