@@ -155,8 +155,9 @@ pub fn write_default_time(dt: &DateTime<Local>, out: &mut String) {
         c0, c1, y0, y1, b'-', mo0, mo1, b'-', d0, d1, b' ', h0, h1, b':', mi0, mi1, b':', s0, s1,
         b'.', ms0, ms1, ms2,
     ];
-    // Only ASCII digits and punctuation: always valid UTF-8
-    out.push_str(std::str::from_utf8(&buf).expect("timestamp is ASCII"));
+    // SAFETY: `buf` holds only ASCII digits and punctuation, which is valid UTF-8
+    // (`from_utf8` would validate the 23 bytes on every record)
+    out.push_str(unsafe { std::str::from_utf8_unchecked(&buf) });
 }
 
 /// The default `{time}` rendering of `dt` as a new string
@@ -1063,7 +1064,8 @@ mod tests {
             Some("red".to_string()),
             None,
         );
-        let record = LogRecord::with_custom_level(info, "m".into(), empty_context(), None);
+        let record =
+            LogRecord::with_custom_level(Arc::new(info), "m".into(), empty_context(), None);
         let config = FormatConfig::new(Some("{level:<8}".to_string()), false);
         let out = config.format_record(&record, false);
         let expected = format!("{:<8}", "VERYLONGCUSTOMLEVEL");
@@ -1245,11 +1247,13 @@ mod tests {
         assert!(config.requirements().needs_level);
 
         let info = LevelInfo::new("NOTICE".into(), 35, None, Some("!".into()));
-        let record = LogRecord::with_custom_level(info, "m".into(), empty_context(), None);
+        let record =
+            LogRecord::with_custom_level(Arc::new(info), "m".into(), empty_context(), None);
         assert_eq!(config.format_record(&record, false), "NOTICE|35|!|m");
 
         let info = LevelInfo::new("PLAIN".into(), 36, None, None);
-        let record = LogRecord::with_custom_level(info, "m".into(), empty_context(), None);
+        let record =
+            LogRecord::with_custom_level(Arc::new(info), "m".into(), empty_context(), None);
         assert_eq!(config.format_record(&record, false), "PLAIN|36||m");
 
         let config = FormatConfig::new(Some("{level.name:<8}|".into()), false);

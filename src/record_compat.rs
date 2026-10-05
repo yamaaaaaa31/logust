@@ -198,7 +198,7 @@ fn level_details(name: &str, record: &LogRecord) -> (u32, String) {
     match record.level_info.as_ref() {
         Some(info) => (info.no, info.icon.clone().unwrap_or_default()),
         None => get_level_info(name).map_or((record.level as u32, String::new()), |info| {
-            (info.no, info.icon.unwrap_or_default())
+            (info.no, info.icon.clone().unwrap_or_default())
         }),
     }
 }
@@ -366,7 +366,7 @@ pub fn set_compat_fields(
 pub fn record_time_fields(
     py: Python<'_>,
 ) -> PyResult<(Bound<'_, PyAny>, String, Bound<'_, PyAny>)> {
-    let now = Local::now();
+    let now = crate::clock::local_now();
     let offset = now.offset().fix().local_minus_utc();
     let cached = caches()
         .tz
