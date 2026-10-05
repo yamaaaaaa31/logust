@@ -1331,17 +1331,12 @@ impl PyLogger {
             Python::attach(|py| {
                 let mut need_text_full_dict = has_eligible_filtered_handler;
                 let mut with_file_path = false;
-                let mut with_extra_repr = false;
                 for e in callbacks.iter() {
                     if level >= e.level
-                        && let CallbackKind::Raw {
-                            file_path,
-                            extra_repr,
-                        } = e.kind
+                        && let CallbackKind::Raw { file_path, .. } = e.kind
                     {
                         need_text_full_dict = true;
                         with_file_path |= file_path;
-                        with_extra_repr |= extra_repr;
                     }
                 }
                 let need_json_full_dict = callbacks
@@ -1356,7 +1351,6 @@ impl PyLogger {
                         &record,
                         RecordExtraView::Text,
                         with_file_path,
-                        with_extra_repr,
                         true,
                     )
                     .ok()
@@ -1364,16 +1358,8 @@ impl PyLogger {
                     None
                 };
                 let shared_json_full: Option<Bound<'_, PyDict>> = if need_json_full_dict {
-                    Self::build_record_dict(
-                        py,
-                        level,
-                        &record,
-                        RecordExtraView::Json,
-                        false,
-                        false,
-                        false,
-                    )
-                    .ok()
+                    Self::build_record_dict(py, level, &record, RecordExtraView::Json, false, false)
+                        .ok()
                 } else {
                     None
                 };
@@ -1399,16 +1385,16 @@ impl PyLogger {
                             rec,
                             view,
                             with_file_path,
-                            with_extra_repr,
                             // Raw callbacks get loguru-shaped values, serialized sinks plain ones
                             !matches!(entry.kind, CallbackKind::Serialized),
                         )
                         .ok()
                     };
                     match &entry.kind {
-                        CallbackKind::Raw { .. } => {
+                        CallbackKind::Raw { extra_repr, .. } => {
                             if let Some(full) = own_full.as_ref().or(shared_text_full.as_ref())
-                                && let Err(err) = entry.callback.call1(py, (full.clone(),))
+                                && let Err(err) =
+                                    Self::call_full(py, &entry.callback, full, *extra_repr, rec)
                             {
                                 entry.on_error(err, &mut first_error);
                             }
@@ -1463,6 +1449,28 @@ impl PyLogger {
         first_error.map_or(Ok(()), Err)
     }
 
+    /// Call a sink with a full record dict. Logust's own sinks that render
+    /// `{extra}` get a copy with `extra_repr` added, so the shared dict that user
+    /// filters and callbacks see never carries that internal key.
+    fn call_full(
+        py: Python<'_>,
+        callback: &Py<PyAny>,
+        full: &Bound<'_, PyDict>,
+        extra_repr: bool,
+        record: &LogRecord,
+    ) -> PyResult<()> {
+        if extra_repr {
+            let copy = full.copy()?;
+            let mut rendered = String::new();
+            write_extra_repr(&record.extra, &mut rendered);
+            copy.set_item(intern!(py, "extra_repr"), rendered)?;
+            callback.call1(py, (copy,))?;
+        } else {
+            callback.call1(py, (full.clone(),))?;
+        }
+        Ok(())
+    }
+
     /// Build a Python dict from log record for callbacks/filters
     #[inline]
     fn build_record_dict<'py>(
@@ -1471,7 +1479,6 @@ impl PyLogger {
         record: &LogRecord,
         extra_view: RecordExtraView,
         with_file_path: bool,
-        with_extra_repr: bool,
         compat: bool,
     ) -> PyResult<Bound<'py, PyDict>> {
         let dict = PyDict::new(py);
@@ -1510,7 +1517,7 @@ impl PyLogger {
         let _ = dict.set_item(intern!(py, "extra"), extra_dict);
 
         Self::set_exception(py, &dict, record);
-        Self::set_record_options(py, &dict, record, with_extra_repr);
+        Self::set_record_options(py, &dict, record, false);
 
         Ok(dict)
     }
@@ -1752,15 +1759,6 @@ impl PyLogger {
                                 CallbackKind::Serialized => false,
                             }
                     });
-                let with_extra_repr = need_text_full_dict
-                    && callbacks.iter().any(|e| {
-                        level_no >= e.level as u32
-                            && match &e.kind {
-                                CallbackKind::Raw { extra_repr, .. } => *extra_repr,
-                                CallbackKind::FormattedLight(req) => req.needs_extra_repr,
-                                CallbackKind::Serialized => false,
-                            }
-                    });
                 // Formatted callable sinks also read this dict for custom levels, but
                 // only filters and raw callbacks need the loguru-shaped values.
                 let compat = has_eligible_filtered_handler
@@ -1773,7 +1771,6 @@ impl PyLogger {
                         &record,
                         RecordExtraView::Text,
                         with_file_path,
-                        with_extra_repr,
                         compat,
                     )
                     .ok()
@@ -1781,15 +1778,8 @@ impl PyLogger {
                     None
                 };
                 let shared_json_full: Option<Bound<'_, PyDict>> = if need_json_full_dict {
-                    Self::build_custom_record_dict(
-                        py,
-                        &record,
-                        RecordExtraView::Json,
-                        false,
-                        false,
-                        false,
-                    )
-                    .ok()
+                    Self::build_custom_record_dict(py, &record, RecordExtraView::Json, false, false)
+                        .ok()
                 } else {
                     None
                 };
@@ -1812,13 +1802,18 @@ impl PyLogger {
                                 rec,
                                 view,
                                 with_file_path,
-                                with_extra_repr,
                                 compat && !matches!(entry.kind, CallbackKind::Serialized),
                             )
                             .ok()
                         };
+                        let extra_repr = match &entry.kind {
+                            CallbackKind::Raw { extra_repr, .. } => *extra_repr,
+                            CallbackKind::FormattedLight(req) => req.needs_extra_repr,
+                            CallbackKind::Serialized => false,
+                        };
                         if let Some(full) = own_full.as_ref().or(shared)
-                            && let Err(err) = entry.callback.call1(py, (full.clone(),))
+                            && let Err(err) =
+                                Self::call_full(py, &entry.callback, full, extra_repr, rec)
                         {
                             entry.on_error(err, &mut first_error);
                         }
@@ -1865,7 +1860,6 @@ impl PyLogger {
         record: &LogRecord,
         extra_view: RecordExtraView,
         with_file_path: bool,
-        with_extra_repr: bool,
         compat: bool,
     ) -> PyResult<Bound<'py, PyDict>> {
         let dict = PyDict::new(py);
@@ -1899,7 +1893,7 @@ impl PyLogger {
         let _ = dict.set_item(intern!(py, "extra"), extra_dict);
 
         Self::set_exception(py, &dict, record);
-        Self::set_record_options(py, &dict, record, with_extra_repr);
+        Self::set_record_options(py, &dict, record, false);
         Ok(dict)
     }
 }

@@ -135,3 +135,21 @@ def test_template_falls_back_without_extra_repr() -> None:
 def test_requirements_flag() -> None:
     assert ParsedCallableTemplate("{extra}").lightweight_requirements_for_rust()[12] is True
     assert ParsedCallableTemplate("{extra[a]}").lightweight_requirements_for_rust()[12] is False
+
+
+@pytest.mark.parametrize("level", ["info", "NOTICE_EXTRA"])
+def test_extra_repr_stays_out_of_user_records(tmp_path: Path, level: str) -> None:
+    logger = _logger()
+    if level != "info":
+        logger.level(level, no=22)
+    out: list[str] = []
+    seen: list[dict[str, Any]] = []
+    logger.add(out.append, format="{message} {extra}", filter=lambda r: True)
+    logger.add(tmp_path / "f.log", filter=lambda r: seen.append(dict(r)) or True)
+    logger.add_callback(seen.append)
+
+    logger.bind(user="alice").log(level.upper(), "hi")
+
+    assert out == ["hi {'user': 'alice'}"]
+    assert seen
+    assert all("extra_repr" not in record for record in seen)
