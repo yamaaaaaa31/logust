@@ -122,15 +122,26 @@ def _collect_format_roots(format_string: str, consumed: set[str]) -> None:
             _collect_format_roots(format_spec, consumed)
 
 
-@functools.lru_cache(maxsize=1024)
-def _format_roots(format_string: str) -> frozenset[str]:
-    """Root kwarg names referenced by a format string.
-
-    Cached because messages are usually literals reused on every call.
-    """
+def _parse_format_roots(format_string: str) -> frozenset[str]:
+    """Root kwarg names referenced by a format string."""
     consumed: set[str] = set()
     _collect_format_roots(format_string, consumed)
     return frozenset(consumed)
+
+
+# Messages are usually short literals reused on every call. Longer ones (request
+# bodies, dumps) are parsed each time so the cache never pins large strings:
+# at most _FORMAT_ROOTS_CACHE_SIZE keys of _FORMAT_ROOTS_MAX_LEN characters.
+_FORMAT_ROOTS_MAX_LEN = 512
+_FORMAT_ROOTS_CACHE_SIZE = 1024
+_cached_format_roots = functools.lru_cache(maxsize=_FORMAT_ROOTS_CACHE_SIZE)(_parse_format_roots)
+
+
+def _format_roots(format_string: str) -> frozenset[str]:
+    """Root kwarg names referenced by a format string, cached for short ones."""
+    if len(format_string) <= _FORMAT_ROOTS_MAX_LEN:
+        return _cached_format_roots(format_string)
+    return _parse_format_roots(format_string)
 
 
 def _split_kwargs_for_format(
