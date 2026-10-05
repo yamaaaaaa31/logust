@@ -31,7 +31,7 @@ def _render_file(tmp_path: Path, fmt: str, emit: str = "info", message: str = "m
     logger.add(str(log_file), format=fmt, level="TRACE")
     getattr(logger, emit)(message)
     logger.complete()
-    return log_file.read_text().rstrip("\n")
+    return log_file.read_text(encoding="utf-8").rstrip("\n")
 
 
 def _render_callable(fmt: str, emit: str = "info", message: str = "msg", **add: object) -> str:
@@ -108,7 +108,7 @@ class TestLevelFields:
         logger.add(out.append, format=fmt)
         logger.log("NOTICE_ICON", "m")
         logger.complete()
-        assert log_file.read_text().strip() == "NOTICE_ICON|33|@|m"
+        assert log_file.read_text(encoding="utf-8").strip() == "NOTICE_ICON|33|@|m"
         assert out == ["NOTICE_ICON|33|@|m"]
 
     def test_callable_matches_file(self, tmp_path: Path) -> None:
@@ -132,7 +132,7 @@ class TestExceptionField:
         logger.add(out.append, format=fmt)
         self._emit(logger)
         logger.complete()
-        text = log_file.read_text()
+        text = log_file.read_text(encoding="utf-8")
         assert text.count("ValueError: boom") == 1
         assert text.startswith("failed [Traceback")
         assert text.rstrip("\n").endswith("] end")
@@ -148,7 +148,7 @@ class TestExceptionField:
         logger.add(str(log_file), format="{message}")
         self._emit(logger)
         logger.complete()
-        assert log_file.read_text().startswith("failed\nTraceback")
+        assert log_file.read_text(encoding="utf-8").startswith("failed\nTraceback")
 
 
 class TestDottedFields:
@@ -226,7 +226,7 @@ class TestSerializeUnchanged:
         logger.add(str(log_file), format="{time:YYYY} {level.icon} {file.path}", serialize=True)
         logger.info("m")
         logger.complete()
-        record = json.loads(log_file.read_text())
+        record = json.loads(log_file.read_text(encoding="utf-8"))
         assert set(record) == {"time", "level", "message", "name", "function", "line"}
         assert re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}", record["time"])
 
