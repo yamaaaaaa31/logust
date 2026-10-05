@@ -647,6 +647,37 @@ class TestMultiprocessingFork:
             "FileSink::drop likely panicked on the inherited JoinHandle"
         )
 
+    def test_child_creates_enqueue_sink_after_parent_used_one(
+        self, tmp_path: Path
+    ) -> None:
+        """A child forked after the parent ran an enqueue=True writer can add its own.
+
+        On macOS std's thread parking uses libdispatch, which traps in a fork()
+        child once the parent has used it; the child's sink must write
+        synchronously instead of crashing with SIGTRAP.
+        """
+        parent = Logger(PyLogger(LogLevel.Trace))
+        parent.disable()
+        parent_id = parent.add(tmp_path / "parent.log", enqueue=True)
+        parent.info("parent")
+        parent.complete()
+        parent.remove(parent_id)
+
+        log_file = tmp_path / "child.log"
+        ctx = multiprocessing.get_context("fork")
+        p = ctx.Process(target=_child_remove, args=(str(log_file),))
+        p.start()
+        exitcode = _join_process_or_fail(
+            p,
+            context="child enqueue sink likely trapped in libdispatch after fork",
+        )
+
+        assert exitcode == 0, (
+            f"child exited with {exitcode} (expected 0); "
+            "enqueue sink in a forked child likely trapped (SIGTRAP)"
+        )
+        assert "from child" in log_file.read_text(encoding="utf-8")
+
     def test_child_drops_inherited_enqueue_sink(self, tmp_path: Path) -> None:
         """Parent creates an enqueue=True sink, forks, child removes handlers."""
         import logust

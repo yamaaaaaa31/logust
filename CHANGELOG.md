@@ -28,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Caller file path is collected without extra cost**: the Python side now passes the code object's path and Rust derives the basename, which also makes formats with caller info slightly faster. `{file}` and the record dicts' `file` key are still the basename.
 
 ### Fixed
+- **`enqueue=True` in a forked child on macOS**: a child forked after the parent had run an `enqueue=True` sink crashed with SIGTRAP when it added its own `enqueue=True` sink, because Rust's thread parking on macOS uses libdispatch, which traps after fork(). Sinks created in a forked child on macOS now write synchronously, as inherited sinks already did.
 - **Coroutine function sinks are rejected**: `add()` raises `TypeError` for `async def` sinks (and async callables) instead of accepting them and never awaiting the coroutine.
 - **`opt()` formats the message once**: `logger.opt().info("{} {user}", value, user="bob")` no longer raises `KeyError`, and braces inside a positional value are no longer re-interpreted as placeholders.
 - **`{time:<spec>}` follows the spec**: loguru time tokens (`YYYY-MM-DD HH:mm:ss.SSS`, `A`, `ZZ`, `[escapes]`, `!UTC`, ...) and `%` strftime specs were ignored: file and console sinks wrote `{time:...}` literally and callable sinks wrote the full RFC 3339 timestamp. The spec is compiled once when the handler is added, and an invalid spec raises `ValueError`. Plain `{time}` is unchanged.
