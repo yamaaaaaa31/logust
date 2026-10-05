@@ -244,14 +244,19 @@ class PyLogger:
         """Get the current number of handlers (excludes callbacks)."""
         ...
 
-    def set_fast_collect(self, table: int) -> None:
+    def set_fast_collect(self, table: int, generation: int, owner: int) -> bool:
         """What ``log_fast`` collects per built-in level (one nibble each, slot order
         TRACE..CRITICAL): bit 0 caller, bit 1 thread, bit 2 process, bit 3 "use the
-        Python path". Rust resets the table whenever handlers or callbacks change.
+        Python path". Stored only if ``generation`` is still current (returns
+        False otherwise); ``owner`` is the Logger family the table belongs to.
         """
         ...
 
-    def log_fast(self, level_no: int, message: object, depth: int, /) -> bool:
+    def invalidate_fast_collect(self) -> int:
+        """Reset the ``log_fast`` table and return its new generation."""
+        ...
+
+    def log_fast(self, level_no: int, message: object, depth: int, owner: int, /) -> bool:
         """Log ``message`` at built-in level ``level_no`` from the caller ``depth``
         frames above the calling Python frame, collecting caller/thread/process
         info in Rust. Returns False (without logging) when the Python path must

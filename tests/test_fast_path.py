@@ -372,3 +372,72 @@ class TestRawRecords:
         pair = Pair(filter=keep)
         pair.run_either(lambda logger: logger.info("filtered"))
         assert len(seen) == 2 and seen[0] == seen[1]
+
+
+class TestSharedState:
+    """The fast-path table stays correct across loggers and threads."""
+
+    def test_second_wrapper_keeps_fixed_caller(self) -> None:
+        out: list[str] = []
+        logger = Logger(PyLogger(LogLevel.Trace))
+        logger.remove()
+        fixed = CallerInfo(name="fixed", function="fn", line=1, file="f.py")
+        logger.add(
+            out.append, format="{name}:{function}:{line}", collect=CollectOptions(caller=fixed)
+        )
+
+        other = Logger(logger._inner)
+        logger.info("after second wrapper")
+        other.add(lambda message: None, format="{message}")
+        logger.info("after the other wrapper added a sink")
+
+        assert out == ["fixed:fn:1", "fixed:fn:1"]
+
+    def test_negative_depth_takes_the_python_path(self) -> None:
+        out: list[str] = []
+        logger = Logger(PyLogger(LogLevel.Trace))
+        logger.remove()
+        logger.add(out.append, format="{message}")
+
+        logger.opt(depth=-5).info("negative")
+
+        assert out == ["negative"]
+
+    def test_concurrent_add_and_remove(self) -> None:
+        logger = Logger(PyLogger(LogLevel.Trace))
+        logger.remove()
+        caller: list[str] = []
+        logger.add(caller.append, format="{name}:{function}:{line}")
+        errors: list[BaseException] = []
+        stop = threading.Event()
+
+        def mutate() -> None:
+            try:
+                while not stop.is_set():
+                    handler_id = logger.add(lambda message: None, format="{message}")
+                    logger.remove(handler_id)
+            except BaseException as exc:
+                errors.append(exc)
+
+        def emit() -> None:
+            try:
+                for _ in range(2000):
+                    logger.info("x")
+            except BaseException as exc:
+                errors.append(exc)
+
+        threads = [threading.Thread(target=mutate) for _ in range(3)]
+        threads += [threading.Thread(target=emit) for _ in range(3)]
+        for thread in threads[3:]:
+            thread.start()
+        for thread in threads[:3]:
+            thread.start()
+        for thread in threads[3:]:
+            thread.join()
+        stop.set()
+        for thread in threads[:3]:
+            thread.join()
+
+        assert errors == []
+        assert len(caller) == 6000
+        assert all(line.startswith(f"{__name__}:emit:") for line in caller)

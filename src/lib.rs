@@ -335,15 +335,21 @@ pub struct PyLogger {
     cached_handler_requirements: Arc<RwLock<TokenRequirements>>,
     /// What [`Self::log_fast`] collects per built-in level, pushed by the Python
     /// `Logger` (see [`Self::set_fast_collect`]); shared with bound loggers like
-    /// the handler list, and reset to [`FAST_COLLECT_INVALID`] whenever the
-    /// handlers or callbacks change so the Python path runs until it is refreshed.
+    /// the handler list. One word holds the table (low 32 bits), the owning
+    /// `Logger` family (bits 32..48) and a generation (bits 48..64) that every
+    /// handler or callback change bumps while resetting the table, so a table
+    /// computed before a change can never be stored after it.
     fast_collect: Arc<AtomicU64>,
     /// Render color markup in messages (false for `opt(colors=False)` loggers)
     message_markup: bool,
 }
 
 /// `fast_collect` table with every level marked unavailable (bit 3 of each nibble).
-const FAST_COLLECT_INVALID: u64 = u64::MAX;
+const FAST_COLLECT_INVALID: u64 = 0xFFFF_FFFF;
+/// Low bits of `fast_collect` holding the table
+const FAST_TABLE_MASK: u64 = 0xFFFF_FFFF;
+const FAST_OWNER_SHIFT: u32 = 32;
+const FAST_GENERATION_SHIFT: u32 = 48;
 /// Nibble bits of the `fast_collect` table, one nibble per [`LogLevel::slot`].
 const FAST_CALLER: u64 = 1;
 const FAST_THREAD: u64 = 2;
@@ -737,8 +743,40 @@ impl PyLogger {
     /// The Python `Logger` computes this from its effective requirements and
     /// calls it whenever they may have changed; any handler or callback change
     /// on this side resets the table so stale flags are never used.
-    fn set_fast_collect(&self, table: u64) {
-        self.fast_collect.store(table, Ordering::Release);
+    ///
+    /// `generation` is what [`Self::fast_collect_generation`] returned before
+    /// the table was computed; the table is dropped (and `False` returned) if a
+    /// handler or callback changed since. `owner` identifies the `Logger` family
+    /// whose requirements the table reflects; [`Self::log_fast`] only uses it for
+    /// calls from that family.
+    fn set_fast_collect(&self, table: u64, generation: u16, owner: u16) -> bool {
+        let generation = u64::from(generation);
+        let new = (generation << FAST_GENERATION_SHIFT)
+            | (u64::from(owner) << FAST_OWNER_SHIFT)
+            | (table & FAST_TABLE_MASK);
+        let mut current = self.fast_collect.load(Ordering::Acquire);
+        loop {
+            if current >> FAST_GENERATION_SHIFT != generation {
+                return false;
+            }
+            match self.fast_collect.compare_exchange_weak(
+                current,
+                new,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => return true,
+                Err(actual) => current = actual,
+            }
+        }
+    }
+
+    /// Reset the `fast_collect` table and return its new generation, to pass to
+    /// [`Self::set_fast_collect`] once the table is recomputed. Called by the
+    /// Python `Logger` after it changes its own handler bookkeeping, so only the
+    /// last refresh, which sees every change, can store its table.
+    fn invalidate_fast_collect(&self) -> u16 {
+        self.reset_fast_collect()
     }
 
     /// Log `message` at built-in level `level_no` from the Python caller
@@ -752,19 +790,28 @@ impl PyLogger {
     /// module activation rules, which is everything else the Python path does.
     ///
     /// Arguments are positional-only to skip keyword matching.
-    #[pyo3(signature = (level_no, message, depth, /))]
+    #[pyo3(signature = (level_no, message, depth, owner, /))]
     fn log_fast(
         &self,
         py: Python<'_>,
         level_no: u32,
         message: &Bound<'_, PyAny>,
-        depth: usize,
+        depth: isize,
+        owner: u16,
     ) -> PyResult<bool> {
         let Some(level) = LogLevel::from_no(level_no) else {
             return Ok(false);
         };
-        let table = self.fast_collect.load(Ordering::Acquire);
-        let flags = (table >> (level.slot() * 4)) & 0xF;
+        // A negative depth points into logust's own frames: the Python path
+        // handles it as before
+        let Ok(depth) = usize::try_from(depth) else {
+            return Ok(false);
+        };
+        let packed = self.fast_collect.load(Ordering::Acquire);
+        if (packed >> FAST_OWNER_SHIFT) as u16 != owner {
+            return Ok(false);
+        }
+        let flags = (packed >> (level.slot() * 4)) & 0xF;
         if flags & FAST_UNAVAILABLE != 0 {
             return Ok(false);
         }
@@ -1372,9 +1419,28 @@ impl PyLogger {
 
         *self.cached_requirements_by_level.write() = map;
 
-        // The Python side recomputes the table from its CollectOptions.
-        self.fast_collect
-            .store(FAST_COLLECT_INVALID, Ordering::Release);
+        // The Python side recomputes the table from its CollectOptions; the new
+        // generation rejects any table computed before this change.
+        self.reset_fast_collect();
+    }
+
+    /// Mark every level of the `fast_collect` table unavailable under a new
+    /// generation, returned (see [`Self::set_fast_collect`]).
+    fn reset_fast_collect(&self) -> u16 {
+        let mut current = self.fast_collect.load(Ordering::Acquire);
+        loop {
+            let generation = (current >> FAST_GENERATION_SHIFT).wrapping_add(1) & 0xFFFF;
+            let reset = (generation << FAST_GENERATION_SHIFT) | FAST_COLLECT_INVALID;
+            match self.fast_collect.compare_exchange_weak(
+                current,
+                reset,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => return generation as u16,
+                Err(actual) => current = actual,
+            }
+        }
     }
 
     /// Merge result for `emit_no`, using the precomputed map and memoizing misses.

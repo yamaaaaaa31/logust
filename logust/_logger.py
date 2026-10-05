@@ -6,6 +6,7 @@ import builtins
 import datetime
 import functools
 import inspect
+import itertools
 import os
 import re
 import string
@@ -517,8 +518,15 @@ _EMIT_NO_SUPERSET: int = 4_294_967_295
 # each in the ``PyLogger.set_fast_collect`` table).
 _FAST_LEVELS: tuple[int, ...] = (5, 10, 20, 25, 30, 40, 45, 50)
 _FAST_UNAVAILABLE = 8
-# Every level unavailable: ``log_fast`` returns False and the Python path runs
-_FAST_TABLE_DISABLED = 0xFFFF_FFFF_FFFF_FFFF
+# Owner ids for the ``fast_collect`` table, one per Logger family (a Logger and
+# the loggers derived from it), so two Loggers wrapping one PyLogger never use
+# each other's table. 0 is never handed out.
+_FAST_OWNERS = itertools.count(1)
+
+
+def _next_fast_owner() -> int:
+    owner = next(_FAST_OWNERS) & 0xFFFF
+    return owner or _next_fast_owner()
 
 
 def _coerce_emit_no_u32(emit_no: int) -> int:
@@ -841,6 +849,8 @@ class Logger:
         ] = aggregated_options_box if aggregated_options_box is not None else [None]
         # False routes every call through the Python dispatch path (tests only)
         self._fast_path = True
+        # Identifies this Logger family's table in Rust (see _refresh_fast_collect)
+        self._fast_owner = _next_fast_owner()
         self._refresh_fast_collect()
 
     parse = staticmethod(_parse_file)
@@ -863,8 +873,10 @@ class Logger:
         table lives with the handler state shared by bound loggers, and Rust
         resets it whenever a handler or callback changes.
         """
+        # A new generation first: a refresh that started earlier, before this
+        # logger's bookkeeping changed, can no longer store its table.
+        generation = self._inner.invalidate_fast_collect()
         if not self._fast_path:
-            self._inner.set_fast_collect(_FAST_TABLE_DISABLED)
             return
         table = 0
         for slot, emit_no in enumerate(_FAST_LEVELS):
@@ -877,7 +889,7 @@ class Logger:
                     nibble = _FAST_UNAVAILABLE
                     break
             table |= nibble << (4 * slot)
-        self._inner.set_fast_collect(table)
+        self._inner.set_fast_collect(table, generation, self._fast_owner)
 
     def _get_aggregated_options(
         self,
@@ -923,7 +935,8 @@ class Logger:
 
         tracked_handler_count = 0
 
-        for handler_id, opts in self._collect_options.items():
+        # A copy: another thread may add or remove handlers meanwhile
+        for handler_id, opts in self._collect_options.copy().items():
             # Count tracked file handlers (not callbacks)
             if handler_id not in self._callback_ids:
                 tracked_handler_count += 1
@@ -1345,7 +1358,7 @@ class Logger:
             or exception is not None
             or self._patchers
             or self._activation.rules
-            or not self._inner.log_fast(5, message, _depth + 1)
+            or not self._inner.log_fast(5, message, _depth + 1, self._fast_owner)
         ):
             self._log_with_level(5, "trace", message, exception, _depth + 1, kwargs, args)
 
@@ -1366,7 +1379,7 @@ class Logger:
             or exception is not None
             or self._patchers
             or self._activation.rules
-            or not self._inner.log_fast(10, message, _depth + 1)
+            or not self._inner.log_fast(10, message, _depth + 1, self._fast_owner)
         ):
             self._log_with_level(10, "debug", message, exception, _depth + 1, kwargs, args)
 
@@ -1392,7 +1405,7 @@ class Logger:
             or exception is not None
             or self._patchers
             or self._activation.rules
-            or not self._inner.log_fast(20, message, _depth + 1)
+            or not self._inner.log_fast(20, message, _depth + 1, self._fast_owner)
         ):
             self._log_with_level(20, "info", message, exception, _depth + 1, kwargs, args)
 
@@ -1413,7 +1426,7 @@ class Logger:
             or exception is not None
             or self._patchers
             or self._activation.rules
-            or not self._inner.log_fast(25, message, _depth + 1)
+            or not self._inner.log_fast(25, message, _depth + 1, self._fast_owner)
         ):
             self._log_with_level(25, "success", message, exception, _depth + 1, kwargs, args)
 
@@ -1434,7 +1447,7 @@ class Logger:
             or exception is not None
             or self._patchers
             or self._activation.rules
-            or not self._inner.log_fast(30, message, _depth + 1)
+            or not self._inner.log_fast(30, message, _depth + 1, self._fast_owner)
         ):
             self._log_with_level(30, "warning", message, exception, _depth + 1, kwargs, args)
 
@@ -1455,7 +1468,7 @@ class Logger:
             or exception is not None
             or self._patchers
             or self._activation.rules
-            or not self._inner.log_fast(40, message, _depth + 1)
+            or not self._inner.log_fast(40, message, _depth + 1, self._fast_owner)
         ):
             self._log_with_level(40, "error", message, exception, _depth + 1, kwargs, args)
 
@@ -1476,7 +1489,7 @@ class Logger:
             or exception is not None
             or self._patchers
             or self._activation.rules
-            or not self._inner.log_fast(45, message, _depth + 1)
+            or not self._inner.log_fast(45, message, _depth + 1, self._fast_owner)
         ):
             self._log_with_level(45, "fail", message, exception, _depth + 1, kwargs, args)
 
@@ -1497,7 +1510,7 @@ class Logger:
             or exception is not None
             or self._patchers
             or self._activation.rules
-            or not self._inner.log_fast(50, message, _depth + 1)
+            or not self._inner.log_fast(50, message, _depth + 1, self._fast_owner)
         ):
             self._log_with_level(50, "critical", message, exception, _depth + 1, kwargs, args)
 
@@ -1616,7 +1629,7 @@ class Logger:
                     or exception is not None
                     or self._patchers
                     or self._activation.rules
-                    or not self._inner.log_fast(level_value, message, _depth + 1)
+                    or not self._inner.log_fast(level_value, message, _depth + 1, self._fast_owner)
                 ):
                     self._log_with_level(
                         level_value,
@@ -1637,7 +1650,7 @@ class Logger:
                 or exception is not None
                 or self._patchers
                 or self._activation.rules
-                or not self._inner.log_fast(level, message, _depth + 1)
+                or not self._inner.log_fast(level, message, _depth + 1, self._fast_owner)
             ):
                 self._log_with_level(
                     level, _LEVEL_VALUE_MAP[level], message, exception, _depth + 1, kwargs, args
@@ -2379,6 +2392,7 @@ class Logger:
         new._requirements_cache_box = self._requirements_cache_box
         new._aggregated_options_box = self._aggregated_options_box
         new._fast_path = self._fast_path
+        new._fast_owner = self._fast_owner
         return new
 
     def bind(self, **kwargs: Any) -> Logger:
