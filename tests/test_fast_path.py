@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import threading
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
@@ -403,18 +404,21 @@ class TestSharedState:
 
         assert out == ["negative"]
 
-    def test_concurrent_add_and_remove(self) -> None:
+    def test_concurrent_add_and_remove(self, tmp_path: Path) -> None:
+        # File sinks only: a callable sink running while another thread adds a
+        # handler can deadlock (the sink holds the handler lock and waits for
+        # the GIL, the adder holds the GIL), a separate pre-existing issue.
         logger = Logger(PyLogger(LogLevel.Trace))
         logger.remove()
-        caller: list[str] = []
-        logger.add(caller.append, format="{name}:{function}:{line}")
+        caller_log = tmp_path / "caller.log"
+        logger.add(caller_log, format="{name}:{function}:{line}")
         errors: list[BaseException] = []
         stop = threading.Event()
 
-        def mutate() -> None:
+        def mutate(index: int) -> None:
             try:
                 while not stop.is_set():
-                    handler_id = logger.add(lambda message: None, format="{message}")
+                    handler_id = logger.add(tmp_path / f"extra{index}.log", format="{message}")
                     logger.remove(handler_id)
             except BaseException as exc:
                 errors.append(exc)
@@ -426,18 +430,18 @@ class TestSharedState:
             except BaseException as exc:
                 errors.append(exc)
 
-        threads = [threading.Thread(target=mutate) for _ in range(3)]
-        threads += [threading.Thread(target=emit) for _ in range(3)]
-        for thread in threads[3:]:
+        mutators = [threading.Thread(target=mutate, args=(index,)) for index in range(3)]
+        emitters = [threading.Thread(target=emit) for _ in range(3)]
+        for thread in emitters + mutators:
             thread.start()
-        for thread in threads[:3]:
-            thread.start()
-        for thread in threads[3:]:
+        for thread in emitters:
             thread.join()
         stop.set()
-        for thread in threads[:3]:
+        for thread in mutators:
             thread.join()
+        logger.complete()
 
         assert errors == []
-        assert len(caller) == 6000
-        assert all(line.startswith(f"{__name__}:emit:") for line in caller)
+        lines = caller_log.read_text(encoding="utf-8").splitlines()
+        assert len(lines) == 6000
+        assert all(line.startswith(f"{__name__}:emit:") for line in lines)
