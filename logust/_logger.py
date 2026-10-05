@@ -651,6 +651,14 @@ def _level_from_info(info: tuple[str, int, str, str | None]) -> Level:
     return Level(name, no, color, icon or "")
 
 
+def _exception_str(exc: BaseException) -> str:
+    """``str(exc)``, or loguru's placeholder when ``__str__`` itself raises."""
+    try:
+        return str(exc)
+    except Exception:
+        return "<exception str() failed>"
+
+
 class Catcher:
     """Context manager and decorator returned by ``Logger.catch()``.
 
@@ -711,8 +719,13 @@ class Catcher:
         tb_str = capture_exception(self._logger._inner, (exc_type, exc_value, tb))
         # Point the record at the ``with`` block, or at the caller of the decorated function
         depth = 2 if self._from_decorator else 1
-        self._logger.log(
-            self._level, f"{self._message}: {exc_value}", exception=tb_str, _depth=depth
+        # The exception text is data: never parse it as color markup
+        logger = self._logger._with_inner(self._logger._inner.with_colors(False))
+        logger.log(
+            self._level,
+            f"{self._message}: {_exception_str(exc_value)}",
+            exception=tb_str,
+            _depth=depth,
         )
         if self._onerror is not None:
             self._onerror(exc_value)

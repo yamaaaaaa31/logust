@@ -279,3 +279,101 @@ def test_exception_group_hides_wrapper(logger: Logger) -> None:
 
     assert "ExceptionGroup: group" in messages[0]
     assert "catch_wrapper" not in messages[0]
+
+
+class _BadStr(Exception):
+    def __str__(self) -> str:
+        raise RuntimeError("str failed")
+
+
+class _BadRepr:
+    def __repr__(self) -> str:
+        raise ValueError("repr failed")
+
+
+class TestEnhancedRobustness:
+    @staticmethod
+    def _sinks(logger: Logger) -> tuple[list[str], list[str]]:
+        plain: list[str] = []
+        enhanced: list[str] = []
+        logger.add(plain.append, format="{message}")
+        logger.add(enhanced.append, format="{message}", backtrace=True, diagnose=True)
+        return plain, enhanced
+
+    def test_exception_whose_str_raises(self, logger: Logger) -> None:
+        plain, enhanced = self._sinks(logger)
+
+        with logger.catch():
+            raise _BadStr()
+
+        assert plain[0].startswith("An error occurred: <exception str() failed>\n")
+        assert enhanced[0].endswith("_BadStr: <exception str() failed>")
+
+    def test_chained_exceptions_are_kept(self, logger: Logger) -> None:
+        _, enhanced = self._sinks(logger)
+
+        try:
+            try:
+                raise KeyError("inner")
+            except KeyError as exc:
+                raise RuntimeError("outer") from exc
+        except RuntimeError:
+            logger.exception("chain")
+
+        text = enhanced[0]
+        assert "KeyError: 'inner'" in text
+        assert "The above exception was the direct cause of the following exception:" in text
+        assert text.endswith("RuntimeError: outer")
+
+    @pytest.mark.skipif(sys.version_info < (3, 11), reason="ExceptionGroup needs 3.11")
+    def test_exception_group_members_are_kept(self, logger: Logger) -> None:
+        _, enhanced = self._sinks(logger)
+
+        try:
+            raise ExceptionGroup("grp", [ValueError("a"), KeyError("b")])  # noqa: F821
+        except Exception:
+            logger.exception("group")
+
+        assert "ValueError: a" in enhanced[0]
+        assert "KeyError: 'b'" in enhanced[0]
+
+    def test_recursion_is_collapsed(self, logger: Logger) -> None:
+        _, enhanced = self._sinks(logger)
+
+        def recurse(depth: int) -> int:
+            return recurse(depth + 1)
+
+        try:
+            recurse(0)
+        except RecursionError:
+            logger.exception("deep")
+
+        assert "[Previous line repeated" in enhanced[0]
+        # Outer frames (backtrace=True) included; uncollapsed it is hundreds of KB
+        assert len(enhanced[0]) < 50_000
+
+    def test_failing_repr_hides_only_that_local(self, logger: Logger) -> None:
+        plain, enhanced = self._sinks(logger)
+
+        def fail() -> object:
+            bad = _BadRepr()
+            secret = "s3cret"
+            return bad, secret, 1 / 0
+
+        try:
+            fail()
+        except ZeroDivisionError:
+            logger.exception("locals")
+
+        assert "| bad = <repr failed>" in enhanced[0]
+        assert "| secret = 's3cret'" in enhanced[0]
+        assert "s3cret'" not in plain[0].split("return bad")[0]
+        assert "| secret" not in plain[0]
+
+    def test_catch_message_is_not_markup(self, logger: Logger) -> None:
+        plain, _ = self._sinks(logger)
+
+        with logger.catch():
+            raise ValueError("<b>x</b>")
+
+        assert plain[0].startswith("An error occurred: <b>x</b>\n")
