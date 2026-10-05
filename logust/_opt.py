@@ -36,15 +36,11 @@ class OptLogger:
         self._backtrace = backtrace
         self._diagnose = diagnose
 
-    def _format_message(self, message: str, *args: Any) -> str:
-        """Format message, evaluating lazy callables if enabled."""
-        if not args:
-            return message
-
-        if self._lazy:
-            evaluated_args = tuple(arg() if callable(arg) else arg for arg in args)
-            return message.format(*evaluated_args)
-        return message.format(*args)
+    def _resolve_args(self, args: tuple[Any, ...]) -> tuple[Any, ...]:
+        """Evaluate callable positional args when ``lazy=True``."""
+        if self._lazy and args:
+            return tuple(arg() if callable(arg) else arg for arg in args)
+        return args
 
     def _get_exception(self) -> str | None:
         """Get exception traceback with optional enhancements."""
@@ -64,11 +60,17 @@ class OptLogger:
         if self._lazy and not self._logger.is_level_enabled(level):
             return
 
-        formatted = self._format_message(message, *args)
         exc = kwargs.pop("exception", None) or self._get_exception()
         log_method = getattr(self._logger, level)
+        # Formatting (args + kwargs) happens once in Logger, matching loguru.
         # Add depth: +1 for this method, +1 for the caller (trace/debug/etc), + user's depth
-        log_method(formatted, exception=exc, _depth=self._depth + 2, **kwargs)
+        log_method(
+            message,
+            *self._resolve_args(args),
+            exception=exc,
+            _depth=self._depth + 2,
+            **kwargs,
+        )
 
     def trace(self, message: str, *args: Any, **kwargs: Any) -> None:
         """Output TRACE level log message with options."""
@@ -116,7 +118,13 @@ class OptLogger:
         """
         # For lazy evaluation with custom levels, we can't easily check
         # the level in advance, so we format and delegate to the logger
-        formatted = self._format_message(message, *args)
         exc = kwargs.pop("exception", None) or self._get_exception()
         # Add depth: +1 for this method, + user's depth
-        self._logger.log(level, formatted, exception=exc, _depth=self._depth + 1, **kwargs)
+        self._logger.log(
+            level,
+            message,
+            *self._resolve_args(args),
+            exception=exc,
+            _depth=self._depth + 1,
+            **kwargs,
+        )

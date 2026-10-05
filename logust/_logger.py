@@ -113,8 +113,14 @@ def _collect_format_roots(format_string: str, consumed: set[str]) -> None:
             _collect_format_roots(format_spec, consumed)
 
 
-def _split_kwargs_for_format(message: Any, kwargs: dict[str, Any]) -> tuple[str, dict[str, Any]]:
-    """Format message with kwargs and return kwargs not consumed by placeholders.
+def _split_kwargs_for_format(
+    message: Any, kwargs: dict[str, Any], args: tuple[Any, ...] = ()
+) -> tuple[str, dict[str, Any]]:
+    """Format message with args/kwargs and return kwargs not consumed by placeholders.
+
+    Mirrors loguru: ``message.format(*args, **kwargs)`` is applied only when
+    positional or keyword arguments are given. Bad placeholders raise
+    ``IndexError`` / ``KeyError`` just like ``str.format``.
 
     Non-str messages are coerced via ``str()`` to match the no-kwargs path
     (`_log_with_level` already wraps the message with ``str(...)`` before
@@ -124,9 +130,11 @@ def _split_kwargs_for_format(message: Any, kwargs: dict[str, Any]) -> tuple[str,
     coerced to strings by the inner logger.
     """
     message_str = message if isinstance(message, str) else str(message)
+    if not kwargs:
+        return message_str.format(*args), {}
     consumed: set[str] = set()
     _collect_format_roots(message_str, consumed)
-    formatted_message = message_str.format(**kwargs)
+    formatted_message = message_str.format(*args, **kwargs)
     extra_kwargs = {key: value for key, value in kwargs.items() if key not in consumed}
     return formatted_message, extra_kwargs
 
@@ -832,13 +840,13 @@ class Logger:
         exception: str | None,
         depth: int,
         kwargs: dict[str, Any] | None = None,
+        args: tuple[Any, ...] = (),
     ) -> None:
-        if level_value < self._inner.min_level:
-            return
-
+        # Callers must check ``level_value < self._inner.min_level`` first so a
+        # filtered-out call returns before this frame and any arg handling.
         extra_kwargs: dict[str, Any] | None = None
-        if kwargs:
-            message, extra_kwargs = _split_kwargs_for_format(message, kwargs)
+        if args or kwargs:
+            message, extra_kwargs = _split_kwargs_for_format(message, kwargs or {}, args)
             if not extra_kwargs:
                 extra_kwargs = None
 
@@ -957,54 +965,115 @@ class Logger:
             )
 
     def trace(
-        self, message: str, *, exception: str | None = None, _depth: int = 0, **kwargs: Any
+        self,
+        message: str,
+        *args: Any,
+        exception: str | None = None,
+        _depth: int = 0,
+        **kwargs: Any,
     ) -> None:
         """Output TRACE level log message."""
-        self._log_with_level(5, "trace", message, exception, _depth + 1, kwargs)
+        if 5 < self._inner.min_level:
+            return
+        self._log_with_level(5, "trace", message, exception, _depth + 1, kwargs, args)
 
     def debug(
-        self, message: str, *, exception: str | None = None, _depth: int = 0, **kwargs: Any
+        self,
+        message: str,
+        *args: Any,
+        exception: str | None = None,
+        _depth: int = 0,
+        **kwargs: Any,
     ) -> None:
         """Output DEBUG level log message."""
-        self._log_with_level(10, "debug", message, exception, _depth + 1, kwargs)
+        if 10 < self._inner.min_level:
+            return
+        self._log_with_level(10, "debug", message, exception, _depth + 1, kwargs, args)
 
     def info(
-        self, message: str, *, exception: str | None = None, _depth: int = 0, **kwargs: Any
+        self,
+        message: str,
+        *args: Any,
+        exception: str | None = None,
+        _depth: int = 0,
+        **kwargs: Any,
     ) -> None:
-        """Output INFO level log message."""
-        self._log_with_level(20, "info", message, exception, _depth + 1, kwargs)
+        """Output INFO level log message.
+
+        ``message`` is formatted with ``str.format(*args, **kwargs)`` only when
+        positional or keyword arguments are given (loguru-compatible); kwargs
+        not consumed by placeholders are added to ``extra``.
+        """
+        if 20 < self._inner.min_level:
+            return
+        self._log_with_level(20, "info", message, exception, _depth + 1, kwargs, args)
 
     def success(
-        self, message: str, *, exception: str | None = None, _depth: int = 0, **kwargs: Any
+        self,
+        message: str,
+        *args: Any,
+        exception: str | None = None,
+        _depth: int = 0,
+        **kwargs: Any,
     ) -> None:
         """Output SUCCESS level log message."""
-        self._log_with_level(25, "success", message, exception, _depth + 1, kwargs)
+        if 25 < self._inner.min_level:
+            return
+        self._log_with_level(25, "success", message, exception, _depth + 1, kwargs, args)
 
     def warning(
-        self, message: str, *, exception: str | None = None, _depth: int = 0, **kwargs: Any
+        self,
+        message: str,
+        *args: Any,
+        exception: str | None = None,
+        _depth: int = 0,
+        **kwargs: Any,
     ) -> None:
         """Output WARNING level log message."""
-        self._log_with_level(30, "warning", message, exception, _depth + 1, kwargs)
+        if 30 < self._inner.min_level:
+            return
+        self._log_with_level(30, "warning", message, exception, _depth + 1, kwargs, args)
 
     def error(
-        self, message: str, *, exception: str | None = None, _depth: int = 0, **kwargs: Any
+        self,
+        message: str,
+        *args: Any,
+        exception: str | None = None,
+        _depth: int = 0,
+        **kwargs: Any,
     ) -> None:
         """Output ERROR level log message."""
-        self._log_with_level(40, "error", message, exception, _depth + 1, kwargs)
+        if 40 < self._inner.min_level:
+            return
+        self._log_with_level(40, "error", message, exception, _depth + 1, kwargs, args)
 
     def fail(
-        self, message: str, *, exception: str | None = None, _depth: int = 0, **kwargs: Any
+        self,
+        message: str,
+        *args: Any,
+        exception: str | None = None,
+        _depth: int = 0,
+        **kwargs: Any,
     ) -> None:
         """Output FAIL level log message."""
-        self._log_with_level(45, "fail", message, exception, _depth + 1, kwargs)
+        if 45 < self._inner.min_level:
+            return
+        self._log_with_level(45, "fail", message, exception, _depth + 1, kwargs, args)
 
     def critical(
-        self, message: str, *, exception: str | None = None, _depth: int = 0, **kwargs: Any
+        self,
+        message: str,
+        *args: Any,
+        exception: str | None = None,
+        _depth: int = 0,
+        **kwargs: Any,
     ) -> None:
         """Output CRITICAL level log message."""
-        self._log_with_level(50, "critical", message, exception, _depth + 1, kwargs)
+        if 50 < self._inner.min_level:
+            return
+        self._log_with_level(50, "critical", message, exception, _depth + 1, kwargs, args)
 
-    def exception(self, message: str, *, _depth: int = 0, **kwargs: Any) -> None:
+    def exception(self, message: str, *args: Any, _depth: int = 0, **kwargs: Any) -> None:
         """Log ERROR with current exception traceback.
 
         Must be called from within an except block to capture the exception.
@@ -1012,6 +1081,7 @@ class Logger:
 
         Args:
             message: The error message.
+            *args: Positional ``str.format`` arguments for ``message``.
             _depth: Internal depth adjustment for wrapper methods.
             **kwargs: Additional arguments passed to error().
 
@@ -1025,9 +1095,9 @@ class Logger:
         exc_info = sys.exc_info()
         if exc_info[0] is not None:
             tb = traceback.format_exc()
-            self.error(message, exception=tb, _depth=_depth + 1, **kwargs)
+            self.error(message, *args, exception=tb, _depth=_depth + 1, **kwargs)
         else:
-            self.error(message, _depth=_depth + 1, **kwargs)
+            self.error(message, *args, _depth=_depth + 1, **kwargs)
 
     def level(
         self,
@@ -1085,7 +1155,7 @@ class Logger:
         self,
         level: str | int,
         message: str,
-        *,
+        *args: Any,
         exception: str | None = None,
         _depth: int = 0,
         **kwargs: Any,
@@ -1094,29 +1164,38 @@ class Logger:
 
         Args:
             level: Level name (str) or numeric value (int).
-            message: Log message.
+            message: Log message. Formatted with ``str.format(*args, **kwargs)``
+                only when positional or keyword arguments are given.
+            *args: Positional format arguments.
             exception: Optional exception traceback.
             _depth: Internal depth adjustment for wrapper methods.
 
         Examples:
             >>> logger.log("INFO", "Using built-in level by name")
             >>> logger.log(20, "Using built-in level by number")
+            >>> logger.log("INFO", "Processed {} items", 3)
         """
         if isinstance(level, str):
             level_lower = level.lower()
             if level_lower in _LEVEL_VALUES:
+                level_value = _LEVEL_VALUES[level_lower]
+                if level_value < self._inner.min_level:
+                    return
                 self._log_with_level(
-                    _LEVEL_VALUES[level_lower],
+                    level_value,
                     level_lower,
                     message,
                     exception,
                     _depth + 1,
                     kwargs,
+                    args,
                 )
                 return
         elif isinstance(level, int) and level in _LEVEL_VALUE_MAP:
+            if level < self._inner.min_level:
+                return
             self._log_with_level(
-                level, _LEVEL_VALUE_MAP[level], message, exception, _depth + 1, kwargs
+                level, _LEVEL_VALUE_MAP[level], message, exception, _depth + 1, kwargs, args
             )
             return
 
@@ -1140,8 +1219,8 @@ class Logger:
             return
 
         extra_kw = None
-        if kwargs:
-            message, extra_kw = _split_kwargs_for_format(message, kwargs)
+        if args or kwargs:
+            message, extra_kw = _split_kwargs_for_format(message, kwargs, args)
             if not extra_kw:
                 extra_kw = None
 

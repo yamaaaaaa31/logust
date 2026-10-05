@@ -69,6 +69,7 @@ In this run, `loguru`'s `enqueue=True` path remained far slower than its sync pa
 | Custom levels | Yes | Yes |
 | Exception catching | Yes | Yes |
 | Lazy evaluation | Yes | Yes |
+| Message arguments (`"{}"`, `"{name}"`) | Yes | Yes |
 | Async writes | Yes | Yes |
 | Callable sinks | Yes | Yes |
 | Stack info (module, function, line) | Yes | Yes |
@@ -89,6 +90,10 @@ from logust import logger
 logger.add("app.log", rotation="500 MB")
 logger.info("Hello")
 ```
+
+### Keyword arguments and `extra`
+
+`logger.info("{} by {user}", "login", user="alice")` formats the same in both libraries. loguru also copies every keyword argument into `extra`; logust only adds the ones not used by a placeholder, so `user` above is not in `extra`. Use `bind()` when a value should be both in the message and in `extra`.
 
 ### Callable sinks receive no trailing newline
 

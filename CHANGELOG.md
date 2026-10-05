@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`logger.level()` lookups and updates**: `logger.level("INFO")` returns a `Level(name, no, color, icon)` named tuple, and `logger.level("INFO", color="blue")` (no `no`) updates an existing level, including the console color of built-in levels. Unknown names raise `ValueError`. `Level` is exported from `logust`.
 - **`datetime` rotation values**: `add(rotation=...)` accepts `timedelta(days=1)`, `timedelta(hours=1)`, and `time(0, 0)`. Values that can't be honored exactly raise `ValueError`.
 - **`logger.parse()`**: the module-level `parse()` is also available on the logger, as in loguru.
+- **Positional message arguments**: `logger.info("Processed {} items", 42)` now works like loguru on every level method, `log()`, `exception()`, `opt()`, and the module-level functions (`logust.info(...)`). Positional and keyword arguments can be mixed, kwargs not used by a placeholder still go to `extra`, and a message logged without arguments is never formatted. Filtered-out calls now return before any argument handling, making them about 30% faster than in 0.5.0.
 
 ### Changed
 - **`logger.level()` returns the level**: registering a level now returns its `Level` instead of `None`, `no` may be passed positionally, and re-registering keeps the existing color and icon unless new ones are given.
@@ -19,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **Coroutine function sinks are rejected**: `add()` raises `TypeError` for `async def` sinks (and async callables) instead of accepting them and never awaiting the coroutine.
+- **`opt()` formats the message once**: `logger.opt().info("{} {user}", value, user="bob")` no longer raises `KeyError`, and braces inside a positional value are no longer re-interpreted as placeholders.
 
 ## [0.5.0] - 2026-10-01
 

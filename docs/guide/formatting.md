@@ -32,6 +32,24 @@ logger.add("simple.log", format="[{level}] {message}")
 logger.add("minimal.log", format="{message}")
 ```
 
+## Message arguments
+
+Like loguru, the message is formatted with `str.format()` when you pass arguments:
+
+```python
+logger.info("Processed {} items in {:.2f}s", 42, 1.234)
+logger.info("User {user} logged in", user="alice")
+logger.info("{} by {user}", "login", user="alice", request_id="r1")
+```
+
+- Keyword arguments that are not used by a placeholder are added to `extra`
+  (`request_id` above).
+- A message logged without arguments is never formatted, so
+  `logger.info("dict: {}")` prints the braces as-is.
+- A missing placeholder value raises `IndexError` or `KeyError`, the same as
+  `str.format()`.
+- When the level is filtered out, the arguments are not formatted at all.
+
 ## Format tokens
 
 | Token | Description | Example |
