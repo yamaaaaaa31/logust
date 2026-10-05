@@ -244,6 +244,21 @@ class PyLogger:
         """Get the current number of handlers (excludes callbacks)."""
         ...
 
+    def set_fast_collect(self, table: int) -> None:
+        """What ``log_fast`` collects per built-in level (one nibble each, slot order
+        TRACE..CRITICAL): bit 0 caller, bit 1 thread, bit 2 process, bit 3 "use the
+        Python path". Rust resets the table whenever handlers or callbacks change.
+        """
+        ...
+
+    def log_fast(self, level_no: int, message: object, depth: int, /) -> bool:
+        """Log ``message`` at built-in level ``level_no`` from the caller ``depth``
+        frames above the calling Python frame, collecting caller/thread/process
+        info in Rust. Returns False (without logging) when the Python path must
+        be used instead.
+        """
+        ...
+
     def with_colors(self, colors: bool) -> PyLogger:
         """Same logger, rendering (True) or not parsing (False) message color markup."""
         ...

@@ -685,13 +685,21 @@ class TestCallableSinkAutoDetect:
         logger.add(lambda msg: messages.append(msg), format="{function} | {message}")
 
         with patch("logust._logger._get_caller_info") as mock_caller:
+            logger.info("Test message")
+            # Collected in Rust on the fast path, not by the Python helper
+            mock_caller.assert_not_called()
+
+        assert messages == ["test_callable_sink_with_function_collects_caller | Test message"]
+
+        logger._fast_path = False
+        logger._refresh_fast_collect()
+        with patch("logust._logger._get_caller_info") as mock_caller:
             mock_caller.return_value = ("test_mod", "test_func", 42, "test.py")
             logger.info("Test message")
-            # _get_caller_info SHOULD be called
+            # _get_caller_info SHOULD be called on the Python path
             mock_caller.assert_called_once()
 
-        assert len(messages) == 1
-        assert "test_func" in messages[0]
+        assert messages[1] == "test_func | Test message"
 
     def test_callable_sink_collect_options_computed_from_format(self) -> None:
         """Callable sink with collect=None should have CollectOptions computed from format."""
@@ -936,20 +944,26 @@ class TestEmitScopedRequirementsCacheInvalidation:
         logf = tmp_path / "app.log"
         logger.add(str(logf), format="{message}")
 
+        # Each console mutation drops the cache and rebuilds it for the built-in
+        # levels (``_refresh_fast_collect``), so a fresh dict replaces the old one.
         logger.info("warm")
-        assert logger._requirements_cache_box[0] is not None
+        warm = logger._requirements_cache_box[0]
+        assert warm is not None
 
         logger.enable(LogLevel.Trace)
-        assert logger._requirements_cache_box[0] is None
+        after_enable = logger._requirements_cache_box[0]
+        assert after_enable is not None and after_enable is not warm
 
         logger.info("after enable")
-        assert logger._requirements_cache_box[0] is not None
+        assert logger._requirements_cache_box[0] is after_enable
 
         logger.disable()
-        assert logger._requirements_cache_box[0] is None
+        after_disable = logger._requirements_cache_box[0]
+        assert after_disable is not None and after_disable is not after_enable
 
         logger.info("file only")
-        assert logger._requirements_cache_box[0] is not None
+        assert logger._requirements_cache_box[0] is after_disable
 
         logger.set_level(LogLevel.Warning)
-        assert logger._requirements_cache_box[0] is None
+        after_set_level = logger._requirements_cache_box[0]
+        assert after_set_level is not None and after_set_level is not after_disable
