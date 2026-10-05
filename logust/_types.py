@@ -6,6 +6,7 @@ log records, callbacks, and configuration dictionaries.
 
 from __future__ import annotations
 
+import datetime
 from typing import Any, NamedTuple, Protocol, TextIO, TypedDict
 
 
@@ -21,6 +22,22 @@ class RecordLevel(NamedTuple):
     name: str
     no: int
     icon: str = ""
+
+
+class Level(NamedTuple):
+    """Level information returned by ``logger.level()`` (loguru-compatible).
+
+    Attributes:
+        name: Level name (e.g., "INFO", "NOTICE").
+        no: Numeric severity value.
+        color: Color name used for console output (e.g., "green").
+        icon: Icon symbol, or "" if none was set.
+    """
+
+    name: str
+    no: int
+    color: str
+    icon: str
 
 
 class RecordException(NamedTuple):
@@ -112,7 +129,8 @@ class HandlerConfig(TypedDict, total=False):
         sink: File path or sys.stdout/sys.stderr for output (required).
         level: Minimum log level (name or numeric value).
         format: Custom format string.
-        rotation: Rotation strategy ("daily", "hourly", "500 MB").
+        rotation: Rotation strategy ("daily", "hourly", "500 MB", or a
+                  ``datetime.timedelta`` / ``datetime.time``).
                   Only valid for file sinks.
         retention: Retention policy ("10 days" or count as int).
                    Only valid for file sinks.
@@ -129,7 +147,7 @@ class HandlerConfig(TypedDict, total=False):
     sink: str | TextIO
     level: str | int
     format: str
-    rotation: str
+    rotation: str | datetime.timedelta | datetime.time
     retention: str | int
     compression: bool
     serialize: bool
@@ -143,7 +161,8 @@ class LevelConfig(TypedDict, total=False):
 
     Attributes:
         name: Level name (e.g., "NOTICE"). Required.
-        no: Numeric severity value. Required.
+        no: Numeric severity value. Required for a new level; omit it to
+            update the color or icon of an existing level.
         color: Color name for terminal output.
         icon: Icon symbol for display.
     """

@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import datetime
+import functools
 from pathlib import Path
 
 import pytest
 
 from logust import Logger, LogLevel
+from logust._logger import _rotation_to_str
 from logust._logust import PyLogger
 
 
@@ -111,6 +114,120 @@ class TestRotation:
 
         content = log_file.read_text()
         assert "Message number 00000" in content
+
+    @pytest.mark.parametrize(
+        ("rotation", "expected"),
+        [
+            (datetime.timedelta(days=1), "daily"),
+            (datetime.timedelta(hours=24), "daily"),
+            (datetime.timedelta(hours=1), "hourly"),
+            (datetime.timedelta(minutes=60), "hourly"),
+            (datetime.time(0, 0), "daily"),
+            ("500 MB", "500 MB"),
+        ],
+    )
+    def test_rotation_to_str(self, rotation: str | datetime.timedelta, expected: str) -> None:
+        """timedelta/time rotations map to the equivalent string forms."""
+        assert _rotation_to_str(rotation) == expected
+
+    @pytest.mark.parametrize(
+        "rotation",
+        [
+            datetime.timedelta(days=2),
+            datetime.timedelta(minutes=30),
+            datetime.timedelta(hours=1, seconds=1),
+            datetime.time(12, 0),
+            datetime.time(0, 0, tzinfo=datetime.timezone.utc),
+        ],
+    )
+    def test_rotation_unsupported_values_raise(
+        self, rotation: datetime.timedelta | datetime.time, tmp_path: Path
+    ) -> None:
+        """Values the file sink cannot honor exactly raise instead of approximating."""
+        logger = Logger(PyLogger(LogLevel.Trace))
+        logger.disable()
+
+        with pytest.raises(ValueError, match="Unsupported rotation"):
+            logger.add(tmp_path / "app.log", rotation=rotation)
+        assert logger._inner.handler_count == 0
+
+    def test_rotation_wrong_type_raises(self, tmp_path: Path) -> None:
+        logger = Logger(PyLogger(LogLevel.Trace))
+        logger.disable()
+
+        with pytest.raises(TypeError, match="rotation must be"):
+            logger.add(tmp_path / "app.log", rotation=3600)  # type: ignore[arg-type]
+
+    @pytest.mark.parametrize(
+        "rotation", [datetime.timedelta(days=1), datetime.timedelta(hours=1), datetime.time(0)]
+    )
+    def test_add_with_datetime_rotation(
+        self, rotation: datetime.timedelta | datetime.time, tmp_path: Path
+    ) -> None:
+        """add() and configure() accept timedelta/time rotation for file sinks."""
+        logger = Logger(PyLogger(LogLevel.Trace))
+        logger.disable()
+        log_file = tmp_path / "app.log"
+
+        handler_id = logger.add(log_file, rotation=rotation, format="{message}")
+        logger.info("rotating")
+        logger.complete()
+        logger.remove(handler_id)
+
+        ids = logger.configure(handlers=[{"sink": tmp_path / "cfg.log", "rotation": rotation}])
+        logger.remove(ids[0])
+
+        assert log_file.read_text() == "rotating\n"
+
+
+class TestAsyncSink:
+    """Coroutine function sinks are rejected at add() time."""
+
+    def test_async_function_sink_raises(self) -> None:
+        logger = Logger(PyLogger(LogLevel.Trace))
+        logger.disable()
+
+        async def sink(message: str) -> None:
+            pass
+
+        with pytest.raises(TypeError, match="Coroutine function sinks"):
+            logger.add(sink)
+        assert logger._callback_ids == set()
+
+    def test_async_partial_sink_raises(self) -> None:
+        logger = Logger(PyLogger(LogLevel.Trace))
+        logger.disable()
+
+        async def sink(prefix: str, message: str) -> None:
+            pass
+
+        with pytest.raises(TypeError, match="Coroutine function sinks"):
+            logger.add(functools.partial(sink, "p"))
+
+    def test_async_callable_object_sink_raises(self) -> None:
+        logger = Logger(PyLogger(LogLevel.Trace))
+        logger.disable()
+
+        class Sink:
+            async def __call__(self, message: str) -> None:
+                pass
+
+        with pytest.raises(TypeError, match="Coroutine function sinks"):
+            logger.add(Sink())
+
+    def test_sync_callable_object_sink_still_works(self) -> None:
+        logger = Logger(PyLogger(LogLevel.Trace))
+        logger.disable()
+        messages: list[str] = []
+
+        class Sink:
+            def __call__(self, message: str) -> None:
+                messages.append(message)
+
+        logger.add(Sink(), format="{message}")
+        logger.info("sync")
+
+        assert messages == ["sync"]
 
 
 class TestRetention:

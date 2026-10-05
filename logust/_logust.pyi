@@ -232,6 +232,10 @@ class PyLogger:
         """Register a custom log level."""
         ...
 
+    def level_info(self, name: str) -> tuple[str, int, str, str | None] | None:
+        """Look up a level by name: ``(name, no, color, icon)``, or None if unknown."""
+        ...
+
     def log(
         self,
         level_arg: str | int,

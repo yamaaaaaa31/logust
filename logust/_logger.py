@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import builtins
+import datetime
 import functools
+import inspect
 import os
 import re
 import string
@@ -13,10 +15,15 @@ import traceback
 from collections.abc import Callable, Generator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, TextIO, cast
+from types import TracebackType
+from typing import TYPE_CHECKING, Any, TextIO, TypeVar, cast, overload
 
 from ._logust import LogLevel, PyLogger
+from ._parse import parse as _parse_file
 from ._template import CALLER_TOKENS, KNOWN_TOKENS, ParsedCallableTemplate
+from ._types import Level
+
+_F = TypeVar("_F", bound=Callable[..., Any])
 
 
 @dataclass(frozen=True, slots=True)
@@ -275,6 +282,158 @@ def _coerce_emit_no_u32(emit_no: int) -> int:
     return emit_no
 
 
+def _rotation_to_str(rotation: str | datetime.timedelta | datetime.time) -> str:
+    """Convert a ``rotation`` value into the string form the Rust sink understands.
+
+    Runs once in ``add()``. Only values the Rust side can honor exactly are accepted.
+    """
+    if isinstance(rotation, str):
+        return rotation
+    if isinstance(rotation, datetime.timedelta):
+        if rotation == datetime.timedelta(days=1):
+            return "daily"
+        if rotation == datetime.timedelta(hours=1):
+            return "hourly"
+        raise ValueError(
+            f"Unsupported rotation interval {rotation!r}: only timedelta(days=1) "
+            "(daily, at midnight) and timedelta(hours=1) (hourly, on the hour) are supported"
+        )
+    if isinstance(rotation, datetime.time):
+        if rotation.tzinfo is None and rotation == datetime.time(0, 0):
+            return "daily"
+        raise ValueError(
+            f"Unsupported rotation time {rotation!r}: only time(0, 0) "
+            "(daily, at local midnight) is supported"
+        )
+    raise TypeError(
+        f"rotation must be str, datetime.timedelta or datetime.time, not {type(rotation).__name__}"
+    )
+
+
+def _is_coroutine_callable(obj: Callable[..., Any]) -> bool:
+    """Whether calling ``obj`` returns a coroutine (async function or async ``__call__``)."""
+    if inspect.iscoroutinefunction(obj):
+        return True
+    # Instances whose class defines ``async def __call__``
+    call = inspect.getattr_static(type(obj), "__call__", None)
+    return inspect.iscoroutinefunction(call)
+
+
+def _level_from_info(info: tuple[str, int, str, str | None]) -> Level:
+    name, no, color, icon = info
+    return Level(name, no, color, icon or "")
+
+
+class Catcher:
+    """Context manager and decorator returned by ``Logger.catch()``.
+
+    Logs exceptions that leave its block (or decorated function) and, unless
+    ``reraise`` is set, suppresses them.
+    """
+
+    __slots__ = (
+        "_default",
+        "_exception",
+        "_exclude",
+        "_from_decorator",
+        "_level",
+        "_logger",
+        "_message",
+        "_onerror",
+        "_reraise",
+    )
+
+    def __init__(
+        self,
+        logger: Logger,
+        exception: type[BaseException] | tuple[type[BaseException], ...],
+        exclude: type[BaseException] | tuple[type[BaseException], ...] | None,
+        level: str | int,
+        reraise: bool,
+        onerror: Callable[[BaseException], Any] | None,
+        message: str,
+        default: Any,
+        from_decorator: bool = False,
+    ) -> None:
+        self._logger = logger
+        self._exception = exception
+        self._exclude = exclude
+        self._level = level
+        self._reraise = reraise
+        self._onerror = onerror
+        self._message = message
+        self._default = default
+        self._from_decorator = from_decorator
+
+    def __enter__(self) -> None:
+        return None
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        tb: TracebackType | None,
+    ) -> bool:
+        if exc_type is None or exc_value is None:
+            return False
+        if not issubclass(exc_type, self._exception):
+            return False
+        if self._exclude is not None and issubclass(exc_type, self._exclude):
+            return False
+
+        tb_str = "".join(traceback.format_exception(exc_type, exc_value, tb))
+        # Point the record at the ``with`` block, or at the caller of the decorated function
+        depth = 2 if self._from_decorator else 1
+        self._logger.log(
+            self._level, f"{self._message}: {exc_value}", exception=tb_str, _depth=depth
+        )
+        if self._onerror is not None:
+            self._onerror(exc_value)
+        return not self._reraise
+
+    def __call__(self, function: _F) -> _F:
+        catcher = Catcher(
+            self._logger,
+            self._exception,
+            self._exclude,
+            self._level,
+            self._reraise,
+            self._onerror,
+            self._message,
+            self._default,
+            from_decorator=True,
+        )
+        default = self._default
+
+        if inspect.iscoroutinefunction(function):
+
+            @functools.wraps(function)
+            async def catch_async_wrapper(*args: Any, **kwargs: Any) -> Any:
+                with catcher:
+                    return await function(*args, **kwargs)
+                return default
+
+            return cast("_F", catch_async_wrapper)
+
+        if inspect.isgeneratorfunction(function):
+
+            @functools.wraps(function)
+            def catch_generator_wrapper(*args: Any, **kwargs: Any) -> Any:
+                with catcher:
+                    return (yield from function(*args, **kwargs))
+                return default
+
+            return cast("_F", catch_generator_wrapper)
+
+        @functools.wraps(function)
+        def catch_wrapper(*args: Any, **kwargs: Any) -> Any:
+            with catcher:
+                return function(*args, **kwargs)
+            return default
+
+        return cast("_F", catch_wrapper)
+
+
 class Logger:
     """Main logger class wrapping the Rust PyLogger.
 
@@ -369,6 +528,9 @@ class Logger:
             ]
             | None
         ] = aggregated_options_box if aggregated_options_box is not None else [None]
+
+    parse = staticmethod(_parse_file)
+    """Parse a log file into dicts of regex named groups (same as ``logust.parse``)."""
 
     def _invalidate_requirements_cache(self) -> None:
         """Invalidate all caches (call when handlers change)."""
@@ -870,12 +1032,16 @@ class Logger:
     def level(
         self,
         name: str,
-        *,
-        no: int,
+        no: int | None = None,
         color: str | None = None,
         icon: str | None = None,
-    ) -> None:
-        """Register a custom log level.
+    ) -> Level:
+        """Register, update, or look up a log level.
+
+        - ``level(name, no=..., ...)`` registers a level (or re-registers it).
+        - ``level(name)`` returns the level's information.
+        - ``level(name, color=..., icon=...)`` without ``no`` updates an existing
+          level, including built-in ones.
 
         Args:
             name: Level name (e.g., "NOTICE"). Case-insensitive.
@@ -885,11 +1051,35 @@ class Logger:
             color: Color name (e.g., "cyan", "bright_blue", "red").
             icon: Optional icon symbol for display.
 
+        Returns:
+            A ``Level(name, no, color, icon)`` named tuple.
+
+        Raises:
+            ValueError: If ``no`` is omitted and the level does not exist.
+
         Examples:
             >>> logger.level("NOTICE", no=25, color="cyan", icon="...")
             >>> logger.log("NOTICE", "Custom level message")
+            >>> logger.level("NOTICE").no
+            25
+            >>> logger.level("INFO", color="blue")  # Update a built-in level
         """
+        existing = self._inner.level_info(name)
+        if no is None:
+            if existing is None:
+                raise ValueError(f"Level '{name}' does not exist")
+            if color is None and icon is None:
+                return _level_from_info(existing)
+            no = existing[1]
+        if existing is not None:
+            if color is None and existing[2]:
+                color = existing[2]
+            if icon is None:
+                icon = existing[3]
         self._inner.level(name, no, color, icon)
+        info = self._inner.level_info(name)
+        assert info is not None
+        return _level_from_info(info)
 
     def log(
         self,
@@ -1117,7 +1307,7 @@ class Logger:
         *,
         level: LogLevel | str | None = None,
         format: str | None = None,
-        rotation: str | None = None,
+        rotation: str | datetime.timedelta | datetime.time | None = None,
         retention: str | int | None = None,
         compression: bool = False,
         serialize: bool = False,
@@ -1137,6 +1327,8 @@ class Logger:
             level: Minimum log level for this handler.
             format: Custom format string (e.g., "{time} | {level} | {message}").
             rotation: Rotation strategy ("daily", "hourly", "500 MB", etc.)
+                      Also accepts ``timedelta(days=1)`` / ``timedelta(hours=1)``
+                      and ``time(0, 0)``; other values raise ValueError.
                       Only valid for file sinks.
             retention: Retention policy ("10 days" or count as int)
                        Only valid for file sinks.
@@ -1175,11 +1367,21 @@ class Logger:
         """
         import sys
 
+        if rotation is not None:
+            rotation = _rotation_to_str(rotation)
+
         # A replaced sys.stdout (rich, Jupyter, redirect_stdout) must get output via its write().
         is_console = sink is sys.__stdout__ or sink is sys.__stderr__
         is_stream = callable(getattr(sink, "write", None))
         if colorize is None:
             colorize = not serialize and is_stream and self._should_colorize(cast("TextIO", sink))
+
+        if not is_stream and callable(sink) and _is_coroutine_callable(sink):
+            raise TypeError(
+                "Coroutine function sinks (async def) are not supported yet: "
+                "logust calls sinks synchronously and would never await them. "
+                "Use a regular function sink instead."
+            )
 
         if is_stream and not is_console:
             sink = self._stream_writer(cast("TextIO", sink))
@@ -1482,53 +1684,81 @@ class Logger:
             self._inner = original
             self._context = original_context
 
+    @overload
     def catch(
         self,
         exception: type[BaseException] | tuple[type[BaseException], ...] = Exception,
         *,
-        level: str = "ERROR",
+        level: str | int = "ERROR",
         reraise: bool = False,
+        onerror: Callable[[BaseException], Any] | None = None,
+        exclude: type[BaseException] | tuple[type[BaseException], ...] | None = None,
+        default: Any = None,
         message: str = "An error occurred",
-    ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
-        """Decorator to catch and log exceptions.
+    ) -> Catcher: ...
+
+    @overload
+    def catch(self, exception: _F) -> _F: ...
+
+    def catch(
+        self,
+        exception: (
+            type[BaseException] | tuple[type[BaseException], ...] | Callable[..., Any]
+        ) = Exception,
+        *,
+        level: str | int = "ERROR",
+        reraise: bool = False,
+        onerror: Callable[[BaseException], Any] | None = None,
+        exclude: type[BaseException] | tuple[type[BaseException], ...] | None = None,
+        default: Any = None,
+        message: str = "An error occurred",
+    ) -> Any:
+        """Catch and log exceptions, as a decorator or a context manager.
 
         Args:
-            exception: Exception type(s) to catch.
-            level: Log level for the error message.
+            exception: Exception type(s) to catch. If a function is passed
+                instead (``@logger.catch`` without parentheses), it is decorated
+                with the default options.
+            level: Log level (name or number) for the error message.
             reraise: Whether to re-raise the exception after logging.
+            onerror: Called with the exception after it is logged.
+            exclude: Exception type(s) that propagate without being logged.
+            default: Return value of the decorated function when an exception
+                was caught and not re-raised.
             message: Custom message prefix.
 
         Returns:
-            Decorator function.
+            A ``Catcher`` usable as a decorator or a context manager.
 
         Examples:
-            >>> @logger.catch(ValueError, level="WARNING")
+            >>> @logger.catch
             ... def risky_function():
             ...     raise ValueError("Something went wrong")
-            >>> risky_function()  # Logs the exception, doesn't re-raise
+            >>> risky_function()  # Logs the exception, returns None
 
-            >>> @logger.catch(reraise=True)
-            ... def another_function():
-            ...     raise RuntimeError("Critical error")
-            >>> another_function()  # Logs and re-raises
+            >>> @logger.catch(ValueError, level="WARNING", default=-1)
+            ... def parse(text):
+            ...     return int(text)
+
+            >>> with logger.catch(reraise=True):
+            ...     raise RuntimeError("Critical error")  # Logs and re-raises
         """
+        if callable(exception) and not (
+            isinstance(exception, type) and issubclass(exception, BaseException)
+        ):
+            catcher = Catcher(self, Exception, exclude, level, reraise, onerror, message, default)
+            return catcher(exception)
 
-        def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
-            @functools.wraps(func)
-            def wrapper(*args: Any, **func_kwargs: Any) -> Any:
-                try:
-                    return func(*args, **func_kwargs)
-                except exception as e:
-                    tb = traceback.format_exc()
-                    log_method = getattr(self, level.lower())
-                    # _depth=1 to skip this wrapper and show caller of decorated function
-                    log_method(f"{message}: {e}", exception=tb, _depth=1)
-                    if reraise:
-                        raise
-
-            return wrapper
-
-        return decorator
+        return Catcher(
+            self,
+            exception,
+            exclude,
+            level,
+            reraise,
+            onerror,
+            message,
+            default,
+        )
 
     def add_callback(
         self, callback: Callable[[dict[str, Any]], None], level: LogLevel | str | None = None
@@ -1629,16 +1859,18 @@ class Logger:
                 - sink (required): File path or sys.stdout/sys.stderr
                 - level: Minimum log level
                 - format: Format string
-                - rotation: Rotation strategy (file sinks only)
+                - rotation: Rotation strategy (file sinks only; str,
+                  timedelta, or time)
                 - retention: Retention policy (file sinks only)
                 - compression: Enable compression (file sinks only)
                 - serialize: Output as JSON
                 - filter: Filter function
                 - enqueue: Async writes (file sinks only, default False)
                 - colorize: Enable ANSI colors (auto-detected for streams)
-            levels: List of custom level configurations. Each dict must have:
+            levels: List of level configurations. Each dict can have:
                 - name (required): Level name
-                - no (required): Numeric value
+                - no: Numeric value (required for a new level; omit it to
+                  update the color/icon of an existing level)
                 - color: Color name
                 - icon: Icon symbol
             extra: Default extra fields to bind
@@ -1664,11 +1896,10 @@ class Logger:
         if levels:
             for level_config in levels:
                 name = level_config.get("name")
-                no = level_config.get("no")
-                if name and no is not None:
+                if name:
                     self.level(
                         name,
-                        no=no,
+                        no=level_config.get("no"),
                         color=level_config.get("color"),
                         icon=level_config.get("icon"),
                     )

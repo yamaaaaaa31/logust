@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`logger.catch()` matches loguru's call shapes**: use it without parentheses (`@logger.catch`) or as a context manager (`with logger.catch():`). New `onerror`, `exclude`, and `default` options; `level` accepts custom level names and numbers. Coroutine and generator functions are decorated correctly.
+- **`logger.level()` lookups and updates**: `logger.level("INFO")` returns a `Level(name, no, color, icon)` named tuple, and `logger.level("INFO", color="blue")` (no `no`) updates an existing level, including the console color of built-in levels. Unknown names raise `ValueError`. `Level` is exported from `logust`.
+- **`datetime` rotation values**: `add(rotation=...)` accepts `timedelta(days=1)`, `timedelta(hours=1)`, and `time(0, 0)`. Values that can't be honored exactly raise `ValueError`.
+- **`logger.parse()`**: the module-level `parse()` is also available on the logger, as in loguru.
+
+### Changed
+- **`logger.level()` returns the level**: registering a level now returns its `Level` instead of `None`, `no` may be passed positionally, and re-registering keeps the existing color and icon unless new ones are given.
+- **`configure(levels=...)` entries without `no` update existing levels**: previously they were silently skipped; an unknown name now raises `ValueError`.
+
+### Fixed
+- **Coroutine function sinks are rejected**: `add()` raises `TypeError` for `async def` sinks (and async callables) instead of accepting them and never awaiting the coroutine.
+
 ## [0.5.0] - 2026-10-01
 
 ### Added
