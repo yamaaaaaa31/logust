@@ -9,7 +9,7 @@ use serde::Serialize;
 
 use crate::handler::{ExtraMap, LogRecord, write_extra_repr};
 use crate::level::get_level_color;
-use crate::time_format::TimeSpec;
+use crate::time_format::{TimeSpec, push_num};
 
 /// Logger initialization time for elapsed calculation
 pub static LOGGER_START_TIME: LazyLock<DateTime<Local>> = LazyLock::new(Local::now);
@@ -24,11 +24,22 @@ fn write_elapsed(start: &DateTime<Local>, now: &DateTime<Local>, out: &mut Strin
     let hours = total_secs / 3600;
     let minutes = (total_secs % 3600) / 60;
     let seconds = total_secs % 60;
-    let _ = write!(
-        out,
-        "{:02}:{:02}:{:02}.{:03}",
-        hours, minutes, seconds, millis
-    );
+    push_num(out, hours, 2);
+    out.push(':');
+    push_num(out, minutes, 2);
+    out.push(':');
+    push_num(out, seconds, 2);
+    out.push('.');
+    push_num(out, u64::from(millis), 3);
+}
+
+/// Append `text` left-aligned in a field of `width` characters (like `{:<width$}`)
+#[inline]
+fn push_padded(out: &mut String, text: &str, width: usize) {
+    out.push_str(text);
+    for _ in text.chars().count()..width {
+        out.push(' ');
+    }
 }
 
 /// Format elapsed time as HH:MM:SS.mmm
@@ -765,11 +776,11 @@ impl FormatConfig {
                 }
                 FormatToken::LevelWidth(width) => {
                     write_styled(out, auto, bold_color_prefix(level_color), |o| {
-                        let _ = write!(o, "{:<width$}", level_name, width = width);
+                        push_padded(o, level_name, *width);
                     })
                 }
                 FormatToken::LevelNo => {
-                    let _ = write!(out, "{}", record.level_no());
+                    push_num(out, u64::from(record.level_no()), 0);
                 }
                 FormatToken::LevelIcon => out.push_str(record.level_icon()),
                 FormatToken::Exception => {
@@ -790,28 +801,32 @@ impl FormatConfig {
                     write_styled(out, auto, CYAN, |o| o.push_str(&record.caller.function))
                 }
                 FormatToken::Line => write_styled(out, auto, CYAN, |o| {
-                    let _ = write!(o, "{}", record.caller.line);
+                    push_num(o, u64::from(record.caller.line), 0);
                 }),
                 FormatToken::Elapsed => write_styled(out, auto, DIM, |o| {
                     write_elapsed(&LOGGER_START_TIME, &record.timestamp, o);
                 }),
                 FormatToken::Thread => write_styled(out, auto, CYAN, |o| {
-                    let _ = write!(o, "{}:{}", record.thread.name, record.thread.id);
+                    o.push_str(&record.thread.name);
+                    o.push(':');
+                    push_num(o, record.thread.id, 0);
                 }),
                 FormatToken::ThreadName => {
                     write_styled(out, auto, CYAN, |o| o.push_str(&record.thread.name))
                 }
                 FormatToken::ThreadId => write_styled(out, auto, CYAN, |o| {
-                    let _ = write!(o, "{}", record.thread.id);
+                    push_num(o, record.thread.id, 0);
                 }),
                 FormatToken::ProcessName => {
                     write_styled(out, auto, CYAN, |o| o.push_str(&record.process.name))
                 }
                 FormatToken::ProcessId => write_styled(out, auto, CYAN, |o| {
-                    let _ = write!(o, "{}", record.process.id);
+                    push_num(o, u64::from(record.process.id), 0);
                 }),
                 FormatToken::Process => write_styled(out, auto, CYAN, |o| {
-                    let _ = write!(o, "{}:{}", record.process.name, record.process.id);
+                    o.push_str(&record.process.name);
+                    o.push(':');
+                    push_num(o, u64::from(record.process.id), 0);
                 }),
                 FormatToken::File => {
                     write_styled(out, auto, CYAN, |o| o.push_str(record.caller.file_name()))
