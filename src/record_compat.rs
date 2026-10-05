@@ -366,7 +366,7 @@ pub fn set_compat_fields(
 pub fn record_time_fields(
     py: Python<'_>,
 ) -> PyResult<(Bound<'_, PyAny>, String, Bound<'_, PyAny>)> {
-    let now = Local::now();
+    let now = crate::clock::local_now();
     let offset = now.offset().fix().local_minus_utc();
     let cached = caches()
         .tz

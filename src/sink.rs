@@ -1296,7 +1296,8 @@ impl FileSinkInner {
 
         let boundary_millis = self.next_rotation_boundary.load(Ordering::Relaxed);
         if boundary_millis > 0 {
-            Local::now().timestamp_millis() >= boundary_millis
+            // Same value as `Local::now().timestamp_millis()`, without the zone lookup
+            chrono::Utc::now().timestamp_millis() >= boundary_millis
         } else {
             false
         }

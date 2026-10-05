@@ -1,3 +1,4 @@
+mod clock;
 mod format;
 mod handler;
 mod level;

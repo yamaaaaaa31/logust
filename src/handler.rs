@@ -15,6 +15,7 @@ use pyo3::types::{
 use serde::{Serialize, Serializer};
 use serde_json::{Map, Number, Value};
 
+use crate::clock::local_now;
 use crate::format::{FormatConfig, TokenRequirements};
 use crate::level::{LevelInfo, LogLevel};
 use crate::sink::FileSink;
@@ -585,7 +586,7 @@ impl LogRecord {
     /// Create a new log record
     pub fn new(level: LogLevel, message: String) -> Self {
         LogRecord {
-            timestamp: Local::now(),
+            timestamp: local_now(),
             level,
             level_info: None,
             message,
@@ -601,7 +602,7 @@ impl LogRecord {
     /// Create a new log record with extra context (Arc reference - zero-copy)
     pub fn with_extra(level: LogLevel, message: String, extra: Arc<ExtraMap>) -> Self {
         LogRecord {
-            timestamp: Local::now(),
+            timestamp: local_now(),
             level,
             level_info: None,
             message,
@@ -623,7 +624,7 @@ impl LogRecord {
         caller: CallerInfo,
     ) -> Self {
         LogRecord {
-            timestamp: Local::now(),
+            timestamp: local_now(),
             level,
             level_info: None,
             message,
@@ -647,7 +648,7 @@ impl LogRecord {
         process: ProcessInfo,
     ) -> Self {
         LogRecord {
-            timestamp: Local::now(),
+            timestamp: local_now(),
             level,
             level_info: None,
             message,
@@ -668,7 +669,7 @@ impl LogRecord {
         exception: Option<String>,
     ) -> Self {
         LogRecord {
-            timestamp: Local::now(),
+            timestamp: local_now(),
             level,
             level_info: None,
             message,
@@ -689,7 +690,7 @@ impl LogRecord {
         exception: Option<String>,
     ) -> Self {
         LogRecord {
-            timestamp: Local::now(),
+            timestamp: local_now(),
             level: LogLevel::Debug, // Placeholder, not used for custom levels
             level_info: Some(level_info),
             message,
@@ -711,7 +712,7 @@ impl LogRecord {
         caller: CallerInfo,
     ) -> Self {
         LogRecord {
-            timestamp: Local::now(),
+            timestamp: local_now(),
             level: LogLevel::Debug,
             level_info: Some(level_info),
             message,
@@ -735,7 +736,7 @@ impl LogRecord {
         process: ProcessInfo,
     ) -> Self {
         LogRecord {
-            timestamp: Local::now(),
+            timestamp: local_now(),
             level: LogLevel::Debug,
             level_info: Some(level_info),
             message,
