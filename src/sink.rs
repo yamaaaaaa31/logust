@@ -351,27 +351,34 @@ impl SharedFileIdentity {
     }
 }
 
+/// Holds a lock on the rotation lock file until dropped.
+///
+/// The guard keeps its own `Arc` to the open file, so the lock outlives a
+/// writer re-open that replaces the file handle (as a `dup()`ed descriptor
+/// would) without a `dup`/`close` syscall pair per locked write.
 struct FileLockGuard {
     #[cfg(any(unix, windows))]
-    file: File,
+    file: Arc<File>,
     #[cfg(not(any(unix, windows)))]
     _phantom: std::marker::PhantomData<()>,
 }
 
 impl FileLockGuard {
-    fn shared(file: &File) -> io::Result<Self> {
+    fn shared(file: &Arc<File>) -> io::Result<Self> {
         #[cfg(unix)]
         {
-            let file = file.try_clone()?;
-            flock_file(&file, libc::LOCK_SH)?;
-            Ok(Self { file })
+            flock_file(file, libc::LOCK_SH)?;
+            Ok(Self {
+                file: Arc::clone(file),
+            })
         }
 
         #[cfg(windows)]
         {
-            let file = file.try_clone()?;
-            windows_lock_file(&file, false)?;
-            Ok(Self { file })
+            windows_lock_file(file, false)?;
+            Ok(Self {
+                file: Arc::clone(file),
+            })
         }
 
         #[cfg(not(any(unix, windows)))]
@@ -383,19 +390,21 @@ impl FileLockGuard {
         }
     }
 
-    fn exclusive(file: &File) -> io::Result<Self> {
+    fn exclusive(file: &Arc<File>) -> io::Result<Self> {
         #[cfg(unix)]
         {
-            let file = file.try_clone()?;
-            flock_file(&file, libc::LOCK_EX)?;
-            Ok(Self { file })
+            flock_file(file, libc::LOCK_EX)?;
+            Ok(Self {
+                file: Arc::clone(file),
+            })
         }
 
         #[cfg(windows)]
         {
-            let file = file.try_clone()?;
-            windows_lock_file(&file, true)?;
-            Ok(Self { file })
+            windows_lock_file(file, true)?;
+            Ok(Self {
+                file: Arc::clone(file),
+            })
         }
 
         #[cfg(not(any(unix, windows)))]
@@ -474,7 +483,7 @@ fn windows_unlock_file(file: &File) -> io::Result<()> {
 
 struct RotatingFileWriter {
     writer: BufWriter<File>,
-    lock_file: File,
+    lock_file: Arc<File>,
     file_identity: Option<FileIdentity>,
     shared_identity: Option<Arc<SharedFileIdentity>>,
 }
@@ -495,7 +504,7 @@ impl RotatingFileWriter {
 
         let writer = Self {
             writer: BufWriter::new(file),
-            lock_file,
+            lock_file: Arc::new(lock_file),
             file_identity,
             shared_identity,
         };
@@ -505,12 +514,14 @@ impl RotatingFileWriter {
 
     fn write_line(&mut self, path: &Path, message: &str) -> io::Result<()> {
         let _lock = self.acquire_shared_lock(path)?;
-        writeln!(self.writer, "{}", message)?;
+        self.write_line_unlocked(message)?;
         self.writer.flush()
     }
 
+    /// Append `message` and a newline to the buffer (no fmt machinery)
     fn write_line_unlocked(&mut self, message: &str) -> io::Result<()> {
-        writeln!(self.writer, "{}", message)
+        self.writer.write_all(message.as_bytes())?;
+        self.writer.write_all(b"\n")
     }
 
     fn write_line_buffered(
@@ -523,7 +534,7 @@ impl RotatingFileWriter {
             *batch_lock = Some(self.acquire_shared_lock(path)?);
         }
 
-        writeln!(self.writer, "{}", message)
+        self.write_line_unlocked(message)
     }
 
     fn flush_buffered(
@@ -1362,7 +1373,7 @@ impl FileSinkInner {
             }
         }
 
-        let rotation_lock_file = Self::open_rotation_lock_file(&self.config.path)?;
+        let rotation_lock_file = Arc::new(Self::open_rotation_lock_file(&self.config.path)?);
         let _rotation_lock = FileLockGuard::exclusive(&rotation_lock_file)?;
 
         if let Some(mut pending) = self.load_pending_rotation() {
