@@ -250,6 +250,41 @@ def _to_log_level(level: LogLevel | str) -> LogLevel:
     return level
 
 
+def _check_utf8_encoding(encoding: str) -> None:
+    """Accept any alias of UTF-8; file sinks are always written as UTF-8 by Rust."""
+    import codecs
+
+    try:
+        name = codecs.lookup(encoding).name
+    except LookupError:
+        raise ValueError(f"Unknown encoding: {encoding!r}") from None
+    if name != "utf-8":
+        raise ValueError(
+            f"Unsupported encoding: {encoding!r}; logust file sinks always write UTF-8"
+        )
+
+
+def _report_sink_error(handler_id: int | None, record: Any) -> None:
+    """Print a loguru-style report of the exception being handled to stderr."""
+    stderr = sys.stderr
+    if stderr is None:
+        return
+    try:
+        try:
+            record_repr = str(record)
+        except Exception:
+            record_repr = "/!\\ Unprintable record /!\\"
+        stderr.write(f"--- Logging error in Logust Handler #{handler_id} ---\n")
+        stderr.write(f"Record was: {record_repr}\n")
+        traceback.print_exc(file=stderr)
+        stderr.write("--- End of logging error ---\n")
+        flush = getattr(stderr, "flush", None)
+        if callable(flush):
+            flush()
+    except OSError:
+        pass
+
+
 try:
     _LEVEL_VALUES: dict[str, int] = {
         "trace": LogLevel.Trace.value,
@@ -1395,12 +1430,16 @@ class Logger:
         format: str | None = None,
         rotation: str | datetime.timedelta | datetime.time | None = None,
         retention: str | int | None = None,
-        compression: bool = False,
+        compression: bool | str = False,
         serialize: bool = False,
         filter: Callable[[dict[str, Any]], bool] | None = None,
         enqueue: bool = False,
         colorize: bool | None = None,
         collect: CollectOptions | None = None,
+        mode: str | None = None,
+        encoding: str | None = None,
+        delay: bool | None = None,
+        catch: bool | None = None,
     ) -> int:
         """Add a handler (file, console, or callable sink).
 
@@ -1418,8 +1457,10 @@ class Logger:
                       Only valid for file sinks.
             retention: Retention policy ("10 days" or count as int)
                        Only valid for file sinks.
-            compression: Enable gzip compression for rotated files.
-                         Only valid for file sinks.
+            compression: Compress rotated files. ``True`` means gzip; a string
+                         selects the format: "gz", "bz2", "zip", "tar",
+                         "tar.gz" or "tar.bz2" ("xz", "lzma" and "tar.xz"
+                         raise ValueError). Only valid for file sinks.
             serialize: Output as JSON instead of text format.
             filter: Optional callable that receives a record dict and returns
                     True if the record should be logged, False to skip.
@@ -1433,9 +1474,26 @@ class Logger:
                       files, and callables.
             collect: Options for controlling information collection.
                      Can override auto-detection from format string.
+            mode: "a" (default) appends, "w" truncates the file when it is
+                  first opened. File sinks only.
+            encoding: Accepted for loguru compatibility. Files are always
+                      written as UTF-8, so only UTF-8 aliases are accepted;
+                      anything else raises ValueError. File sinks only.
+            delay: If True, the file is not created until the first message
+                   is written. File sinks only.
+            catch: What to do when the sink fails to write a message.
+                   None (default) drops the error silently, True prints a
+                   report to stderr (loguru's default), False raises the
+                   error from the logging call.
 
         Returns:
             Handler ID for later removal.
+
+        Raises:
+            TypeError: If ``mode``, ``encoding`` or ``delay`` is given for a
+                non-file sink.
+            ValueError: If ``compression``, ``mode`` or ``encoding`` is not
+                supported.
 
         Examples:
             >>> logger.add("app.log")
@@ -1469,6 +1527,13 @@ class Logger:
                 "Use a regular function sink instead."
             )
 
+        is_file = not is_stream and not callable(sink)
+        if not is_file:
+            file_only = {"mode": mode, "encoding": encoding, "delay": delay}
+            for option, value in file_only.items():
+                if value is not None:
+                    raise TypeError(f"add() got an unexpected keyword argument '{option}'")
+
         if is_stream and not is_console:
             sink = self._stream_writer(cast("TextIO", sink))
 
@@ -1480,6 +1545,7 @@ class Logger:
                 serialize=serialize,
                 filter=filter,
                 colorize=colorize,
+                catch=catch,
             )
             # For callable sinks, compute CollectOptions from format if not specified
             # This avoids relying on Rust's needs_* which is polluted by callback registration
@@ -1507,6 +1573,7 @@ class Logger:
                 serialize=serialize,
                 filter=filter,
                 colorize=colorize,
+                catch=catch,
             )
             # Always track handler with CollectOptions (default to auto-detect if not specified)
             self._collect_options[handler_id] = collect if collect is not None else CollectOptions()
@@ -1517,6 +1584,14 @@ class Logger:
 
         # At this point sink must be a path (str or PathLike), not TextIO
         sink_str = os.fspath(cast("str | os.PathLike[str]", sink))
+
+        if encoding is not None:
+            _check_utf8_encoding(encoding)
+        if callable(compression):
+            raise TypeError(
+                "callable compression is not supported; pass True or a format string "
+                '("gz", "bz2", "zip", "tar", "tar.gz", "tar.bz2")'
+            )
 
         resolved_level = _to_log_level(level) if level is not None else None
 
@@ -1535,6 +1610,9 @@ class Logger:
             filter=filter,
             enqueue=enqueue,
             colorize=colorize,
+            mode=mode,
+            delay=delay,
+            catch=catch,
         )
         # Always track handler with CollectOptions (default to auto-detect if not specified)
         self._collect_options[handler_id] = collect if collect is not None else CollectOptions()
@@ -1600,6 +1678,7 @@ class Logger:
         serialize: bool = False,
         filter: Callable[[dict[str, Any]], bool] | None = None,
         colorize: bool = False,
+        catch: bool | None = None,
     ) -> int:
         """Add a callable as a sink (internal method).
 
@@ -1613,6 +1692,8 @@ class Logger:
             filter: Optional callable that receives a record dict and returns
                     True if the record should be logged, False to skip.
             colorize: Style tokens and render message markup as ANSI codes.
+            catch: None silently drops sink errors, True reports them to
+                   stderr, False propagates them to the logging call.
 
         Returns:
             Handler ID for later removal.
@@ -1660,25 +1741,67 @@ class Logger:
 
                 sink(formatted)
             except Exception:
-                # Silently ignore sink errors (like loguru behavior)
+                # catch=None (default): silently ignore sink errors
                 pass
 
+        wrapper: Callable[[dict[str, Any]], None] = callback_wrapper
+        handler_id_box: list[int | None] = [None]
+        if catch is not None:
+            # catch=True/False wrappers are chosen once here, so the default
+            # wrapper above stays untouched (no extra per-message call).
+            def emit(record: dict[str, Any]) -> None:
+                if filter is not None and not filter(record):
+                    return
+                if serialize:
+                    json_record: dict[str, Any] = {
+                        "time": record.get("timestamp", ""),
+                        "level": record.get("level", ""),
+                        "message": record.get("message", ""),
+                    }
+                    for key in ("name", "function", "line", "extra", "exception"):
+                        if record.get(key):
+                            json_record[key] = record[key]
+                    sink(json.dumps(json_record))
+                else:
+                    sink(parsed_template.format(record))
+
+            if catch:
+
+                def reporting_wrapper(record: dict[str, Any]) -> None:
+                    try:
+                        emit(record)
+                    except Exception:
+                        _report_sink_error(handler_id_box[0], record)
+
+                wrapper = reporting_wrapper
+            else:
+                # catch=False: exceptions propagate through Rust to the caller.
+                wrapper = emit
+
+        raise_errors = catch is False
         # Lightweight path: Rust builds a minimal dict; filter/JSON need full dict.
         if filter is None and not serialize:
             flags = parsed_template.lightweight_requirements_for_rust()
             extra_keys = parsed_template.lightweight_extra_keys_for_rust()
-            return self._inner.add_formatted_sink_callback(
-                callback_wrapper, flags, extra_keys, resolved_level
+            handler_id = self._inner.add_formatted_sink_callback(
+                wrapper, flags, extra_keys, resolved_level, raise_errors=raise_errors
             )
         # Filter callbacks always observe the loguru-compatible text view of
         # extras; only filterless serialized sinks get the typed JSON dict.
-        if serialize and filter is None:
-            return self._inner.add_serialized_callback(callback_wrapper, resolved_level)
-        return self._inner.add_callback(
-            callback_wrapper,
-            resolved_level,
-            file_path=not serialize and parsed_template.needs_file_path,
-        )
+        elif serialize and filter is None:
+            handler_id = self._inner.add_serialized_callback(
+                wrapper, resolved_level, raise_errors=raise_errors
+            )
+        else:
+            handler_id = self._inner.add_callback(
+                wrapper,
+                resolved_level,
+                file_path=not serialize and parsed_template.needs_file_path,
+                raise_errors=raise_errors,
+            )
+        if catch is not None:
+            handler_id_box[0] = handler_id
+        return handler_id
 
     def remove(self, handler_id: int | None = None) -> bool:
         """Remove a handler by ID, or all handlers if None.
@@ -1952,11 +2075,17 @@ class Logger:
                 - rotation: Rotation strategy (file sinks only; str,
                   timedelta, or time)
                 - retention: Retention policy (file sinks only)
-                - compression: Enable compression (file sinks only)
+                - compression: True (gzip) or a format such as "zip" or
+                  "tar.gz" (file sinks only)
                 - serialize: Output as JSON
                 - filter: Filter function
                 - enqueue: Async writes (file sinks only, default False)
                 - colorize: Enable ANSI colors (auto-detected for streams)
+                - mode: "a" (default) or "w" (file sinks only)
+                - encoding: UTF-8 aliases only (file sinks only)
+                - delay: Create the file on the first message (file sinks only)
+                - catch: None (drop), True (report to stderr) or False (raise)
+                  for sink errors
             levels: List of level configurations. Each dict can have:
                 - name (required): Level name
                 - no: Numeric value (required for a new level; omit it to
@@ -2009,6 +2138,10 @@ class Logger:
                         filter=handler_config.get("filter"),
                         enqueue=handler_config.get("enqueue", False),
                         colorize=handler_config.get("colorize"),
+                        mode=handler_config.get("mode"),
+                        encoding=handler_config.get("encoding"),
+                        delay=handler_config.get("delay"),
+                        catch=handler_config.get("catch"),
                     )
                     handler_ids.append(handler_id)
 

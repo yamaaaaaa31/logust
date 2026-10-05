@@ -63,7 +63,10 @@ In this run, `loguru`'s `enqueue=True` path remained far slower than its sync pa
 | Colored output | Yes | Yes |
 | File rotation | Yes | Yes |
 | File retention | Yes | Yes |
-| Compression | Yes | Yes |
+| Compression | Yes (gz, bz2, zip, tar, tar.gz, tar.bz2) | Yes (also xz, lzma, tar.xz, custom function) |
+| File `mode` / `delay` | Yes | Yes |
+| File `encoding` | UTF-8 only | Any |
+| Sink error `catch` | Yes (default: silent) | Yes (default: report to stderr) |
 | JSON output | Yes | Yes |
 | Context binding | Yes | Yes |
 | Custom levels | Yes | Yes |
@@ -122,6 +125,17 @@ and `{file.path}` (see [Formatting](guide/formatting.md#format-tokens)). Differe
 - Plain `{time}` gives `2025-12-24 12:00:00.123` (loguru: ISO 8601); use `{time:}` for ISO 8601.
 - `{thread}` / `{process}` give `name:id` (loguru: the id); use `{thread.id}` / `{process.id}`.
 - The `zz` time token gives the UTC offset instead of a time zone abbreviation, except with `!UTC`.
+
+### File sink options
+
+`compression`, `mode`, `encoding`, `delay` and `catch` use loguru's names, with these differences:
+
+- **`compression`**: `"gz"`, `"bz2"`, `"zip"`, `"tar"`, `"tar.gz"` and `"tar.bz2"` are supported, and `True` still means gzip. `"xz"`, `"lzma"` and `"tar.xz"` raise `ValueError`. A compression function raises `TypeError`.
+- **`mode`**: only `"a"` and `"w"` are supported.
+- **`encoding`**: files are always written as UTF-8. UTF-8 aliases are accepted, and other encodings raise `ValueError`.
+- **`catch`**: loguru defaults to `catch=True`, which prints sink errors to stderr. Logust defaults to `catch=None`, which drops them silently as earlier releases did. Pass `catch=True` for loguru's behavior, or `catch=False` to raise the error from the logging call.
+- **Rotated file names** keep Logust's `app.<timestamp>.pid<pid>.log` pattern, with the archive extension appended (for example `.log.zip`).
+- `buffering` and other `open()` arguments are not supported.
 
 ### Other differences
 

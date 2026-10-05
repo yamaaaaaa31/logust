@@ -134,14 +134,23 @@ class HandlerConfig(TypedDict, total=False):
                   Only valid for file sinks.
         retention: Retention policy ("10 days" or count as int).
                    Only valid for file sinks.
-        compression: Enable gzip compression for rotated files.
+        compression: Compress rotated files: True (gzip) or a format string
+                     ("gz", "bz2", "zip", "tar", "tar.gz", "tar.bz2").
                      Only valid for file sinks.
         serialize: Output as JSON instead of text format.
         filter: Filter callback function.
-        enqueue: Enable async writes (default True).
+        enqueue: Enable async writes (default False).
                  Only valid for file sinks.
         colorize: Enable ANSI color codes for console sinks.
                   If not specified, auto-detect based on TTY.
+        mode: "a" (append, default) or "w" (truncate on first open).
+              Only valid for file sinks.
+        encoding: UTF-8 aliases only; files are always written as UTF-8.
+                  Only valid for file sinks.
+        delay: Create the file when the first message is written.
+               Only valid for file sinks.
+        catch: Sink error policy: None drops errors silently (default),
+               True reports them to stderr, False raises them.
     """
 
     sink: str | TextIO
@@ -149,11 +158,15 @@ class HandlerConfig(TypedDict, total=False):
     format: str
     rotation: str | datetime.timedelta | datetime.time
     retention: str | int
-    compression: bool
+    compression: bool | str
     serialize: bool
     filter: FilterCallback
     enqueue: bool
     colorize: bool
+    mode: str
+    encoding: str
+    delay: bool
+    catch: bool
 
 
 class LevelConfig(TypedDict, total=False):

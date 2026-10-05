@@ -15,7 +15,7 @@ A fast, Rust-powered Python logging library inspired by [loguru](https://github.
 - **Caller Information** - Automatic module, function, and line number in every log
 - **Flexible Sinks** - Output to console, files, or any callable (lambda, function)
 - **Simple API** - loguru-compatible interface for easy migration
-- **File Management** - Size/time-based rotation, retention policies, gzip compression
+- **File Management** - Size/time-based rotation, retention policies, gzip/bz2/zip/tar compression
 - **JSON Support** - Built-in serialization for structured logging
 - **Context Binding** - Attach metadata to log records with `bind()`
 - **Exception Handling** - Automatic traceback capture with `catch()` decorator
@@ -557,11 +557,15 @@ More runnable examples are listed in [examples/README.md](examples/README.md).
 | `format` | `str` | Custom format template |
 | `rotation` | `str` | Rotation strategy (files only) |
 | `retention` | `str \| int` | Retention policy (files only) |
-| `compression` | `bool` | Gzip rotated files (files only) |
+| `compression` | `bool \| str` | Compress rotated files: `True` (gzip), `"gz"`, `"bz2"`, `"zip"`, `"tar"`, `"tar.gz"`, `"tar.bz2"` (files only) |
 | `serialize` | `bool` | JSON output |
 | `filter` | `callable` | Filter function |
 | `enqueue` | `bool` | Async writes (files only) |
 | `colorize` | `bool` | ANSI colors (console only, auto-detect if None) |
+| `mode` | `str` | `"a"` append (default) or `"w"` truncate (files only) |
+| `encoding` | `str` | UTF-8 aliases only (files only) |
+| `delay` | `bool` | Create the file on the first message (files only) |
+| `catch` | `bool \| None` | Sink errors: `None` drops, `True` reports to stderr, `False` raises |
 
 ### Opt Options (`opt()`)
 

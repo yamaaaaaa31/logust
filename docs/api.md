@@ -48,12 +48,16 @@ handler_id = logger.add(
     format=None,             # Format string (fields: docs/guide/formatting.md)
     rotation=None,           # "500 MB", "daily", "hourly", timedelta, time (files only)
     retention=None,          # "10 days" or count (int) (files only)
-    compression=False,       # Gzip compression (files only)
+    compression=False,       # True (gzip), "gz", "bz2", "zip", "tar", "tar.gz", "tar.bz2" (files only)
     serialize=False,         # JSON output
     filter=None,             # Filter function
     enqueue=False,           # Async writes (files only)
     colorize=None,           # ANSI colors (console only, auto-detect if None)
     collect=None,            # CollectOptions for info collection control
+    mode=None,               # "a" (append, default) or "w" (truncate) (files only)
+    encoding=None,           # UTF-8 aliases only; files are always UTF-8 (files only)
+    delay=None,              # True: create the file on the first message (files only)
+    catch=None,              # Sink errors: None drops, True reports to stderr, False raises
 )
 
 # Console sink
@@ -75,7 +79,13 @@ logger.add(
     "{thread.name} {file.path}:{line} - {message}\n{exception}",
 )
 # An invalid time spec raises ValueError: logger.add("x.log", format="{time:SSSSSSS}")
+```
 
+`mode`, `encoding` and `delay` raise `TypeError` for non-file sinks. Unsupported
+`compression`, `mode` or `encoding` values raise `ValueError`. See
+[File Output](guide/file-output.md) for details.
+
+```python
 logger.remove(handler_id)    # Remove specific
 logger.remove()              # Remove all
 logger.complete()            # Flush pending writes
@@ -177,7 +187,8 @@ logger.remove_callback(callback_id)
 ```python
 handler_ids = logger.configure(
     handlers=[
-        {"sink": "app.log", "level": "INFO", "rotation": "1 day"},
+        {"sink": "app.log", "level": "INFO", "rotation": "1 day", "compression": "zip"},
+        {"sink": "run.log", "mode": "w", "delay": True},
         {"sink": "error.log", "level": "ERROR"},
         {"sink": "app.json", "serialize": True},
     ],
