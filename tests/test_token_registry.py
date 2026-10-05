@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import multiprocessing
+import os
+import threading
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
@@ -449,10 +452,22 @@ class TestConditionalInfoGathering:
         log_file = tmp_path / "caller.log"
         logger.add(str(log_file), format="{function} | {message}")
 
+        # Plain calls collect the caller in Rust; the Python helper is the fallback
+        with patch("logust._logger._get_caller_info") as mock_caller:
+            logger.info("Test message")
+            mock_caller.assert_not_called()
+        logger._fast_path = False
+        logger._refresh_fast_collect()
         with patch("logust._logger._get_caller_info") as mock_caller:
             mock_caller.return_value = ("mod", "func", 42, "file.py")
             logger.info("Test message")
             mock_caller.assert_called_once()
+
+        logger.complete()
+        assert log_file.read_text().splitlines() == [
+            "test_caller_info_called_when_needed | Test message",
+            "func | Test message",
+        ]
 
     def test_thread_info_skipped_when_not_needed(self, tmp_path: Path) -> None:
         """_get_thread_info should not be called when not needed."""
@@ -474,12 +489,24 @@ class TestConditionalInfoGathering:
         logger.remove()
 
         log_file = tmp_path / "thread.log"
-        logger.add(str(log_file), format="{thread} | {message}")
+        logger.add(str(log_file), format="{thread.name}:{thread.id} | {message}")
 
+        with patch("logust._logger._get_thread_info") as mock_thread:
+            logger.info("Test message")
+            mock_thread.assert_not_called()
+        logger._fast_path = False
+        logger._refresh_fast_collect()
         with patch("logust._logger._get_thread_info") as mock_thread:
             mock_thread.return_value = ("MainThread", 12345)
             logger.info("Test message")
             mock_thread.assert_called_once()
+
+        logger.complete()
+        current = threading.current_thread()
+        assert log_file.read_text().splitlines() == [
+            f"{current.name}:{current.ident} | Test message",
+            "MainThread:12345 | Test message",
+        ]
 
     def test_process_info_skipped_when_not_needed(self, tmp_path: Path) -> None:
         """_get_process_info should not be called when not needed."""
@@ -501,12 +528,23 @@ class TestConditionalInfoGathering:
         logger.remove()
 
         log_file = tmp_path / "process.log"
-        logger.add(str(log_file), format="{process} | {message}")
+        logger.add(str(log_file), format="{process.name}:{process.id} | {message}")
 
+        with patch("logust._logger._get_process_info") as mock_process:
+            logger.info("Test message")
+            mock_process.assert_not_called()
+        logger._fast_path = False
+        logger._refresh_fast_collect()
         with patch("logust._logger._get_process_info") as mock_process:
             mock_process.return_value = ("MainProcess", 99999)
             logger.info("Test message")
             mock_process.assert_called_once()
+
+        logger.complete()
+        assert log_file.read_text().splitlines() == [
+            f"{multiprocessing.current_process().name}:{os.getpid()} | Test message",
+            "MainProcess:99999 | Test message",
+        ]
 
 
 # ============================================================================
@@ -560,6 +598,10 @@ class TestCollectOptionsWithAdd:
             collect=CollectOptions(caller=True),
         )
 
+        # Rust collects it on the fast path; the Python path must collect it too
+        assert logger._compute_effective_requirements(20)[0] is True
+        logger._fast_path = False
+        logger._refresh_fast_collect()
         with patch("logust._logger._get_caller_info") as mock_caller:
             mock_caller.return_value = ("mod", "func", 42, "file.py")
             logger.info("Test message")

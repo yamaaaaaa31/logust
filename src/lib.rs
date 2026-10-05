@@ -1,4 +1,5 @@
 mod clock;
+mod collect;
 mod format;
 mod handler;
 mod level;
@@ -8,7 +9,7 @@ mod time_format;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, RwLockReadGuard, RwLockWriteGuard};
 
 use pyo3::intern;
@@ -332,9 +333,22 @@ pub struct PyLogger {
     cached_requirements_by_level: Arc<RwLock<HashMap<u32, TokenRequirements>>>,
     /// Cached token requirements for handlers only (excludes callbacks)
     cached_handler_requirements: Arc<RwLock<TokenRequirements>>,
+    /// What [`Self::log_fast`] collects per built-in level, pushed by the Python
+    /// `Logger` (see [`Self::set_fast_collect`]); shared with bound loggers like
+    /// the handler list, and reset to [`FAST_COLLECT_INVALID`] whenever the
+    /// handlers or callbacks change so the Python path runs until it is refreshed.
+    fast_collect: Arc<AtomicU64>,
     /// Render color markup in messages (false for `opt(colors=False)` loggers)
     message_markup: bool,
 }
+
+/// `fast_collect` table with every level marked unavailable (bit 3 of each nibble).
+const FAST_COLLECT_INVALID: u64 = u64::MAX;
+/// Nibble bits of the `fast_collect` table, one nibble per [`LogLevel::slot`].
+const FAST_CALLER: u64 = 1;
+const FAST_THREAD: u64 = 2;
+const FAST_PROCESS: u64 = 4;
+const FAST_UNAVAILABLE: u64 = 8;
 
 #[pymethods]
 impl PyLogger {
@@ -349,6 +363,7 @@ impl PyLogger {
             cached_callback_min_level: Arc::new(AtomicU32::new(u32::MAX)),
             cached_requirements_by_level: Arc::new(RwLock::new(HashMap::new())),
             cached_handler_requirements: Arc::new(RwLock::new(TokenRequirements::default())),
+            fast_collect: Arc::new(AtomicU64::new(FAST_COLLECT_INVALID)),
             message_markup: true,
         };
 
@@ -523,6 +538,7 @@ impl PyLogger {
             cached_callback_min_level: Arc::clone(&self.cached_callback_min_level),
             cached_requirements_by_level: Arc::clone(&self.cached_requirements_by_level),
             cached_handler_requirements: Arc::clone(&self.cached_handler_requirements),
+            fast_collect: Arc::clone(&self.fast_collect),
             message_markup: self.message_markup,
         };
         Py::new(py, new_logger)
@@ -539,6 +555,7 @@ impl PyLogger {
             cached_callback_min_level: Arc::clone(&self.cached_callback_min_level),
             cached_requirements_by_level: Arc::clone(&self.cached_requirements_by_level),
             cached_handler_requirements: Arc::clone(&self.cached_handler_requirements),
+            fast_collect: Arc::clone(&self.fast_collect),
             message_markup: colors,
         };
         Py::new(py, new_logger)
@@ -711,6 +728,106 @@ impl PyLogger {
     #[getter]
     fn handler_count(&self) -> usize {
         self.handlers.read().len()
+    }
+
+    /// Set what [`Self::log_fast`] collects: one nibble per built-in level in
+    /// [`LogLevel::slot`] order (bit 0 caller, bit 1 thread, bit 2 process,
+    /// bit 3 "use the Python path", e.g. for fixed `CallerInfo` values).
+    ///
+    /// The Python `Logger` computes this from its effective requirements and
+    /// calls it whenever they may have changed; any handler or callback change
+    /// on this side resets the table so stale flags are never used.
+    fn set_fast_collect(&self, table: u64) {
+        self.fast_collect.store(table, Ordering::Release);
+    }
+
+    /// Log `message` at built-in level `level_no` from the Python caller
+    /// `depth` frames above the calling Python frame, collecting caller, thread
+    /// and process info here as the `fast_collect` table says.
+    ///
+    /// Returns `False` without logging when the Python path must be used:
+    /// the level is not built-in, the table is stale or marks the level, or a
+    /// collected value has a shape Python would reject. The Python `Logger` only
+    /// calls this with no `*args`/`**kwargs`, no exception, no patchers and no
+    /// module activation rules, which is everything else the Python path does.
+    ///
+    /// Arguments are positional-only to skip keyword matching.
+    #[pyo3(signature = (level_no, message, depth, /))]
+    fn log_fast(
+        &self,
+        py: Python<'_>,
+        level_no: u32,
+        message: &Bound<'_, PyAny>,
+        depth: usize,
+    ) -> PyResult<bool> {
+        let Some(level) = LogLevel::from_no(level_no) else {
+            return Ok(false);
+        };
+        let table = self.fast_collect.load(Ordering::Acquire);
+        let flags = (table >> (level.slot() * 4)) & 0xF;
+        if flags & FAST_UNAVAILABLE != 0 {
+            return Ok(false);
+        }
+
+        // ``str(message)``: an exact ``str`` is used as is, anything else is
+        // converted, as the Python path does.
+        let message = if message.is_exact_instance_of::<PyString>() {
+            // SAFETY: just checked to be an exact ``str``
+            unsafe { message.cast_unchecked::<PyString>() }
+                .to_str()?
+                .to_owned()
+        } else {
+            message.str()?.to_str()?.to_owned()
+        };
+
+        let caller = if flags & FAST_CALLER != 0 {
+            match collect::caller_info(py, depth)? {
+                Some(caller) => Some(caller),
+                None => return Ok(false),
+            }
+        } else {
+            None
+        };
+        let thread = if flags & FAST_THREAD != 0 {
+            match collect::thread_info(py)? {
+                Some(thread) => Some(thread),
+                None => return Ok(false),
+            }
+        } else {
+            None
+        };
+        let process = if flags & FAST_PROCESS != 0 {
+            Some(collect::process_info(py)?)
+        } else {
+            None
+        };
+
+        let (name, function, line, file) = match caller {
+            Some(c) => (Some(c.name), Some(c.function), Some(c.line), Some(c.file)),
+            None => (None, None, None, None),
+        };
+        let (thread_name, thread_id) = match thread {
+            Some(t) => (Some(t.name), Some(t.id)),
+            None => (None, None),
+        };
+        let (process_name, process_id) = match process {
+            Some(p) => (Some(p.name), Some(p.id)),
+            None => (None, None),
+        };
+        self._log(
+            level,
+            message,
+            None,
+            name,
+            function,
+            line,
+            file,
+            thread_name,
+            thread_id,
+            process_name,
+            process_id,
+        )?;
+        Ok(true)
     }
 
     /// Disable console output
@@ -1254,6 +1371,10 @@ impl PyLogger {
         }
 
         *self.cached_requirements_by_level.write() = map;
+
+        // The Python side recomputes the table from its CollectOptions.
+        self.fast_collect
+            .store(FAST_COLLECT_INVALID, Ordering::Release);
     }
 
     /// Merge result for `emit_no`, using the precomputed map and memoizing misses.

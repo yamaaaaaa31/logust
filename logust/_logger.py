@@ -513,6 +513,13 @@ if len(_LEVEL_VALUE_MAP) != len(_LEVEL_VALUES):
 # ``u32::MAX`` — matches Rust conservative merge for unknown emit severity.
 _EMIT_NO_SUPERSET: int = 4_294_967_295
 
+# Built-in level values in the slot order of Rust's ``LogLevel::slot`` (one nibble
+# each in the ``PyLogger.set_fast_collect`` table).
+_FAST_LEVELS: tuple[int, ...] = (5, 10, 20, 25, 30, 40, 45, 50)
+_FAST_UNAVAILABLE = 8
+# Every level unavailable: ``log_fast`` returns False and the Python path runs
+_FAST_TABLE_DISABLED = 0xFFFF_FFFF_FFFF_FFFF
+
 
 def _coerce_emit_no_u32(emit_no: int) -> int:
     """Clamp numeric severity to ``0 .. 0xFFFFFFFF`` for Rust ``u32`` APIs."""
@@ -832,6 +839,9 @@ class Logger:
             ]
             | None
         ] = aggregated_options_box if aggregated_options_box is not None else [None]
+        # False routes every call through the Python dispatch path (tests only)
+        self._fast_path = True
+        self._refresh_fast_collect()
 
     parse = staticmethod(_parse_file)
     """Parse a log file into dicts of regex named groups (same as ``logust.parse``)."""
@@ -840,6 +850,34 @@ class Logger:
         """Invalidate all caches (call when handlers change)."""
         self._requirements_cache_box[0] = None
         self._aggregated_options_box[0] = None
+        self._refresh_fast_collect()
+
+    def _refresh_fast_collect(self) -> None:
+        """Tell Rust what ``log_fast`` must collect at each built-in level.
+
+        The level methods hand a plain ``logger.info("msg")`` to
+        ``PyLogger.log_fast``, which collects caller/thread/process info itself.
+        It can only do so when the effective requirement is ``True`` or
+        ``False``; a fixed ``CallerInfo`` / ``ThreadInfo`` / ``ProcessInfo``
+        marks the level unavailable so those calls take the Python path. The
+        table lives with the handler state shared by bound loggers, and Rust
+        resets it whenever a handler or callback changes.
+        """
+        if not self._fast_path:
+            self._inner.set_fast_collect(_FAST_TABLE_DISABLED)
+            return
+        table = 0
+        for slot, emit_no in enumerate(_FAST_LEVELS):
+            nibble = 0
+            needs = self._compute_effective_requirements(emit_no)
+            for bit, need in zip((1, 2, 4), needs, strict=True):
+                if need is True:
+                    nibble |= bit
+                elif need is not False:
+                    nibble = _FAST_UNAVAILABLE
+                    break
+            table |= nibble << (4 * slot)
+        self._inner.set_fast_collect(table)
 
     def _get_aggregated_options(
         self,
@@ -1301,7 +1339,15 @@ class Logger:
         """Output TRACE level log message."""
         if 5 < self._inner.min_level:
             return
-        self._log_with_level(5, "trace", message, exception, _depth + 1, kwargs, args)
+        if (
+            args
+            or kwargs
+            or exception is not None
+            or self._patchers
+            or self._activation.rules
+            or not self._inner.log_fast(5, message, _depth + 1)
+        ):
+            self._log_with_level(5, "trace", message, exception, _depth + 1, kwargs, args)
 
     def debug(
         self,
@@ -1314,7 +1360,15 @@ class Logger:
         """Output DEBUG level log message."""
         if 10 < self._inner.min_level:
             return
-        self._log_with_level(10, "debug", message, exception, _depth + 1, kwargs, args)
+        if (
+            args
+            or kwargs
+            or exception is not None
+            or self._patchers
+            or self._activation.rules
+            or not self._inner.log_fast(10, message, _depth + 1)
+        ):
+            self._log_with_level(10, "debug", message, exception, _depth + 1, kwargs, args)
 
     def info(
         self,
@@ -1332,7 +1386,15 @@ class Logger:
         """
         if 20 < self._inner.min_level:
             return
-        self._log_with_level(20, "info", message, exception, _depth + 1, kwargs, args)
+        if (
+            args
+            or kwargs
+            or exception is not None
+            or self._patchers
+            or self._activation.rules
+            or not self._inner.log_fast(20, message, _depth + 1)
+        ):
+            self._log_with_level(20, "info", message, exception, _depth + 1, kwargs, args)
 
     def success(
         self,
@@ -1345,7 +1407,15 @@ class Logger:
         """Output SUCCESS level log message."""
         if 25 < self._inner.min_level:
             return
-        self._log_with_level(25, "success", message, exception, _depth + 1, kwargs, args)
+        if (
+            args
+            or kwargs
+            or exception is not None
+            or self._patchers
+            or self._activation.rules
+            or not self._inner.log_fast(25, message, _depth + 1)
+        ):
+            self._log_with_level(25, "success", message, exception, _depth + 1, kwargs, args)
 
     def warning(
         self,
@@ -1358,7 +1428,15 @@ class Logger:
         """Output WARNING level log message."""
         if 30 < self._inner.min_level:
             return
-        self._log_with_level(30, "warning", message, exception, _depth + 1, kwargs, args)
+        if (
+            args
+            or kwargs
+            or exception is not None
+            or self._patchers
+            or self._activation.rules
+            or not self._inner.log_fast(30, message, _depth + 1)
+        ):
+            self._log_with_level(30, "warning", message, exception, _depth + 1, kwargs, args)
 
     def error(
         self,
@@ -1371,7 +1449,15 @@ class Logger:
         """Output ERROR level log message."""
         if 40 < self._inner.min_level:
             return
-        self._log_with_level(40, "error", message, exception, _depth + 1, kwargs, args)
+        if (
+            args
+            or kwargs
+            or exception is not None
+            or self._patchers
+            or self._activation.rules
+            or not self._inner.log_fast(40, message, _depth + 1)
+        ):
+            self._log_with_level(40, "error", message, exception, _depth + 1, kwargs, args)
 
     def fail(
         self,
@@ -1384,7 +1470,15 @@ class Logger:
         """Output FAIL level log message."""
         if 45 < self._inner.min_level:
             return
-        self._log_with_level(45, "fail", message, exception, _depth + 1, kwargs, args)
+        if (
+            args
+            or kwargs
+            or exception is not None
+            or self._patchers
+            or self._activation.rules
+            or not self._inner.log_fast(45, message, _depth + 1)
+        ):
+            self._log_with_level(45, "fail", message, exception, _depth + 1, kwargs, args)
 
     def critical(
         self,
@@ -1397,7 +1491,15 @@ class Logger:
         """Output CRITICAL level log message."""
         if 50 < self._inner.min_level:
             return
-        self._log_with_level(50, "critical", message, exception, _depth + 1, kwargs, args)
+        if (
+            args
+            or kwargs
+            or exception is not None
+            or self._patchers
+            or self._activation.rules
+            or not self._inner.log_fast(50, message, _depth + 1)
+        ):
+            self._log_with_level(50, "critical", message, exception, _depth + 1, kwargs, args)
 
     def exception(self, message: str, *args: Any, _depth: int = 0, **kwargs: Any) -> None:
         """Log ERROR with current exception traceback.
@@ -1508,22 +1610,38 @@ class Logger:
                 level_value = _LEVEL_VALUES[level_lower]
                 if level_value < self._inner.min_level:
                     return
-                self._log_with_level(
-                    level_value,
-                    level_lower,
-                    message,
-                    exception,
-                    _depth + 1,
-                    kwargs,
-                    args,
-                )
+                if (
+                    args
+                    or kwargs
+                    or exception is not None
+                    or self._patchers
+                    or self._activation.rules
+                    or not self._inner.log_fast(level_value, message, _depth + 1)
+                ):
+                    self._log_with_level(
+                        level_value,
+                        level_lower,
+                        message,
+                        exception,
+                        _depth + 1,
+                        kwargs,
+                        args,
+                    )
                 return
         elif isinstance(level, int) and level in _LEVEL_VALUE_MAP:
             if level < self._inner.min_level:
                 return
-            self._log_with_level(
-                level, _LEVEL_VALUE_MAP[level], message, exception, _depth + 1, kwargs, args
-            )
+            if (
+                args
+                or kwargs
+                or exception is not None
+                or self._patchers
+                or self._activation.rules
+                or not self._inner.log_fast(level, message, _depth + 1)
+            ):
+                self._log_with_level(
+                    level, _LEVEL_VALUE_MAP[level], message, exception, _depth + 1, kwargs, args
+                )
             return
 
         resolved_emit = self._inner.try_resolve_emit_level_no(level)
@@ -2260,6 +2378,7 @@ class Logger:
         new._raw_callback_ids = self._raw_callback_ids
         new._requirements_cache_box = self._requirements_cache_box
         new._aggregated_options_box = self._aggregated_options_box
+        new._fast_path = self._fast_path
         return new
 
     def bind(self, **kwargs: Any) -> Logger:

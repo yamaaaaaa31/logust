@@ -67,9 +67,25 @@ impl LogLevel {
         }
     }
 
-    /// Slot of this level in [`BUILTIN_COLOR_OVERRIDES`] (one byte per level).
+    /// Built-in level with numeric value `no`.
+    pub fn from_no(no: u32) -> Option<LogLevel> {
+        match no {
+            5 => Some(LogLevel::Trace),
+            10 => Some(LogLevel::Debug),
+            20 => Some(LogLevel::Info),
+            25 => Some(LogLevel::Success),
+            30 => Some(LogLevel::Warning),
+            40 => Some(LogLevel::Error),
+            45 => Some(LogLevel::Fail),
+            50 => Some(LogLevel::Critical),
+            _ => None,
+        }
+    }
+
+    /// Slot of this level in [`BUILTIN_COLOR_OVERRIDES`] (one byte per level)
+    /// and in `PyLogger`'s `fast_collect` table (one nibble per level).
     #[inline]
-    fn slot(&self) -> u32 {
+    pub(crate) fn slot(&self) -> u32 {
         match self {
             LogLevel::Trace => 0,
             LogLevel::Debug => 1,
