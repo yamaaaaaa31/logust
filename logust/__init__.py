@@ -77,14 +77,6 @@ from ._types import (
 
 if TYPE_CHECKING:
 
-    def trace(message: str, *args: Any, exception: str | None = None, **kwargs: Any) -> None: ...
-    def debug(message: str, *args: Any, exception: str | None = None, **kwargs: Any) -> None: ...
-    def info(message: str, *args: Any, exception: str | None = None, **kwargs: Any) -> None: ...
-    def success(message: str, *args: Any, exception: str | None = None, **kwargs: Any) -> None: ...
-    def warning(message: str, *args: Any, exception: str | None = None, **kwargs: Any) -> None: ...
-    def error(message: str, *args: Any, exception: str | None = None, **kwargs: Any) -> None: ...
-    def fail(message: str, *args: Any, exception: str | None = None, **kwargs: Any) -> None: ...
-    def critical(message: str, *args: Any, exception: str | None = None, **kwargs: Any) -> None: ...
     def enable(
         name: str | LogLevel | None = None, *, level: LogLevel | str | None = None
     ) -> None: ...
@@ -95,11 +87,25 @@ __version__ = "0.5.0"
 
 logger = Logger(_rust_logger)
 
+# Per-message entry points are bound once so ``logust.info(...)`` resolves as a
+# plain module global instead of going through ``__getattr__`` on every call.
+trace = logger.trace
+debug = logger.debug
+info = logger.info
+success = logger.success
+warning = logger.warning
+error = logger.error
+fail = logger.fail
+critical = logger.critical
+exception = logger.exception
+log = logger.log
+
 
 def __getattr__(name: str) -> Any:
-    if hasattr(logger, name):
+    try:
         return getattr(logger, name)
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    except AttributeError:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}") from None
 
 
 __all__ = [
