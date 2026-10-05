@@ -2021,6 +2021,7 @@ class Logger:
             raw_callback_ids=self._raw_callback_ids,
             requirements_cache_box=self._requirements_cache_box,
             aggregated_options_box=self._aggregated_options_box,
+            activation=self._activation,
         )
 
     def bind(self, **kwargs: Any) -> Logger:

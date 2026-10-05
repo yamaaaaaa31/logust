@@ -84,6 +84,17 @@ class TestColors:
 
         assert out == ["<red>x</red> alice"]
 
+    def test_false_respects_disabled_modules(self, logger: Logger) -> None:
+        out: list[str] = []
+        logger.add(out.append, format="{message}")
+
+        logger.disable(__name__)
+        logger.opt(colors=False).info("<b>dropped</b>")
+        logger.enable(__name__)
+        logger.opt(colors=False).info("<b>kept</b>")
+
+        assert out == ["<b>kept</b>"]
+
     def test_record_dicts_mark_uncolored_messages(self, logger: Logger) -> None:
         records: list[dict[str, object]] = []
         logger.add_callback(records.append)
