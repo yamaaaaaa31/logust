@@ -39,63 +39,65 @@ pub fn format_elapsed(start: &DateTime<Local>, now: &DateTime<Local>) -> String 
     s
 }
 
-/// ANSI SGR color number for `color`.
+/// ANSI SGR prefix for bold text in `color` (`ESC[1;<code>m`)
 #[inline]
-fn color_code(color: Color) -> &'static str {
+fn bold_color_prefix(color: Color) -> &'static str {
     match color {
-        Color::Black => "30",
-        Color::Red => "31",
-        Color::Green => "32",
-        Color::Yellow => "33",
-        Color::Blue => "34",
-        Color::Magenta => "35",
-        Color::Cyan => "36",
-        Color::White => "37",
-        Color::BrightBlack => "90",
-        Color::BrightRed => "91",
-        Color::BrightGreen => "92",
-        Color::BrightYellow => "93",
-        Color::BrightBlue => "94",
-        Color::BrightMagenta => "95",
-        Color::BrightCyan => "96",
-        Color::BrightWhite => "97",
-        _ => "0", // Default/reset
+        Color::Black => "\x1b[1;30m",
+        Color::Red => "\x1b[1;31m",
+        Color::Green => "\x1b[1;32m",
+        Color::Yellow => "\x1b[1;33m",
+        Color::Blue => "\x1b[1;34m",
+        Color::Magenta => "\x1b[1;35m",
+        Color::Cyan => "\x1b[1;36m",
+        Color::White => "\x1b[1;37m",
+        Color::BrightBlack => "\x1b[1;90m",
+        Color::BrightRed => "\x1b[1;91m",
+        Color::BrightGreen => "\x1b[1;92m",
+        Color::BrightYellow => "\x1b[1;93m",
+        Color::BrightBlue => "\x1b[1;94m",
+        Color::BrightMagenta => "\x1b[1;95m",
+        Color::BrightCyan => "\x1b[1;96m",
+        Color::BrightWhite => "\x1b[1;97m",
+        _ => "\x1b[1;0m", // Default/reset
     }
 }
 
-/// Apply ANSI color code to text (thread-safe, no global state)
+/// ANSI reset
+const RESET: &str = "\x1b[0m";
+/// ANSI dim style (default style of `{time}` and `{elapsed}`)
+const DIM: &str = "\x1b[2m";
+/// ANSI cyan (default style of caller, thread and process fields)
+const CYAN: &str = "\x1b[36m";
+
+/// Append what `write` produces, wrapped in `prefix` and a reset when `styled`.
+///
+/// Renders straight into `out`: no intermediate string per token.
 #[inline]
-fn colorize_text(text: &str, color: Color, bold: bool) -> String {
-    let color_code = color_code(color);
-    if bold {
-        format!("\x1b[1;{}m{}\x1b[0m", color_code, text)
-    } else {
-        format!("\x1b[{}m{}\x1b[0m", color_code, text)
+fn write_styled(out: &mut String, styled: bool, prefix: &str, write: impl FnOnce(&mut String)) {
+    if styled {
+        out.push_str(prefix);
+    }
+    write(out);
+    if styled {
+        out.push_str(RESET);
     }
 }
 
 /// Style `text` as the console styles the level `level_name` (bold, level color).
 pub fn colorize_level(text: &str, level_name: &str) -> String {
     let color = get_level_color(level_name).unwrap_or(Color::White);
-    colorize_text(text, color, true)
+    let mut out = String::with_capacity(text.len() + 12);
+    write_styled(&mut out, true, bold_color_prefix(color), |o| {
+        o.push_str(text)
+    });
+    out
 }
 
 /// ANSI prefix that styles text like the level `level_name` (bold, level color).
 pub fn level_style(level_name: &str) -> String {
     let color = get_level_color(level_name).unwrap_or(Color::White);
-    format!("\x1b[1;{}m", color_code(color))
-}
-
-/// Apply dim style to text (thread-safe)
-#[inline]
-fn dim_text(text: &str) -> String {
-    format!("\x1b[2m{}\x1b[0m", text)
-}
-
-/// Apply cyan color to text (thread-safe)
-#[inline]
-fn cyan_text(text: &str) -> String {
-    format!("\x1b[36m{}\x1b[0m", text)
+    bold_color_prefix(color).to_string()
 }
 
 /// Default log format template (loguru-compatible with caller info)
@@ -604,15 +606,13 @@ pub fn split_format_markup(template: &str) -> Vec<MarkupPiece> {
 fn push_style(result: &mut String, style: MarkupStyle, level_color: Color) {
     match style {
         MarkupStyle::Ansi(ansi) => result.push_str(ansi),
-        MarkupStyle::Level => {
-            let _ = write!(result, "\x1b[1;{}m", color_code(level_color));
-        }
+        MarkupStyle::Level => result.push_str(bold_color_prefix(level_color)),
     }
 }
 
 /// Reset, then re-apply the styles still open
 fn restore_styles(result: &mut String, styles: &[MarkupStyle], level_color: Color) {
-    result.push_str("\x1b[0m");
+    result.push_str(RESET);
     for &style in styles {
         push_style(result, style, level_color);
     }
@@ -737,151 +737,87 @@ impl FormatConfig {
             }
             // Default token styles apply only outside template markup
             let auto = colorize && styles.is_empty();
+            let out = &mut result;
             match token {
-                FormatToken::Static(s) => result.push_str(s),
-                FormatToken::Time => {
-                    if auto {
-                        result.push_str(&dim_text(&format_default_time(&record.timestamp)));
-                    } else {
-                        write_default_time(&record.timestamp, &mut result);
-                    }
-                }
-                FormatToken::TimeFormatted(spec) => {
-                    if auto {
-                        result.push_str(&dim_text(&spec.format(&record.timestamp)));
-                    } else {
-                        spec.write(&record.timestamp, &mut result);
-                    }
-                }
+                FormatToken::Static(s) => out.push_str(s),
+                FormatToken::Time => write_styled(out, auto, DIM, |o| {
+                    write_default_time(&record.timestamp, o);
+                }),
+                FormatToken::TimeFormatted(spec) => write_styled(out, auto, DIM, |o| {
+                    spec.write(&record.timestamp, o);
+                }),
                 FormatToken::Message => {
                     if !record.message_markup {
                         // `opt(colors=False)`: markup in the message is plain text
-                        result.push_str(&record.message);
+                        out.push_str(&record.message);
                     } else if !colorize || styles.is_empty() {
-                        result.push_str(&apply_color_markup(&record.message, colorize));
+                        out.push_str(&apply_color_markup(&record.message, colorize));
                     } else {
                         // Keep template styles alive across resets in the message markup
                         let base = styles_prefix(&styles, level_color);
-                        result.push_str(&apply_color_markup_within(&record.message, true, &base));
+                        out.push_str(&apply_color_markup_within(&record.message, true, &base));
                     }
                 }
                 FormatToken::Level => {
-                    if auto {
-                        result.push_str(&colorize_text(level_name, level_color, true));
-                    } else {
-                        result.push_str(level_name);
-                    }
+                    write_styled(out, auto, bold_color_prefix(level_color), |o| {
+                        o.push_str(level_name);
+                    })
                 }
                 FormatToken::LevelWidth(width) => {
-                    if auto {
-                        let padded = format!("{:<width$}", level_name, width = width);
-                        result.push_str(&colorize_text(&padded, level_color, true));
-                    } else {
-                        let _ = write!(result, "{:<width$}", level_name, width = width);
-                    }
+                    write_styled(out, auto, bold_color_prefix(level_color), |o| {
+                        let _ = write!(o, "{:<width$}", level_name, width = width);
+                    })
                 }
                 FormatToken::LevelNo => {
-                    let _ = write!(result, "{}", record.level_no());
+                    let _ = write!(out, "{}", record.level_no());
                 }
-                FormatToken::LevelIcon => result.push_str(record.level_icon()),
+                FormatToken::LevelIcon => out.push_str(record.level_icon()),
                 FormatToken::Exception => {
                     if let Some(ref exc) = record.exception {
-                        result.push_str(exc);
+                        out.push_str(exc);
                     }
                 }
                 FormatToken::Extra(key) => {
                     if let Some(value) = record.extra.get(key) {
-                        result.push_str(value.as_str());
+                        out.push_str(value.as_str());
                     }
                 }
-                FormatToken::ExtraAll => write_extra_repr(&record.extra, &mut result),
+                FormatToken::ExtraAll => write_extra_repr(&record.extra, out),
                 FormatToken::Name | FormatToken::Module => {
-                    if auto {
-                        result.push_str(&cyan_text(&record.caller.name));
-                    } else {
-                        result.push_str(&record.caller.name);
-                    }
+                    write_styled(out, auto, CYAN, |o| o.push_str(&record.caller.name))
                 }
                 FormatToken::Function => {
-                    if auto {
-                        result.push_str(&cyan_text(&record.caller.function));
-                    } else {
-                        result.push_str(&record.caller.function);
-                    }
+                    write_styled(out, auto, CYAN, |o| o.push_str(&record.caller.function))
                 }
-                FormatToken::Line => {
-                    if auto {
-                        let line_str = record.caller.line.to_string();
-                        result.push_str(&cyan_text(&line_str));
-                    } else {
-                        let _ = write!(result, "{}", record.caller.line);
-                    }
-                }
-                FormatToken::Elapsed => {
-                    if auto {
-                        let elapsed = format_elapsed(&LOGGER_START_TIME, &record.timestamp);
-                        result.push_str(&dim_text(&elapsed));
-                    } else {
-                        write_elapsed(&LOGGER_START_TIME, &record.timestamp, &mut result);
-                    }
-                }
-                FormatToken::Thread => {
-                    if auto {
-                        let thread_str = format!("{}:{}", record.thread.name, record.thread.id);
-                        result.push_str(&cyan_text(&thread_str));
-                    } else {
-                        let _ = write!(result, "{}:{}", record.thread.name, record.thread.id);
-                    }
-                }
+                FormatToken::Line => write_styled(out, auto, CYAN, |o| {
+                    let _ = write!(o, "{}", record.caller.line);
+                }),
+                FormatToken::Elapsed => write_styled(out, auto, DIM, |o| {
+                    write_elapsed(&LOGGER_START_TIME, &record.timestamp, o);
+                }),
+                FormatToken::Thread => write_styled(out, auto, CYAN, |o| {
+                    let _ = write!(o, "{}:{}", record.thread.name, record.thread.id);
+                }),
                 FormatToken::ThreadName => {
-                    if auto {
-                        result.push_str(&cyan_text(&record.thread.name));
-                    } else {
-                        result.push_str(&record.thread.name);
-                    }
+                    write_styled(out, auto, CYAN, |o| o.push_str(&record.thread.name))
                 }
-                FormatToken::ThreadId => {
-                    if auto {
-                        result.push_str(&cyan_text(&record.thread.id.to_string()));
-                    } else {
-                        let _ = write!(result, "{}", record.thread.id);
-                    }
-                }
+                FormatToken::ThreadId => write_styled(out, auto, CYAN, |o| {
+                    let _ = write!(o, "{}", record.thread.id);
+                }),
                 FormatToken::ProcessName => {
-                    if auto {
-                        result.push_str(&cyan_text(&record.process.name));
-                    } else {
-                        result.push_str(&record.process.name);
-                    }
+                    write_styled(out, auto, CYAN, |o| o.push_str(&record.process.name))
                 }
-                FormatToken::ProcessId => {
-                    if auto {
-                        result.push_str(&cyan_text(&record.process.id.to_string()));
-                    } else {
-                        let _ = write!(result, "{}", record.process.id);
-                    }
-                }
-                FormatToken::Process => {
-                    if auto {
-                        let process_str = format!("{}:{}", record.process.name, record.process.id);
-                        result.push_str(&cyan_text(&process_str));
-                    } else {
-                        let _ = write!(result, "{}:{}", record.process.name, record.process.id);
-                    }
-                }
+                FormatToken::ProcessId => write_styled(out, auto, CYAN, |o| {
+                    let _ = write!(o, "{}", record.process.id);
+                }),
+                FormatToken::Process => write_styled(out, auto, CYAN, |o| {
+                    let _ = write!(o, "{}:{}", record.process.name, record.process.id);
+                }),
                 FormatToken::File => {
-                    if auto {
-                        result.push_str(&cyan_text(record.caller.file_name()));
-                    } else {
-                        result.push_str(record.caller.file_name());
-                    }
+                    write_styled(out, auto, CYAN, |o| o.push_str(record.caller.file_name()))
                 }
                 FormatToken::FilePath => {
-                    if auto {
-                        result.push_str(&cyan_text(&record.caller.file));
-                    } else {
-                        result.push_str(&record.caller.file);
-                    }
+                    write_styled(out, auto, CYAN, |o| o.push_str(&record.caller.file))
                 }
                 FormatToken::StyleOpen(_) | FormatToken::StyleClose => {}
             }
@@ -889,7 +825,7 @@ impl FormatConfig {
 
         // Close styles left open by the template
         if colorize && !styles.is_empty() {
-            result.push_str("\x1b[0m");
+            result.push_str(RESET);
         }
 
         // `{exception}` in the template already placed it
