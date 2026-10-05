@@ -325,6 +325,9 @@ pub struct PyLogger {
     callbacks: Arc<RwLock<Vec<CallbackEntry>>>,
     /// Cached minimum log level across all handlers and callbacks (shared via Arc)
     cached_min_level: Arc<AtomicU32>,
+    /// Cached minimum level across callbacks only (`u32::MAX` without callbacks),
+    /// so records no callback takes never lock the callback list
+    cached_callback_min_level: Arc<AtomicU32>,
     /// Precomputed token requirements for built-in emit levels; arbitrary `emit_no` values are memoized on miss.
     cached_requirements_by_level: Arc<RwLock<HashMap<u32, TokenRequirements>>>,
     /// Cached token requirements for handlers only (excludes callbacks)
@@ -343,6 +346,7 @@ impl PyLogger {
             context: empty_context(),
             callbacks: Arc::new(RwLock::new(Vec::new())),
             cached_min_level: Arc::new(AtomicU32::new(u32::MAX)),
+            cached_callback_min_level: Arc::new(AtomicU32::new(u32::MAX)),
             cached_requirements_by_level: Arc::new(RwLock::new(HashMap::new())),
             cached_handler_requirements: Arc::new(RwLock::new(TokenRequirements::default())),
             message_markup: true,
@@ -516,6 +520,7 @@ impl PyLogger {
             context: new_context,
             callbacks: Arc::clone(&self.callbacks),
             cached_min_level: Arc::clone(&self.cached_min_level),
+            cached_callback_min_level: Arc::clone(&self.cached_callback_min_level),
             cached_requirements_by_level: Arc::clone(&self.cached_requirements_by_level),
             cached_handler_requirements: Arc::clone(&self.cached_handler_requirements),
             message_markup: self.message_markup,
@@ -531,6 +536,7 @@ impl PyLogger {
             context: Arc::clone(&self.context),
             callbacks: Arc::clone(&self.callbacks),
             cached_min_level: Arc::clone(&self.cached_min_level),
+            cached_callback_min_level: Arc::clone(&self.cached_callback_min_level),
             cached_requirements_by_level: Arc::clone(&self.cached_requirements_by_level),
             cached_handler_requirements: Arc::clone(&self.cached_handler_requirements),
             message_markup: colors,
@@ -1204,6 +1210,15 @@ impl PyLogger {
 
         self.cached_min_level
             .store(min_handler.min(min_callback), Ordering::Relaxed);
+        self.cached_callback_min_level
+            .store(min_callback, Ordering::Relaxed);
+    }
+
+    /// The callback list, locked only if a callback can take a record at `level_no`.
+    #[inline]
+    fn callbacks_for(&self, level_no: u32) -> Option<RwLockReadGuard<'_, Vec<CallbackEntry>>> {
+        (level_no >= self.cached_callback_min_level.load(Ordering::Relaxed))
+            .then(|| self.callbacks.read())
     }
 
     /// Update the cached token requirements per built-in emit level (handlers + eligible callbacks).
@@ -1271,8 +1286,14 @@ impl PyLogger {
         process_name: Option<String>,
         process_id: Option<u32>,
     ) -> PyResult<()> {
+        // Nothing takes this record: skip the locks (the common filtered-out path)
+        if (level as u32) < self.cached_min_level.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+
         let handlers = self.handlers.read();
-        let callbacks = self.callbacks.read();
+        let callbacks_guard = self.callbacks_for(level as u32);
+        let callbacks: &[CallbackEntry] = callbacks_guard.as_deref().map_or(&[], Vec::as_slice);
 
         let mut has_eligible_handler = false;
         let mut has_eligible_filtered_handler = false;
@@ -1666,10 +1687,15 @@ impl PyLogger {
         process_name: Option<String>,
         process_id: Option<u32>,
     ) -> PyResult<()> {
-        let handlers = self.handlers.read();
-        let callbacks = self.callbacks.read();
-
         let level_no = level_info.no;
+        if level_no < self.cached_min_level.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+
+        let handlers = self.handlers.read();
+        let callbacks_guard = self.callbacks_for(level_no);
+        let callbacks: &[CallbackEntry] = callbacks_guard.as_deref().map_or(&[], Vec::as_slice);
+
         let mut has_eligible_handler = false;
         let mut has_eligible_filtered_handler = false;
         for e in handlers.iter() {
