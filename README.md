@@ -543,7 +543,7 @@ More runnable examples are listed in [examples/README.md](examples/README.md).
 | `set_level(level)` | Set minimum console level |
 | `get_level()` | Get current console level |
 | `is_level_enabled(level)` | Check if level is enabled |
-| `enable()/disable()` | Toggle console output |
+| `enable()/disable()` | Toggle console output; `enable(name)`/`disable(name)` per module |
 | `complete()` | Flush all handlers |
 | `add_callback(fn, level)` | Add log callback |
 | `remove_callback(id)` | Remove callback |

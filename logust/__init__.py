@@ -26,6 +26,9 @@ Usage:
     >>> # Color markup
     >>> logger.info("<red>Error</red> in <blue>module</blue>")
 
+    >>> # Silence a library's messages (loguru-compatible)
+    >>> logger.disable("mylib")
+
     >>> # Parse log files
     >>> from logust import parse
     >>> for record in parse("app.log", r"(?P<level>\\w+) \\| (?P<message>.*)"):
@@ -81,6 +84,10 @@ if TYPE_CHECKING:
     def error(message: str, *args: Any, exception: str | None = None, **kwargs: Any) -> None: ...
     def fail(message: str, *args: Any, exception: str | None = None, **kwargs: Any) -> None: ...
     def critical(message: str, *args: Any, exception: str | None = None, **kwargs: Any) -> None: ...
+    def enable(
+        name: str | LogLevel | None = None, *, level: LogLevel | str | None = None
+    ) -> None: ...
+    def disable(name: str | None = None) -> None: ...
 
 
 __version__ = "0.5.0"

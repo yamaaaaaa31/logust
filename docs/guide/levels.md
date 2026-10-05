@@ -128,3 +128,49 @@ logger.enable(level="INFO")  # Re-enable and set minimum level
 ```
 
 The `enable()` method accepts an optional `level` parameter to set the minimum console level when re-enabling.
+
+## Enable or disable modules
+
+As in loguru, `disable(name)` drops every message logged from the module `name` and its submodules, and `enable(name)` turns them back on. This is how a library keeps its logs quiet until the application opts in:
+
+```python
+# mylib/__init__.py
+from logust import logger
+
+logger.disable("mylib")  # Silent by default
+
+
+def work():
+    logger.info("Working")  # Dropped unless the application enables "mylib"
+```
+
+```python
+# Application
+from logust import logger
+import mylib
+
+logger.enable("mylib")  # Show mylib's messages again
+mylib.work()
+```
+
+Rules:
+
+- The name is matched against the caller's module (`record["name"]`, the module's `__name__`) on dotted boundaries: `disable("mylib")` covers `mylib` and `mylib.sub`, not `mylibrary`.
+- The most specific rule wins: after `disable("mylib")` and `enable("mylib.api")`, only `mylib.api` (and its submodules) logs. Enabling or disabling a module replaces the rules of its submodules.
+- `disable("")` disables every module and `enable("")` removes every rule.
+- Rules are shared by `logger`, `logust.enable()` / `logust.disable()`, and every logger created with `bind()` or `patch()`. They apply to all logging methods, `log()`, `exception()`, `opt()` and `catch()`. With `opt(lazy=True)`, lazy arguments of a disabled module are not evaluated.
+- `configure(activation=[("mylib", False), ("mylib.api", True)])` applies rules in order.
+- Records forwarded by `InterceptHandler` from the standard `logging` module are matched against the stdlib logger name (for example `logger.disable("urllib3")`).
+
+While no module is disabled, logging calls skip this check entirely. Once a rule exists, each message looks up its module in a cache, so the cost is one frame lookup and one dictionary lookup.
+
+### Level names versus module names
+
+`enable()` and `disable()` without a name keep their console behavior (see above). A string passed to `enable()` is treated as a level when it is a built-in level name (case-insensitive `trace`, `debug`, `info`, `success`, `warning`, `error`, `fail`, `critical`) and as a module name otherwise:
+
+```python
+logger.enable("INFO")   # Re-enable the console at INFO
+logger.enable("mylib")  # Enable the mylib module
+```
+
+A top-level module named like a built-in level (for example a module called `error`) can be disabled with `disable("error")`, but `enable("error")` re-enables the console. Use `enable("")` to clear the rule in that case.

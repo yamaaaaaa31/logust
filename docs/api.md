@@ -103,6 +103,21 @@ logger.disable()             # Disable console
 logger.is_enabled()          # Check if enabled
 ```
 
+### Module activation
+
+```python
+logger.disable("mylib")      # Drop messages from mylib and mylib.*
+logger.enable("mylib.api")   # Most specific rule wins
+logger.enable("mylib")       # Re-enable mylib (clears its submodule rules)
+logger.disable("")           # Disable every module
+logger.enable("")            # Remove every rule
+```
+
+A string passed to `enable()` is a level when it is a built-in level name
+(case-insensitive), and a module name otherwise. `logust.enable()` and
+`logust.disable()` are module-level shortcuts. See
+[Enable or disable modules](guide/levels.md#enable-or-disable-modules).
+
 ### Custom levels
 
 ```python
@@ -197,6 +212,7 @@ handler_ids = logger.configure(
     ],
     extra={"app": "myapp"},  # Bound to all logs
     patcher=my_patcher,      # Applied to all logs
+    activation=[("mylib", False)],  # enable()/disable() rules, in order
 )
 ```
 

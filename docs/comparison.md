@@ -78,6 +78,7 @@ In this run, `loguru`'s `enqueue=True` path remained far slower than its sync pa
 | Stack info (module, function, line) | Yes | Yes |
 | Process/thread info | Yes | Yes |
 | Format fields (`{time:<spec>}`, `{level.icon}`, `{file.path}`, `{exception}`, ...) | Yes | Yes |
+| Per-module `enable(name)` / `disable(name)` | Yes | Yes |
 
 ## API differences
 
@@ -143,6 +144,7 @@ and `{file.path}` (see [Formatting](guide/formatting.md#format-tokens)). Differe
 - **`level()`**: Returns `Level(name, no, color, icon)` like loguru, but `color` is a color name (`"green"`) rather than markup (`"<green><bold>"`). Level names are case-insensitive, and passing `no` for an existing level re-registers it instead of raising.
 - **Time-based `rotation`**: `timedelta(days=1)`, `timedelta(hours=1)`, and `time(0, 0)` are supported and rotate on clock boundaries (midnight, top of the hour). Other intervals and times raise `ValueError`.
 - **Coroutine sinks**: `async def` sinks are not supported yet; `add()` raises `TypeError` instead of silently never awaiting them.
+- **`enable()` / `disable()`**: `enable("mylib")` and `disable("mylib")` follow loguru (prefix match on the dotted module name, most specific rule wins, `""` means all modules). Without a name, or with a built-in level name such as `enable("INFO")`, they keep logust's meaning of turning the console handler on and off; loguru has no such form and uses `None` for modules without `__name__`. Records from `InterceptHandler` are matched against the stdlib logger name.
 - **`logger.parse()`**: Same as `logust.parse()`. It takes a file path (not an open file) and `cast` must be a dict.
 
 ## When to choose logust

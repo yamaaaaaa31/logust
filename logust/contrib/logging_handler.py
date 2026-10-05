@@ -31,8 +31,8 @@ class InterceptHandler(logging.Handler):
     """A logging handler that redirects standard logging to logust.
 
     This handler intercepts log records from Python's standard logging
-    module and forwards them to logust, preserving the original logger
-    name, function, and line number information.
+    module and forwards them to logust. Records whose stdlib logger name
+    is disabled with ``logger.disable(name)`` are dropped.
 
     Example:
         >>> import logging
@@ -71,6 +71,12 @@ class InterceptHandler(logging.Handler):
         Args:
             record: The log record from standard logging.
         """
+        target = self.target
+        # ``logger.disable("name")`` applies to the stdlib logger name
+        activation = target._activation
+        if activation.rules and activation.is_disabled(record.name):
+            return
+
         level: str | int = record.levelname
 
         exception = None
@@ -79,7 +85,7 @@ class InterceptHandler(logging.Handler):
 
             exception = "".join(traceback.format_exception(*record.exc_info))
 
-        self.target._inner.log(
+        target._inner.log(
             level,
             record.getMessage(),
             exception=exception,
