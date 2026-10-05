@@ -191,9 +191,16 @@ fn set_builtin_color(level: LogLevel, color: Color) {
     let shift = level.slot() * 8;
     let code = u64::from(color_to_code(color)) << shift;
     let mask = !(0xFFu64 << shift);
-    let _ = BUILTIN_COLOR_OVERRIDES.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
-        Some((v & mask) | code)
-    });
+    // CAS loop rather than `fetch_update`, which newer toolchains deprecate
+    let mut current = BUILTIN_COLOR_OVERRIDES.load(Ordering::Relaxed);
+    while let Err(actual) = BUILTIN_COLOR_OVERRIDES.compare_exchange_weak(
+        current,
+        (current & mask) | code,
+        Ordering::Relaxed,
+        Ordering::Relaxed,
+    ) {
+        current = actual;
+    }
 }
 
 /// Global registry for custom log levels (by name)
