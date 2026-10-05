@@ -22,6 +22,9 @@ static CURRENT_THREAD: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
 
 /// `(pid, name)` of the last process queried; re-read after `fork()` (pid change),
 /// like `_CACHED_PROCESS_INFO` / `_CACHED_PROCESS_PID` on the Python side.
+/// Only ever `try_lock`ed: a fork() taken while another thread holds the lock
+/// (possible on free-threaded builds) would otherwise leave it locked forever in
+/// the child.
 static PROCESS_INFO: Mutex<Option<(u32, String)>> = Mutex::new(None);
 
 /// Caller info of the frame `depth` levels above the Python frame that is
@@ -122,16 +125,14 @@ pub fn thread_info(py: Python<'_>) -> PyResult<Option<ThreadInfo>> {
 /// cached until the pid changes.
 pub fn process_info(py: Python<'_>) -> PyResult<ProcessInfo> {
     let id = std::process::id();
+    if let Some(cached) = try_lock(&PROCESS_INFO)
+        && let Some((pid, name)) = cached.as_ref()
+        && *pid == id
     {
-        let cached = PROCESS_INFO.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some((pid, name)) = cached.as_ref()
-            && *pid == id
-        {
-            return Ok(ProcessInfo {
-                name: name.clone(),
-                id,
-            });
-        }
+        return Ok(ProcessInfo {
+            name: name.clone(),
+            id,
+        });
     }
     let name = match current_process_name(py) {
         Ok(name) => name,
@@ -140,8 +141,19 @@ pub fn process_info(py: Python<'_>) -> PyResult<ProcessInfo> {
         }
         Err(err) => return Err(err),
     };
-    *PROCESS_INFO.lock().unwrap_or_else(|e| e.into_inner()) = Some((id, name.clone()));
+    if let Some(mut cached) = try_lock(&PROCESS_INFO) {
+        *cached = Some((id, name.clone()));
+    }
     Ok(ProcessInfo { name, id })
+}
+
+/// The lock if it is free (recovering a poisoned one); never blocks.
+fn try_lock<T>(mutex: &Mutex<T>) -> Option<std::sync::MutexGuard<'_, T>> {
+    match mutex.try_lock() {
+        Ok(guard) => Some(guard),
+        Err(std::sync::TryLockError::Poisoned(err)) => Some(err.into_inner()),
+        Err(std::sync::TryLockError::WouldBlock) => None,
+    }
 }
 
 fn current_process_name(py: Python<'_>) -> PyResult<String> {

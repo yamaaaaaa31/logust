@@ -92,7 +92,7 @@ class _IdName:
         return format(self.id, spec)
 
     def __eq__(self, other: object) -> bool:
-        if type(other) is type(self):
+        if isinstance(other, _IdName) and type(other) is type(self):
             return self.id == other.id and self.name == other.name
         return NotImplemented
 
