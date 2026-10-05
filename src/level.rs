@@ -225,6 +225,10 @@ static LEVEL_REGISTRY: LazyLock<RwLock<HashMap<String, LevelInfo>>> =
 static LEVEL_NO_REGISTRY: LazyLock<RwLock<HashMap<u32, String>>> =
     LazyLock::new(|| RwLock::new(HashMap::new()));
 
+/// Bumped whenever a level is (re)registered, so caches of level details can
+/// tell they are stale
+pub static LEVEL_GENERATION: AtomicU64 = AtomicU64::new(0);
+
 /// Register a custom level
 pub fn register_level(info: LevelInfo) {
     let name = info.name.to_ascii_uppercase();
@@ -234,6 +238,7 @@ pub fn register_level(info: LevelInfo) {
     let no = info.no;
     LEVEL_REGISTRY.write().insert(name.clone(), info);
     LEVEL_NO_REGISTRY.write().insert(no, name);
+    LEVEL_GENERATION.fetch_add(1, Ordering::Release);
 }
 
 /// Look up level by name (checks custom first, then built-in)

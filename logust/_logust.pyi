@@ -1,5 +1,6 @@
 """Type stubs for logust._logust Rust extension module."""
 
+import datetime
 from collections.abc import Callable
 from typing import Any
 
@@ -439,6 +440,10 @@ def level_style(level: str) -> str:
 
 def level_details(level: str) -> tuple[int, str] | None:
     """(no, icon) of the named level (icon is "" if it has none), or None if unknown."""
+    ...
+
+def record_time_fields() -> tuple[datetime.datetime, str, datetime.timedelta]:
+    """(time, timestamp, elapsed) for the current instant, shaped like a filter record's."""
     ...
 
 class TimeFormatter:

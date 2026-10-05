@@ -83,6 +83,52 @@ def add_user_id(record):
 enhanced_logger = logger.patch(add_request_id).patch(add_user_id)
 ```
 
+Changes a patcher makes to `record["message"]`, `record["extra"]` and `record["exception"]`
+are used for the log call. Changes to other keys are ignored.
+
+## The record dict
+
+Filters (`add(..., filter=...)`), patchers, and callbacks (`add_callback()`) receive a
+record dict shaped like loguru's, so ported loguru filters work:
+
+```python
+logger.add("warnings.log", filter=lambda r: r["level"].no >= 30 and r["time"].year > 2000)
+logger.add("app.log", filter=lambda r: r["file"].name != "noisy.py")
+```
+
+| Key | Value |
+|-----|-------|
+| `level` | Level name. A `str`, so `record["level"] == "INFO"` works, with loguru's `.name`, `.no` and `.icon` |
+| `level_no` | Numeric level (same as `record["level"].no`) |
+| `message` | The message |
+| `time` | Aware `datetime` of the record |
+| `timestamp` | The same time as an RFC 3339 string |
+| `elapsed` | `timedelta` since the logger started. `str()` and `{elapsed}` give `HH:MM:SS.mmm` |
+| `name` | Module `__name__` of the caller |
+| `module` | Caller file name without its extension |
+| `function`, `line` | Caller function and line |
+| `file` | Caller file basename. A `str` with loguru's `.name` and `.path` |
+| `thread`, `process` | Objects with `.id` and `.name` |
+| `thread_name`, `thread_id`, `process_name`, `process_id` | The same values as flat keys |
+| `exception` | The formatted traceback text, or `None` |
+| `extra` | Bound context and extra keyword arguments |
+
+Bound values are also copied to the top level of the record (`record["user_id"]`), unless the
+name is one of the keys above.
+
+Differences from loguru:
+
+- `record["exception"]` is the traceback text, not loguru's `(type, value, traceback)` tuple.
+  Test it with `record["exception"] is not None` or search the text.
+- The patcher record has no caller fields (`name`, `module`, `function`, `line`, `file`); they
+  are collected after the patchers run. Its `time`, `timestamp`, `elapsed`, `thread` and
+  `process` are computed when a patcher first reads them (or iterates the record), so patchers
+  that only touch `record["extra"]` don't pay for them; `time` is the moment of that first read.
+- `time`, `elapsed`, `thread` and `process` are not JSON-serializable. A callback that passes
+  the whole record to `json.dumps()` should pick the keys it needs, or use `default=str`.
+- The `level`, `file`, `thread` and `process` values are shared between records, so their
+  attributes are read-only.
+
 ## Use cases
 
 ### Web request logging

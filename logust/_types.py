@@ -9,6 +9,8 @@ from __future__ import annotations
 import datetime
 from typing import Any, NamedTuple, Protocol, TextIO, TypedDict
 
+from ._record import RecordElapsed, RecordFile, RecordLevelStr, RecordProcess, RecordThread
+
 
 class RecordLevel(NamedTuple):
     """Level information in a log record (loguru-compatible).
@@ -55,23 +57,56 @@ class RecordException(NamedTuple):
 
 
 class LogRecord(TypedDict, total=False):
-    """Log record dictionary passed to callbacks and filters.
+    """Log record dictionary passed to filters, patchers and ``add_callback`` callbacks.
 
-    Compatible with loguru's Record type for common fields.
+    Shaped like loguru's record for the common fields while keeping logust's
+    original keys: ``level`` and ``file`` are ``str`` subclasses, so code that
+    compares them to strings keeps working.
 
     Attributes:
-        level: Log level name (e.g., "INFO", "ERROR").
+        level: Level name (``RecordLevelStr``, a ``str``) with loguru's
+            ``.name``, ``.no`` and ``.icon``.
         level_no: Numeric log level value.
         message: The log message content.
-        timestamp: ISO 8601 formatted timestamp.
-        exception: Exception traceback if present.
+        time: Aware ``datetime`` of the record (loguru's ``record["time"]``).
+        timestamp: RFC 3339 formatted timestamp.
+        elapsed: Time since logger start (``RecordElapsed``, a ``timedelta``
+            whose ``str()`` is ``HH:MM:SS.mmm``).
+        name: Module ``__name__`` of the caller.
+        module: Caller file name without its extension.
+        function: Caller function name.
+        line: Caller line number.
+        file: Caller file basename (``RecordFile``, a ``str``) with loguru's
+            ``.name`` and ``.path``.
+        file_path: Full caller file path (only on some formatted-sink records).
+        thread: ``RecordThread`` with ``.id`` and ``.name``.
+        thread_name: Thread name.
+        thread_id: Thread ID.
+        process: ``RecordProcess`` with ``.id`` and ``.name``.
+        process_name: Process name.
+        process_id: Process ID.
+        exception: Formatted traceback text, or ``None``.
         extra: Additional context from bind().
     """
 
-    level: str
+    level: RecordLevelStr
     level_no: int
     message: str
+    time: datetime.datetime
     timestamp: str
+    elapsed: RecordElapsed
+    name: str
+    module: str
+    function: str
+    line: int
+    file: RecordFile
+    file_path: str
+    thread: RecordThread
+    thread_name: str
+    thread_id: int
+    process: RecordProcess
+    process_name: str
+    process_id: int
     exception: str | None
     extra: dict[str, Any]
 

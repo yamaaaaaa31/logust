@@ -1,6 +1,7 @@
 mod format;
 mod handler;
 mod level;
+mod record_compat;
 mod sink;
 mod time_format;
 
@@ -1330,17 +1331,12 @@ impl PyLogger {
             Python::attach(|py| {
                 let mut need_text_full_dict = has_eligible_filtered_handler;
                 let mut with_file_path = false;
-                let mut with_extra_repr = false;
                 for e in callbacks.iter() {
                     if level >= e.level
-                        && let CallbackKind::Raw {
-                            file_path,
-                            extra_repr,
-                        } = e.kind
+                        && let CallbackKind::Raw { file_path, .. } = e.kind
                     {
                         need_text_full_dict = true;
                         with_file_path |= file_path;
-                        with_extra_repr |= extra_repr;
                     }
                 }
                 let need_json_full_dict = callbacks
@@ -1348,13 +1344,14 @@ impl PyLogger {
                     .any(|e| level >= e.level && matches!(&e.kind, CallbackKind::Serialized));
 
                 let shared_text_full: Option<Bound<'_, PyDict>> = if need_text_full_dict {
+                    // Filters and raw callbacks are the only consumers of this dict
                     Self::build_record_dict(
                         py,
                         level,
                         &record,
                         RecordExtraView::Text,
                         with_file_path,
-                        with_extra_repr,
+                        true,
                     )
                     .ok()
                 } else {
@@ -1388,14 +1385,16 @@ impl PyLogger {
                             rec,
                             view,
                             with_file_path,
-                            with_extra_repr,
+                            // Raw callbacks get loguru-shaped values, serialized sinks plain ones
+                            !matches!(entry.kind, CallbackKind::Serialized),
                         )
                         .ok()
                     };
                     match &entry.kind {
-                        CallbackKind::Raw { .. } => {
+                        CallbackKind::Raw { extra_repr, .. } => {
                             if let Some(full) = own_full.as_ref().or(shared_text_full.as_ref())
-                                && let Err(err) = entry.callback.call1(py, (full.clone(),))
+                                && let Err(err) =
+                                    Self::call_full(py, &entry.callback, full, *extra_repr, rec)
                             {
                                 entry.on_error(err, &mut first_error);
                             }
@@ -1450,6 +1449,28 @@ impl PyLogger {
         first_error.map_or(Ok(()), Err)
     }
 
+    /// Call a sink with a full record dict. Logust's own sinks that render
+    /// `{extra}` get a copy with `extra_repr` added, so the shared dict that user
+    /// filters and callbacks see never carries that internal key.
+    fn call_full(
+        py: Python<'_>,
+        callback: &Py<PyAny>,
+        full: &Bound<'_, PyDict>,
+        extra_repr: bool,
+        record: &LogRecord,
+    ) -> PyResult<()> {
+        if extra_repr {
+            let copy = full.copy()?;
+            let mut rendered = String::new();
+            write_extra_repr(&record.extra, &mut rendered);
+            copy.set_item(intern!(py, "extra_repr"), rendered)?;
+            callback.call1(py, (copy,))?;
+        } else {
+            callback.call1(py, (full.clone(),))?;
+        }
+        Ok(())
+    }
+
     /// Build a Python dict from log record for callbacks/filters
     #[inline]
     fn build_record_dict<'py>(
@@ -1458,7 +1479,7 @@ impl PyLogger {
         record: &LogRecord,
         extra_view: RecordExtraView,
         with_file_path: bool,
-        with_extra_repr: bool,
+        compat: bool,
     ) -> PyResult<Bound<'py, PyDict>> {
         let dict = PyDict::new(py);
 
@@ -1471,7 +1492,7 @@ impl PyLogger {
 
         // Basic fields (override any extra with same name)
         // Using intern!() to cache key strings for better performance
-        let _ = dict.set_item(intern!(py, "level"), level.as_str());
+        let _ = dict.set_item(intern!(py, "level_no"), level as u32);
         let _ = dict.set_item(intern!(py, "message"), &record.message);
         let _ = dict.set_item(intern!(py, "timestamp"), record.timestamp.to_rfc3339());
 
@@ -1479,7 +1500,6 @@ impl PyLogger {
         let _ = dict.set_item(intern!(py, "name"), &record.caller.name);
         let _ = dict.set_item(intern!(py, "function"), &record.caller.function);
         let _ = dict.set_item(intern!(py, "line"), record.caller.line);
-        let _ = dict.set_item(intern!(py, "file"), record.caller.file_name());
         if with_file_path {
             let _ = dict.set_item(intern!(py, "file_path"), &record.caller.file);
         }
@@ -1490,20 +1510,14 @@ impl PyLogger {
         let _ = dict.set_item(intern!(py, "process_name"), &record.process.name);
         let _ = dict.set_item(intern!(py, "process_id"), record.process.id);
 
-        // Elapsed time
-        let _ = dict.set_item(
-            intern!(py, "elapsed"),
-            format_elapsed(&LOGGER_START_TIME, &record.timestamp),
-        );
+        // level, file, elapsed (+ loguru's time, module, thread, process)
+        Self::set_shaped_fields(py, &dict, level.as_str(), record, compat);
 
         // Extra as nested dict (for {extra[key]} access)
         let _ = dict.set_item(intern!(py, "extra"), extra_dict);
 
-        // Exception
-        if let Some(ref exc) = record.exception {
-            let _ = dict.set_item(intern!(py, "exception"), exc.as_str());
-        }
-        Self::set_record_options(py, &dict, record, with_extra_repr);
+        Self::set_exception(py, &dict, record);
+        Self::set_record_options(py, &dict, record, false);
 
         Ok(dict)
     }
@@ -1525,6 +1539,38 @@ impl PyLogger {
         if !record.message_markup {
             let _ = dict.set_item(intern!(py, "colors"), false);
         }
+    }
+
+    /// Set `level`, `file` and `elapsed`.
+    ///
+    /// With `compat` (dicts seen by filters and raw callbacks) the values are
+    /// loguru-shaped (see `record_compat`); dicts that only feed logust's own
+    /// formatted/serialized callable sinks keep the plain strings.
+    fn set_shaped_fields(
+        py: Python<'_>,
+        dict: &Bound<'_, PyDict>,
+        level_name: &str,
+        record: &LogRecord,
+        compat: bool,
+    ) {
+        if compat && record_compat::set_compat_fields(py, dict, level_name, record).unwrap_or(false)
+        {
+            return;
+        }
+        let _ = dict.set_item(intern!(py, "level"), level_name);
+        let _ = dict.set_item(intern!(py, "file"), record.caller.file_name());
+        let _ = dict.set_item(
+            intern!(py, "elapsed"),
+            format_elapsed(&LOGGER_START_TIME, &record.timestamp),
+        );
+    }
+
+    /// `exception`: the formatted traceback, or `None` (the key is always present)
+    fn set_exception(py: Python<'_>, dict: &Bound<'_, PyDict>, record: &LogRecord) {
+        let _ = match record.exception {
+            Some(ref exc) => dict.set_item(intern!(py, "exception"), exc.as_str()),
+            None => dict.set_item(intern!(py, "exception"), py.None()),
+        };
     }
 
     fn set_record_extra_item<'py>(
@@ -1713,14 +1759,11 @@ impl PyLogger {
                                 CallbackKind::Serialized => false,
                             }
                     });
-                let with_extra_repr = need_text_full_dict
-                    && callbacks.iter().any(|e| {
-                        level_no >= e.level as u32
-                            && match &e.kind {
-                                CallbackKind::Raw { extra_repr, .. } => *extra_repr,
-                                CallbackKind::FormattedLight(req) => req.needs_extra_repr,
-                                CallbackKind::Serialized => false,
-                            }
+                // Formatted callable sinks also read this dict for custom levels, but
+                // only filters and raw callbacks need the loguru-shaped values.
+                let compat = has_eligible_filtered_handler
+                    || callbacks.iter().any(|e| {
+                        level_no >= e.level as u32 && matches!(&e.kind, CallbackKind::Raw { .. })
                     });
                 let shared_text_full: Option<Bound<'_, PyDict>> = if need_text_full_dict {
                     Self::build_custom_record_dict(
@@ -1728,7 +1771,7 @@ impl PyLogger {
                         &record,
                         RecordExtraView::Text,
                         with_file_path,
-                        with_extra_repr,
+                        compat,
                     )
                     .ok()
                 } else {
@@ -1759,12 +1802,18 @@ impl PyLogger {
                                 rec,
                                 view,
                                 with_file_path,
-                                with_extra_repr,
+                                compat && !matches!(entry.kind, CallbackKind::Serialized),
                             )
                             .ok()
                         };
+                        let extra_repr = match &entry.kind {
+                            CallbackKind::Raw { extra_repr, .. } => *extra_repr,
+                            CallbackKind::FormattedLight(req) => req.needs_extra_repr,
+                            CallbackKind::Serialized => false,
+                        };
                         if let Some(full) = own_full.as_ref().or(shared)
-                            && let Err(err) = entry.callback.call1(py, (full.clone(),))
+                            && let Err(err) =
+                                Self::call_full(py, &entry.callback, full, extra_repr, rec)
                         {
                             entry.on_error(err, &mut first_error);
                         }
@@ -1811,14 +1860,17 @@ impl PyLogger {
         record: &LogRecord,
         extra_view: RecordExtraView,
         with_file_path: bool,
-        with_extra_repr: bool,
+        compat: bool,
     ) -> PyResult<Bound<'py, PyDict>> {
         let dict = PyDict::new(py);
         // Using intern!() to cache key strings for better performance
-        if let Some(ref info) = record.level_info {
-            let _ = dict.set_item(intern!(py, "level"), &info.name);
-            let _ = dict.set_item(intern!(py, "level_no"), info.no);
-        }
+        let level_name = match record.level_info {
+            Some(ref info) => {
+                let _ = dict.set_item(intern!(py, "level_no"), info.no);
+                info.name.as_str()
+            }
+            None => record.level.as_str(),
+        };
         let _ = dict.set_item(intern!(py, "message"), &record.message);
         let _ = dict.set_item(intern!(py, "timestamp"), record.timestamp.to_rfc3339());
 
@@ -1830,7 +1882,6 @@ impl PyLogger {
         let _ = dict.set_item(intern!(py, "name"), &record.caller.name);
         let _ = dict.set_item(intern!(py, "function"), &record.caller.function);
         let _ = dict.set_item(intern!(py, "line"), record.caller.line);
-        let _ = dict.set_item(intern!(py, "file"), record.caller.file_name());
         if with_file_path {
             let _ = dict.set_item(intern!(py, "file_path"), &record.caller.file);
         }
@@ -1838,16 +1889,11 @@ impl PyLogger {
         let _ = dict.set_item(intern!(py, "thread_id"), record.thread.id);
         let _ = dict.set_item(intern!(py, "process_name"), &record.process.name);
         let _ = dict.set_item(intern!(py, "process_id"), record.process.id);
-        let _ = dict.set_item(
-            intern!(py, "elapsed"),
-            format_elapsed(&LOGGER_START_TIME, &record.timestamp),
-        );
+        Self::set_shaped_fields(py, &dict, level_name, record, compat);
         let _ = dict.set_item(intern!(py, "extra"), extra_dict);
 
-        if let Some(ref exc) = record.exception {
-            let _ = dict.set_item(intern!(py, "exception"), exc.as_str());
-        }
-        Self::set_record_options(py, &dict, record, with_extra_repr);
+        Self::set_exception(py, &dict, record);
+        Self::set_record_options(py, &dict, record, false);
         Ok(dict)
     }
 }
@@ -1938,6 +1984,7 @@ fn _logust(py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(split_format_markup, m)?)?;
     m.add_function(wrap_pyfunction!(level_style, m)?)?;
     m.add_function(wrap_pyfunction!(level_details, m)?)?;
+    m.add_function(wrap_pyfunction!(record_compat::record_time_fields, m)?)?;
     m.add_class::<TimeFormatter>()?;
 
     let default_logger = Py::new(py, PyLogger::new(None))?;

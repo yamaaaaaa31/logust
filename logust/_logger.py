@@ -18,8 +18,9 @@ from dataclasses import dataclass
 from types import TracebackType
 from typing import TYPE_CHECKING, Any, TextIO, TypeVar, cast, overload
 
-from ._logust import LogLevel, PyLogger
+from ._logust import LogLevel, PyLogger, record_time_fields
 from ._parse import parse as _parse_file
+from ._record import RecordLevelStr, RecordProcess, RecordThread
 from ._template import (
     CALLER_TOKENS,
     KNOWN_TOKENS,
@@ -242,6 +243,185 @@ def _get_process_info() -> tuple[str, int]:
     _CACHED_PROCESS_INFO = (name, current_pid)
     _CACHED_PROCESS_PID = current_pid
     return _CACHED_PROCESS_INFO
+
+
+# ``record["level"]`` values handed to patchers, keyed by the level name as passed
+# to the log call; cleared whenever a level is (re)registered so icon changes are
+# picked up.
+_PATCH_LEVELS: dict[str, RecordLevelStr] = {}
+# ``record["thread"]`` / ``record["process"]`` values handed to patchers, by id
+_PATCH_THREADS: dict[int, RecordThread] = {}
+_PATCH_PROCESSES: dict[int, RecordProcess] = {}
+
+
+def _patch_thread_value() -> RecordThread:
+    """Cached ``record["thread"]`` for patchers."""
+    thread = threading.current_thread()
+    ident = thread.ident or 0
+    value = _PATCH_THREADS.get(ident)
+    if value is None or value.name != thread.name:
+        value = RecordThread(ident, thread.name)
+        if len(_PATCH_THREADS) > 1024:
+            _PATCH_THREADS.clear()
+        _PATCH_THREADS[ident] = value
+    return value
+
+
+def _patch_process_value() -> RecordProcess:
+    """Cached ``record["process"]`` for patchers."""
+    name, pid = _get_process_info()
+    value = _PATCH_PROCESSES.get(pid)
+    if value is None or value.name != name:
+        value = RecordProcess(pid, name)
+        _PATCH_PROCESSES.clear()
+        _PATCH_PROCESSES[pid] = value
+    return value
+
+
+def _fill_time(record: dict[str, Any]) -> None:
+    time, timestamp, elapsed = record_time_fields()
+    record.setdefault("time", time)
+    record.setdefault("timestamp", timestamp)
+    record.setdefault("elapsed", elapsed)
+
+
+def _fill_thread(record: dict[str, Any]) -> None:
+    record.setdefault("thread", _patch_thread_value())
+
+
+def _fill_process(record: dict[str, Any]) -> None:
+    record.setdefault("process", _patch_process_value())
+
+
+# Lazy patcher-record key -> function that sets it (and its siblings)
+_PATCH_LAZY: dict[str, Callable[[dict[str, Any]], None]] = {
+    "time": _fill_time,
+    "timestamp": _fill_time,
+    "elapsed": _fill_time,
+    "thread": _fill_thread,
+    "process": _fill_process,
+}
+_NO_PENDING: frozenset[str] = frozenset()
+
+
+class _PatchRecord(dict[str, Any]):
+    """Record dict handed to patchers.
+
+    ``time``, ``timestamp``, ``elapsed``, ``thread`` and ``process`` are computed
+    on first access, so patchers that only touch ``record["extra"]`` cost no more
+    than before. Whole-dict operations (iteration, ``len``, ``copy``, ``==``,
+    ``repr``, ...) compute every pending key first, so the record behaves like a
+    plain dict holding all keys.
+    """
+
+    # Keys not computed yet; replaced per instance as keys get filled
+    _pending: frozenset[str] = frozenset(_PATCH_LAZY)
+
+    def _fill(self, key: str) -> None:
+        fill = _PATCH_LAZY[key]
+        # Calls dict methods directly: the overrides below would recurse
+        pending = self._pending
+        done = {k for k, f in _PATCH_LAZY.items() if f is fill}
+        self._pending = pending - done
+        tmp: dict[str, Any] = {}
+        fill(tmp)
+        for k, v in tmp.items():
+            if k in pending and not dict.__contains__(self, k):
+                dict.__setitem__(self, k, v)
+
+    def _fill_all(self) -> None:
+        while self._pending:
+            self._fill(next(iter(self._pending)))
+
+    def __missing__(self, key: str) -> Any:
+        if key in self._pending:
+            self._fill(key)
+            return dict.__getitem__(self, key)
+        raise KeyError(key)
+
+    def __contains__(self, key: object) -> bool:
+        return dict.__contains__(self, key) or key in self._pending
+
+    def get(self, key: str, default: Any = None) -> Any:
+        if key in self._pending and not dict.__contains__(self, key):
+            self._fill(key)
+        return dict.get(self, key, default)
+
+    def __delitem__(self, key: str) -> None:
+        self._fill_all()
+        dict.__delitem__(self, key)
+
+    def setdefault(self, key: str, default: Any = None) -> Any:
+        self._fill_all()
+        return dict.setdefault(self, key, default)
+
+    def pop(self, key: str, *default: Any) -> Any:
+        self._fill_all()
+        return dict.pop(self, key, *default)
+
+    def popitem(self) -> tuple[str, Any]:
+        self._fill_all()
+        return dict.popitem(self)
+
+    def clear(self) -> None:
+        self._pending = _NO_PENDING
+        dict.clear(self)
+
+    def keys(self) -> Any:
+        self._fill_all()
+        return dict.keys(self)
+
+    def values(self) -> Any:
+        self._fill_all()
+        return dict.values(self)
+
+    def items(self) -> Any:
+        self._fill_all()
+        return dict.items(self)
+
+    def __iter__(self) -> Any:
+        self._fill_all()
+        return dict.__iter__(self)
+
+    def __reversed__(self) -> Any:
+        self._fill_all()
+        return dict.__reversed__(self)
+
+    def __len__(self) -> int:
+        self._fill_all()
+        return dict.__len__(self)
+
+    def copy(self) -> dict[str, Any]:
+        self._fill_all()
+        return dict(dict.items(self))
+
+    def __eq__(self, other: object) -> bool:
+        self._fill_all()
+        if isinstance(other, _PatchRecord):
+            other._fill_all()
+        return dict.__eq__(self, other)
+
+    def __ne__(self, other: object) -> bool:
+        result = self.__eq__(other)
+        return result if result is NotImplemented else not result
+
+    __hash__ = None
+
+    def __or__(self, other: Any) -> Any:
+        self._fill_all()
+        return dict(dict.items(self)) | other
+
+    def __ror__(self, other: Any) -> Any:
+        self._fill_all()
+        return other | dict(dict.items(self))
+
+    def __repr__(self) -> str:
+        self._fill_all()
+        return dict.__repr__(self)
+
+    def __reduce__(self) -> Any:
+        self._fill_all()
+        return (dict, (dict(dict.items(self)),))
 
 
 def _to_log_level(level: LogLevel | str) -> LogLevel:
@@ -904,20 +1084,25 @@ class Logger:
             base_extra.update(extra)
         original_extra_keys = {str(key) for key in base_extra}
 
-        record: dict[str, Any] = {
-            "level": level_name.upper(),
-            "level_no": level_no,
-            "message": message_str,
-            "timestamp": "",
-            "exception": exception,
-            "extra": base_extra,
-        }
+        level = _PATCH_LEVELS.get(level_name)
+        if level is None or level.no != level_no:
+            level = self._patch_level_value(level_name, level_no)
+        record = _PatchRecord(
+            {
+                "level": level,
+                "level_no": level_no,
+                "message": message_str,
+                "exception": exception,
+                "extra": base_extra,
+            }
+        )
 
         for patcher in self._patchers:
             patcher(record)
 
-        patched_exception = record.get("exception", exception)
-        patched_extra = record.get("extra", extra or {})
+        # dict.get: these keys are never lazy, so skip the subclass overrides
+        patched_exception = dict.get(record, "exception", exception)
+        patched_extra = dict.get(record, "extra", extra or {})
 
         extra_out: dict[str, Any] | None
         if patched_extra is None:
@@ -935,11 +1120,22 @@ class Logger:
         if patched_exception is not None and not isinstance(patched_exception, str):
             patched_exception = str(patched_exception)
         return (
-            str(record.get("message", message_str)),
+            str(dict.get(record, "message", message_str)),
             # An untouched ``ExceptionText`` keeps its per-handler variants
             patched_exception,
             extra_out,
         )
+
+    def _patch_level_value(self, level_name: str, no: int) -> RecordLevelStr:
+        """Build and cache ``record["level"]`` for patchers (cache miss path)."""
+        name = level_name.upper()
+        info = self._inner.level_info(name)
+        icon = (info[3] or "") if info is not None else ""
+        value = RecordLevelStr(name, no, icon)
+        if len(_PATCH_LEVELS) > 256:
+            _PATCH_LEVELS.clear()
+        _PATCH_LEVELS[level_name] = value
+        return value
 
     def _log_with_level(
         self,
@@ -1258,6 +1454,7 @@ class Logger:
             if icon is None:
                 icon = existing[3]
         self._inner.level(name, no, color, icon)
+        _PATCH_LEVELS.clear()
         info = self._inner.level_info(name)
         assert info is not None
         return _level_from_info(info)
