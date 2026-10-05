@@ -1157,13 +1157,17 @@ class Logger:
             if not extra_kwargs:
                 extra_kwargs = None
 
-        message, exception, extra_kwargs = self._apply_patchers(
-            level_name=level_name,
-            level_no=level_value,
-            message=message,
-            exception=exception,
-            extra=extra_kwargs,
-        )
+        # ``message`` is a plain ``str`` from here on (patchers return one too)
+        if self._patchers:
+            message, exception, extra_kwargs = self._apply_patchers(
+                level_name=level_name,
+                level_no=level_value,
+                message=message,
+                exception=exception,
+                extra=extra_kwargs,
+            )
+        else:
+            message = str(message)
 
         inner = self._inner if extra_kwargs is None else self._inner.bind(extra_kwargs)
 
@@ -1174,9 +1178,9 @@ class Logger:
 
         if needs_caller is False and needs_thread is False and needs_process is False:
             if exception is None:
-                getattr(inner, level_name)(str(message))
+                getattr(inner, level_name)(message)
             else:
-                getattr(inner, level_name)(str(message), exception=exception)
+                getattr(inner, level_name)(message, exception=exception)
             return
 
         if needs_thread is False and needs_process is False:
@@ -1193,11 +1197,11 @@ class Logger:
                 )
             if exception is None:
                 getattr(inner, level_name)(
-                    str(message), name=name, function=function, line=line, file=file
+                    message, name=name, function=function, line=line, file=file
                 )
             else:
                 getattr(inner, level_name)(
-                    str(message),
+                    message,
                     exception=exception,
                     name=name,
                     function=function,
@@ -1247,7 +1251,7 @@ class Logger:
 
         if exception is None:
             getattr(inner, level_name)(
-                str(message),
+                message,
                 name=c_name,
                 function=c_function,
                 line=c_line,
@@ -1259,7 +1263,7 @@ class Logger:
             )
         else:
             getattr(inner, level_name)(
-                str(message),
+                message,
                 exception=exception,
                 name=c_name,
                 function=c_function,
@@ -1510,18 +1514,21 @@ class Logger:
         resolved_emit = self._inner.try_resolve_emit_level_no(level)
         if resolved_emit is None:
             extra_kw: dict[str, Any] | None = None
-            message, exception, extra_kw = self._apply_patchers(
-                level_name=str(level),
-                level_no=0,
-                message=message,
-                exception=exception,
-                extra=extra_kw,
-            )
+            if self._patchers:
+                message, exception, extra_kw = self._apply_patchers(
+                    level_name=str(level),
+                    level_no=0,
+                    message=message,
+                    exception=exception,
+                    extra=extra_kw,
+                )
+            else:
+                message = str(message)
             inner = self._inner if extra_kw is None else self._inner.bind(extra_kw)
             if exception is None:
-                inner.log(level, str(message))
+                inner.log(level, message)
             else:
-                inner.log(level, str(message), exception=exception)
+                inner.log(level, message, exception=exception)
             return
         if resolved_emit < self._inner.min_level:
             return
@@ -1534,13 +1541,17 @@ class Logger:
             if not extra_kw:
                 extra_kw = None
 
-        message, exception, extra_kw = self._apply_patchers(
-            level_name=str(level),
-            level_no=resolved_emit,
-            message=message,
-            exception=exception,
-            extra=extra_kw,
-        )
+        # ``message`` is a plain ``str`` from here on (patchers return one too)
+        if self._patchers:
+            message, exception, extra_kw = self._apply_patchers(
+                level_name=str(level),
+                level_no=resolved_emit,
+                message=message,
+                exception=exception,
+                extra=extra_kw,
+            )
+        else:
+            message = str(message)
 
         needs_caller, needs_thread, needs_process = self._compute_effective_requirements(
             resolved_emit
@@ -1549,9 +1560,9 @@ class Logger:
 
         if needs_caller is False and needs_thread is False and needs_process is False:
             if exception is None:
-                inner.log(level, str(message))
+                inner.log(level, message)
             else:
-                inner.log(level, str(message), exception=exception)
+                inner.log(level, message, exception=exception)
             return
 
         if needs_thread is False and needs_process is False:
@@ -1568,11 +1579,11 @@ class Logger:
                     needs_caller.file,
                 )
             if exception is None:
-                inner.log(level, str(message), name=name, function=function, line=line, file=file)
+                inner.log(level, message, name=name, function=function, line=line, file=file)
             else:
                 inner.log(
                     level,
-                    str(message),
+                    message,
                     exception=exception,
                     name=name,
                     function=function,
@@ -1620,7 +1631,7 @@ class Logger:
         if exception is None:
             inner.log(
                 level,
-                str(message),
+                message,
                 name=name_,
                 function=function_,
                 line=line_,
@@ -1633,7 +1644,7 @@ class Logger:
         else:
             inner.log(
                 level,
-                str(message),
+                message,
                 exception=exception,
                 name=name_,
                 function=function_,
