@@ -332,6 +332,66 @@ def _coerce_emit_no_u32(emit_no: int) -> int:
     return emit_no
 
 
+class _ModuleActivation:
+    """Per-module enable/disable rules shared by a logger and its bound children.
+
+    ``rules`` holds ``(dotted_prefix, enabled)`` pairs, most specific first
+    (``""`` matches every module). It is empty until a module is disabled, so
+    the logging hot path only checks its truthiness. ``cache`` maps a module
+    name to its resolved state and is replaced whenever the rules change.
+    Writers set ``rules`` before ``cache`` and readers load ``cache`` first,
+    so a reader never stores a stale answer in the current cache.
+    """
+
+    __slots__ = ("_lock", "cache", "rules")
+
+    def __init__(self) -> None:
+        self.rules: tuple[tuple[str, bool], ...] = ()
+        self.cache: dict[str, bool] = {}
+        self._lock = threading.Lock()
+
+    def change(self, name: str, enabled: bool) -> None:
+        """Apply ``enable(name)`` / ``disable(name)`` with loguru's semantics."""
+        prefix = name + "." if name else ""
+        with self._lock:
+            # Rules for ``name`` and its submodules are superseded by this call.
+            rules = [(p, s) for p, s in self.rules if not p.startswith(prefix)]
+            parent = next((s for p, s in rules if prefix.startswith(p)), True)
+            if parent != enabled:
+                rules.append((prefix, enabled))
+                rules.sort(key=lambda rule: rule[0].count("."), reverse=True)
+            self.rules = tuple(rules)
+            self.cache = {}
+
+    def is_disabled(self, name: str) -> bool:
+        """Return True if messages from module ``name`` are disabled."""
+        cache = self.cache
+        rules = self.rules
+        try:
+            return not cache[name]
+        except KeyError:
+            pass
+        dotted = name + "."
+        enabled = True
+        for prefix, status in rules:
+            if dotted.startswith(prefix):
+                enabled = status
+                break
+        cache[name] = enabled
+        return not enabled
+
+    def caller_disabled(self, depth: int) -> bool:
+        """Like ``is_disabled`` for the module ``depth`` frames above the caller.
+
+        Uses the same frame and name as ``_get_caller_info(depth)``.
+        """
+        try:
+            frame = sys._getframe(depth + 1)
+        except ValueError:
+            return False
+        return self.is_disabled(frame.f_globals.get("__name__", frame.f_code.co_filename))
+
+
 def _rotation_to_str(rotation: str | datetime.timedelta | datetime.time) -> str:
     """Convert a ``rotation`` value into the string form the Rust sink understands.
 
@@ -532,8 +592,11 @@ class Logger:
             ]
             | None
         ) = None,
+        activation: _ModuleActivation | None = None,
     ) -> None:
         self._inner = inner
+        # Per-module enable/disable rules (shared between bound loggers)
+        self._activation = activation if activation is not None else _ModuleActivation()
         self._patchers = patchers if patchers is not None else []
         self._context = dict(context or {})
         # Handler ID -> CollectOptions mapping (shared between bound loggers)
@@ -886,6 +949,8 @@ class Logger:
     ) -> None:
         # Callers must check ``level_value < self._inner.min_level`` first so a
         # filtered-out call returns before this frame and any arg handling.
+        if self._activation.rules and self._activation.caller_disabled(depth + 1):
+            return
         extra_kwargs: dict[str, Any] | None = None
         if args or kwargs:
             message, extra_kwargs = _split_kwargs_for_format(message, kwargs or {}, args)
@@ -1259,6 +1324,8 @@ class Logger:
             return
         if resolved_emit < self._inner.min_level:
             return
+        if self._activation.rules and self._activation.caller_disabled(_depth + 1):
+            return
 
         extra_kw = None
         if args or kwargs:
@@ -1397,15 +1464,60 @@ class Logger:
         """
         return self._inner.is_level_enabled(_to_log_level(level))
 
-    def enable(self, level: LogLevel | str | None = None) -> None:
-        """Enable console logging."""
+    def enable(
+        self,
+        name: str | LogLevel | None = None,
+        *,
+        level: LogLevel | str | None = None,
+    ) -> None:
+        """Enable messages from a module, or re-enable console logging.
+
+        - ``enable("mylib")`` re-enables messages logged from ``mylib`` and its
+          submodules (``mylib.*``) after ``disable("mylib")``, as in loguru.
+          ``enable("")`` removes every module rule.
+        - ``enable()``, ``enable(LogLevel.Info)``, ``enable("INFO")`` or
+          ``enable(level="INFO")`` re-enables console output (logust behavior).
+
+        A string that is a built-in level name (case-insensitive: ``"trace"``,
+        ``"debug"``, ``"info"``, ``"success"``, ``"warning"``, ``"error"``,
+        ``"fail"``, ``"critical"``) is treated as a level; any other string is
+        a module name.
+
+        Args:
+            name: Module name, built-in level, or None.
+            level: Minimum console level when re-enabling console output.
+        """
+        if isinstance(name, str) and name.lower() not in _LEVEL_VALUES:
+            if level is not None:
+                raise TypeError("enable() got both a module name and a level")
+            self._activation.change(name, True)
+            return
+        if name is not None:
+            if level is not None:
+                raise TypeError("enable() got multiple values for the level")
+            level = name
         self._inner.enable(_to_log_level(level) if level is not None else None)
         self._invalidate_requirements_cache()
 
-    def disable(self) -> None:
-        """Disable console logging."""
-        self._inner.disable()
-        self._invalidate_requirements_cache()
+    def disable(self, name: str | None = None) -> None:
+        """Disable messages from a module, or disable console logging.
+
+        - ``disable("mylib")`` drops messages logged from ``mylib`` and its
+          submodules (``mylib.*``), as in loguru. A more specific
+          ``enable("mylib.sub")`` takes precedence. ``disable("")`` disables
+          every module.
+        - ``disable()`` removes the console handler (logust behavior).
+
+        Args:
+            name: Module name, or None to disable console output.
+        """
+        if name is None:
+            self._inner.disable()
+            self._invalidate_requirements_cache()
+            return
+        if not isinstance(name, str):
+            raise TypeError(f"Invalid name, it should be a string, not: {type(name).__name__!r}")
+        self._activation.change(name, False)
 
     def is_enabled(self) -> bool:
         """Check if console logging is enabled."""
@@ -1869,6 +1981,7 @@ class Logger:
             raw_callback_ids=self._raw_callback_ids,
             requirements_cache_box=self._requirements_cache_box,
             aggregated_options_box=self._aggregated_options_box,
+            activation=self._activation,
         )
 
     @contextmanager
@@ -2055,6 +2168,7 @@ class Logger:
             raw_callback_ids=self._raw_callback_ids,
             requirements_cache_box=self._requirements_cache_box,
             aggregated_options_box=self._aggregated_options_box,
+            activation=self._activation,
         )
 
     def configure(
@@ -2064,6 +2178,7 @@ class Logger:
         levels: list[dict[str, Any]] | None = None,
         extra: dict[str, Any] | None = None,
         patcher: Callable[[dict[str, Any]], None] | None = None,
+        activation: list[tuple[str, bool]] | None = None,
     ) -> list[int]:
         """Configure the logger from dictionaries.
 
@@ -2094,6 +2209,8 @@ class Logger:
                 - icon: Icon symbol
             extra: Default extra fields to bind
             patcher: Default patcher function
+            activation: ``(module_name, enabled)`` pairs applied in order
+                with ``enable(name)`` / ``disable(name)``
 
         Returns:
             List of handler IDs that were created.
@@ -2152,6 +2269,15 @@ class Logger:
 
         if patcher:
             self._patchers.append(patcher)
+
+        if activation:
+            for module_name, enabled in activation:
+                if not isinstance(module_name, str):
+                    raise TypeError(
+                        "Invalid activation name, it should be a string, "
+                        f"not: {type(module_name).__name__!r}"
+                    )
+                self._activation.change(module_name, bool(enabled))
 
         return handler_ids
 

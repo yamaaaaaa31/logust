@@ -57,8 +57,13 @@ class OptLogger:
     def _log(self, level: str, message: str, *args: Any, **kwargs: Any) -> None:
         """Internal log method with option processing."""
         # For lazy evaluation, skip formatting if level is not enabled
-        if self._lazy and not self._logger.is_level_enabled(level):
-            return
+        if self._lazy:
+            if not self._logger.is_level_enabled(level):
+                return
+            # Skip lazy args for disabled modules (user frame: +1 public method, + depth)
+            activation = self._logger._activation
+            if activation.rules and activation.caller_disabled(self._depth + 2):
+                return
 
         exc = kwargs.pop("exception", None) or self._get_exception()
         log_method = getattr(self._logger, level)

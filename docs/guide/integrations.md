@@ -28,6 +28,8 @@ The `InterceptHandler` captures log records from Python's standard `logging` mod
 - Third-party library logs use logust's fast Rust core
 - All logs benefit from logust's rotation, retention, and JSON features
 
+To silence a noisy library, disable its stdlib logger name: `logger.disable("urllib3")` drops records from `urllib3` and `urllib3.*` (see [Enable or disable modules](levels.md#enable-or-disable-modules)).
+
 ### Manual Setup
 
 For more control, you can set up the handler manually:
