@@ -11,12 +11,13 @@ use std::sync::{Arc, RwLockReadGuard, RwLockWriteGuard};
 
 use pyo3::intern;
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyTuple};
+use pyo3::types::{PyDict, PyString, PyTuple};
 
 pub use format::{FormatConfig, LOGGER_START_TIME, TokenRequirements, format_elapsed};
 pub use handler::{
     CallerInfo, CatchMode, ConsoleHandler, ExtraMap, ExtraValue, FileHandler, HandlerEntry,
     HandlerType, LogRecord, ProcessInfo, ThreadInfo, empty_context, serde_json_to_py,
+    write_extra_repr,
 };
 pub use level::{LevelInfo, LogLevel, get_level_by_no, get_level_info, register_level};
 pub use sink::{CompressionFormat, FileSink, FileSinkConfig, Rotation};
@@ -66,6 +67,8 @@ pub struct FormattedSinkRequirements {
     pub needs_nested_extra: bool,
     /// `{file.path}`: add `file_path` to the dict
     pub needs_file_path: bool,
+    /// `{extra}`: add the rendered extra dict as `extra_repr`
+    pub needs_extra_repr: bool,
     /// Keys referenced as `extra[key]` in the template (empty if none).
     pub extra_keys: Vec<String>,
 }
@@ -75,9 +78,9 @@ impl FormattedSinkRequirements {
         req: &Bound<'_, PyTuple>,
         extra_keys: &Bound<'_, PyTuple>,
     ) -> PyResult<Self> {
-        if req.len() != 12 {
+        if req.len() != 12 && req.len() != 13 {
             return Err(pyo3::exceptions::PyValueError::new_err(
-                "requirements tuple must have 12 bool fields",
+                "requirements tuple must have 12 or 13 bool fields",
             ));
         }
         let mut keys = Vec::with_capacity(extra_keys.len());
@@ -97,6 +100,7 @@ impl FormattedSinkRequirements {
             needs_message: req.get_item(9)?.extract()?,
             needs_nested_extra: req.get_item(10)?.extract()?,
             needs_file_path: req.get_item(11)?.extract()?,
+            needs_extra_repr: req.len() > 12 && req.get_item(12)?.extract()?,
             extra_keys: keys,
         })
     }
@@ -128,9 +132,11 @@ enum RecordExtraView {
 /// dict whose nested `extra` mapping uses typed JSON values; formatted sinks receive
 /// a minimal dict for templates.
 pub enum CallbackKind {
-    /// `file_path`: add `file_path` to the record dict (`{file.path}` in a filtered sink)
+    /// `file_path`: add `file_path` to the record dict (`{file.path}` in a filtered sink);
+    /// `extra_repr`: add the rendered extra dict (`{extra}` in a filtered sink)
     Raw {
         file_path: bool,
+        extra_repr: bool,
     },
     Serialized,
     FormattedLight(FormattedSinkRequirements),
@@ -145,6 +151,8 @@ pub struct CallbackEntry {
     /// Propagate exceptions raised by the callback to the logging call
     /// (callable sinks with `catch=False`). Otherwise they are dropped.
     pub raise_errors: bool,
+    /// Traceback variant this sink gets (bit 0: backtrace, bit 1: diagnose)
+    pub exc_variant: u8,
 }
 
 impl CallbackEntry {
@@ -154,6 +162,67 @@ impl CallbackEntry {
         if self.raise_errors && first_error.is_none() {
             *first_error = Some(err);
         }
+    }
+}
+
+/// Traceback text per handler variant (index = `exc_variant`); `None` means the
+/// record's own text.
+type ExcVariants = [Option<String>; 4];
+
+/// Records carrying each handler variant's traceback.
+type VariantRecords = [Option<LogRecord>; 4];
+
+/// Split the `exception=` argument into the record's text and the per-handler
+/// variants. A plain `str` (the usual case) has no variants; the Python side
+/// passes a `str` subclass with a `variants` tuple when handlers asked for
+/// `backtrace` / `diagnose` tracebacks.
+#[inline]
+fn extract_exception(
+    obj: Option<Bound<'_, PyAny>>,
+) -> PyResult<(Option<String>, Option<ExcVariants>)> {
+    let Some(obj) = obj else {
+        return Ok((None, None));
+    };
+    let text: String = obj.extract()?;
+    if obj.is_exact_instance_of::<PyString>() {
+        return Ok((Some(text), None));
+    }
+    Ok((Some(text), extract_variants(&obj)))
+}
+
+#[cold]
+fn extract_variants(obj: &Bound<'_, PyAny>) -> Option<ExcVariants> {
+    let variants = obj.getattr(intern!(obj.py(), "variants")).ok()?;
+    let (a, b, c, d): (
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    ) = variants.extract().ok()?;
+    Some([a, b, c, d])
+}
+
+#[cold]
+fn variant_records(record: &LogRecord, variants: ExcVariants) -> Box<VariantRecords> {
+    Box::new(variants.map(|text| {
+        text.map(|text| {
+            let mut alt = record.clone();
+            alt.exception = Some(text);
+            alt
+        })
+    }))
+}
+
+/// The record a handler with traceback variant `variant` receives.
+#[inline]
+fn record_for<'a>(
+    record: &'a LogRecord,
+    alt: Option<&'a VariantRecords>,
+    variant: u8,
+) -> &'a LogRecord {
+    match alt {
+        None => record,
+        Some(alt) => alt[variant as usize].as_ref().unwrap_or(record),
     }
 }
 
@@ -264,6 +333,8 @@ pub struct PyLogger {
     cached_requirements_by_level: Arc<RwLock<HashMap<u32, TokenRequirements>>>,
     /// Cached token requirements for handlers only (excludes callbacks)
     cached_handler_requirements: Arc<RwLock<TokenRequirements>>,
+    /// Render color markup in messages (false for `opt(colors=False)` loggers)
+    message_markup: bool,
 }
 
 #[pymethods]
@@ -278,6 +349,7 @@ impl PyLogger {
             cached_min_level: Arc::new(AtomicU32::new(u32::MAX)),
             cached_requirements_by_level: Arc::new(RwLock::new(HashMap::new())),
             cached_handler_requirements: Arc::new(RwLock::new(TokenRequirements::default())),
+            message_markup: true,
         };
 
         let console_level = level.unwrap_or_default();
@@ -287,6 +359,7 @@ impl PyLogger {
             handler: HandlerType::Console(console_handler),
             filter: None,
             catch: CatchMode::Silent,
+            exc_variant: 0,
         };
         logger.handlers.write().push(entry);
         logger.update_min_level_cache();
@@ -354,6 +427,7 @@ impl PyLogger {
             handler: HandlerType::File(file_handler),
             filter,
             catch: CatchMode::from_option(catch),
+            exc_variant: 0,
         };
 
         self.handlers.write().push(entry);
@@ -395,6 +469,7 @@ impl PyLogger {
             handler: HandlerType::Console(console_handler),
             filter,
             catch: CatchMode::from_option(catch),
+            exc_variant: 0,
         };
 
         self.handlers.write().push(entry);
@@ -447,8 +522,66 @@ impl PyLogger {
             cached_min_level: Arc::clone(&self.cached_min_level),
             cached_requirements_by_level: Arc::clone(&self.cached_requirements_by_level),
             cached_handler_requirements: Arc::clone(&self.cached_handler_requirements),
+            message_markup: self.message_markup,
         };
         Py::new(py, new_logger)
+    }
+
+    /// Same logger, with color markup in messages rendered (`True`) or kept as
+    /// plain text (`False`). Used by `opt(colors=False)`.
+    fn with_colors(&self, py: Python, colors: bool) -> PyResult<Py<PyLogger>> {
+        let new_logger = PyLogger {
+            handlers: Arc::clone(&self.handlers),
+            context: Arc::clone(&self.context),
+            callbacks: Arc::clone(&self.callbacks),
+            cached_min_level: Arc::clone(&self.cached_min_level),
+            cached_requirements_by_level: Arc::clone(&self.cached_requirements_by_level),
+            cached_handler_requirements: Arc::clone(&self.cached_handler_requirements),
+            message_markup: colors,
+        };
+        Py::new(py, new_logger)
+    }
+
+    /// Give a handler or callable sink a traceback variant
+    /// (bit 0: backtrace, bit 1: diagnose). Returns false for an unknown ID.
+    fn set_exception_variant(&self, handler_id: u64, variant: u8) -> PyResult<bool> {
+        if variant > 3 {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "variant must be between 0 and 3",
+            ));
+        }
+        if let Some(entry) = self
+            .handlers
+            .write()
+            .iter_mut()
+            .find(|e| e.id == handler_id)
+        {
+            entry.exc_variant = variant;
+            return Ok(true);
+        }
+        if let Some(entry) = self
+            .callbacks
+            .write()
+            .iter_mut()
+            .find(|e| e.id == handler_id)
+        {
+            entry.exc_variant = variant;
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    /// Bit `v` is set when a handler or callable sink uses traceback variant `v`.
+    #[getter]
+    fn exception_variant_mask(&self) -> u8 {
+        let mut mask = 0u8;
+        for e in self.handlers.read().iter() {
+            mask |= 1 << e.exc_variant;
+        }
+        for e in self.callbacks.read().iter() {
+            mask |= 1 << e.exc_variant;
+        }
+        mask
     }
 
     /// Set minimum log level for all console handlers
@@ -606,6 +739,7 @@ impl PyLogger {
                     handler: HandlerType::Console(console_handler),
                     filter: None,
                     catch: CatchMode::Silent,
+                    exc_variant: 0,
                 };
                 handlers.push(entry);
             }
@@ -637,22 +771,28 @@ impl PyLogger {
 
     /// Add a callback to receive full log record dicts (raw callback).
     ///
-    /// `file_path` adds the caller's source path as `file_path` to the dicts.
-    #[pyo3(signature = (callback, level=None, file_path=false, raise_errors=false))]
+    /// `file_path` adds the caller's source path as `file_path` to the dicts, and
+    /// `extra_repr` the extra dict rendered for `{extra}` as `extra_repr`.
+    #[pyo3(signature = (callback, level=None, file_path=false, raise_errors=false, extra_repr=false))]
     fn add_callback(
         &self,
         callback: Py<PyAny>,
         level: Option<LogLevel>,
         file_path: bool,
         raise_errors: bool,
+        extra_repr: bool,
     ) -> u64 {
         let id = handler::next_handler_id();
         let entry = CallbackEntry {
             id,
             callback,
             level: level.unwrap_or(LogLevel::Debug),
-            kind: CallbackKind::Raw { file_path },
+            kind: CallbackKind::Raw {
+                file_path,
+                extra_repr,
+            },
             raise_errors,
+            exc_variant: 0,
         };
         self.callbacks.write().push(entry);
         self.update_min_level_cache();
@@ -675,6 +815,7 @@ impl PyLogger {
             level: level.unwrap_or(LogLevel::Debug),
             kind: CallbackKind::Serialized,
             raise_errors,
+            exc_variant: 0,
         };
         self.callbacks.write().push(entry);
         self.update_min_level_cache();
@@ -700,6 +841,7 @@ impl PyLogger {
             level: level.unwrap_or(LogLevel::Debug),
             kind: CallbackKind::FormattedLight(req),
             raise_errors,
+            exc_variant: 0,
         };
         self.callbacks.write().push(entry);
         self.update_min_level_cache();
@@ -747,7 +889,7 @@ impl PyLogger {
     fn trace(
         &self,
         message: String,
-        exception: Option<String>,
+        exception: Option<Bound<'_, PyAny>>,
         name: Option<String>,
         function: Option<String>,
         line: Option<u32>,
@@ -777,7 +919,7 @@ impl PyLogger {
     fn debug(
         &self,
         message: String,
-        exception: Option<String>,
+        exception: Option<Bound<'_, PyAny>>,
         name: Option<String>,
         function: Option<String>,
         line: Option<u32>,
@@ -807,7 +949,7 @@ impl PyLogger {
     fn info(
         &self,
         message: String,
-        exception: Option<String>,
+        exception: Option<Bound<'_, PyAny>>,
         name: Option<String>,
         function: Option<String>,
         line: Option<u32>,
@@ -837,7 +979,7 @@ impl PyLogger {
     fn success(
         &self,
         message: String,
-        exception: Option<String>,
+        exception: Option<Bound<'_, PyAny>>,
         name: Option<String>,
         function: Option<String>,
         line: Option<u32>,
@@ -867,7 +1009,7 @@ impl PyLogger {
     fn warning(
         &self,
         message: String,
-        exception: Option<String>,
+        exception: Option<Bound<'_, PyAny>>,
         name: Option<String>,
         function: Option<String>,
         line: Option<u32>,
@@ -897,7 +1039,7 @@ impl PyLogger {
     fn error(
         &self,
         message: String,
-        exception: Option<String>,
+        exception: Option<Bound<'_, PyAny>>,
         name: Option<String>,
         function: Option<String>,
         line: Option<u32>,
@@ -927,7 +1069,7 @@ impl PyLogger {
     fn fail(
         &self,
         message: String,
-        exception: Option<String>,
+        exception: Option<Bound<'_, PyAny>>,
         name: Option<String>,
         function: Option<String>,
         line: Option<u32>,
@@ -957,7 +1099,7 @@ impl PyLogger {
     fn critical(
         &self,
         message: String,
-        exception: Option<String>,
+        exception: Option<Bound<'_, PyAny>>,
         name: Option<String>,
         function: Option<String>,
         line: Option<u32>,
@@ -1008,7 +1150,7 @@ impl PyLogger {
         &self,
         level_arg: &Bound<'_, PyAny>,
         message: String,
-        exception: Option<String>,
+        exception: Option<Bound<'_, PyAny>>,
         name: Option<String>,
         function: Option<String>,
         line: Option<u32>,
@@ -1123,7 +1265,7 @@ impl PyLogger {
         &self,
         level: LogLevel,
         message: String,
-        exception: Option<String>,
+        exception: Option<Bound<'_, PyAny>>,
         name: Option<String>,
         function: Option<String>,
         line: Option<u32>,
@@ -1174,7 +1316,12 @@ impl PyLogger {
             id: process_id.unwrap_or(0),
         };
 
-        let record = LogRecord::with_all(level, message, extra, exception, caller, thread, process);
+        let (exception, exc_variants) = extract_exception(exception)?;
+        let mut record =
+            LogRecord::with_all(level, message, extra, exception, caller, thread, process);
+        record.message_markup = self.message_markup;
+        let alt = exc_variants.map(|v| variant_records(&record, v));
+        let alt = alt.as_deref();
 
         // Only filled on an error path for handlers/sinks with catch=False.
         let mut first_error: Option<PyErr> = None;
@@ -1183,12 +1330,17 @@ impl PyLogger {
             Python::attach(|py| {
                 let mut need_text_full_dict = has_eligible_filtered_handler;
                 let mut with_file_path = false;
+                let mut with_extra_repr = false;
                 for e in callbacks.iter() {
                     if level >= e.level
-                        && let CallbackKind::Raw { file_path } = e.kind
+                        && let CallbackKind::Raw {
+                            file_path,
+                            extra_repr,
+                        } = e.kind
                     {
                         need_text_full_dict = true;
                         with_file_path |= file_path;
+                        with_extra_repr |= extra_repr;
                     }
                 }
                 let need_json_full_dict = callbacks
@@ -1202,13 +1354,15 @@ impl PyLogger {
                         &record,
                         RecordExtraView::Text,
                         with_file_path,
+                        with_extra_repr,
                     )
                     .ok()
                 } else {
                     None
                 };
                 let shared_json_full: Option<Bound<'_, PyDict>> = if need_json_full_dict {
-                    Self::build_record_dict(py, level, &record, RecordExtraView::Json, false).ok()
+                    Self::build_record_dict(py, level, &record, RecordExtraView::Json, false, false)
+                        .ok()
                 } else {
                     None
                 };
@@ -1217,23 +1371,44 @@ impl PyLogger {
                     if level < entry.level {
                         continue;
                     }
+                    let rec = record_for(&record, alt, entry.exc_variant);
+                    // Only for sinks given a different traceback than the record's
+                    let own_full = if std::ptr::eq(rec, &record)
+                        || matches!(entry.kind, CallbackKind::FormattedLight(_))
+                    {
+                        None
+                    } else {
+                        let view = match &entry.kind {
+                            CallbackKind::Serialized => RecordExtraView::Json,
+                            _ => RecordExtraView::Text,
+                        };
+                        Self::build_record_dict(
+                            py,
+                            level,
+                            rec,
+                            view,
+                            with_file_path,
+                            with_extra_repr,
+                        )
+                        .ok()
+                    };
                     match &entry.kind {
                         CallbackKind::Raw { .. } => {
-                            if let Some(full) = shared_text_full.as_ref()
+                            if let Some(full) = own_full.as_ref().or(shared_text_full.as_ref())
                                 && let Err(err) = entry.callback.call1(py, (full.clone(),))
                             {
                                 entry.on_error(err, &mut first_error);
                             }
                         }
                         CallbackKind::Serialized => {
-                            if let Some(full) = shared_json_full.as_ref()
+                            if let Some(full) = own_full.as_ref().or(shared_json_full.as_ref())
                                 && let Err(err) = entry.callback.call1(py, (full.clone(),))
                             {
                                 entry.on_error(err, &mut first_error);
                             }
                         }
                         CallbackKind::FormattedLight(req) => {
-                            if let Ok(mini) = Self::build_mini_record_dict(py, level, &record, req)
+                            if let Ok(mini) = Self::build_mini_record_dict(py, level, rec, req)
                                 && let Err(err) = entry.callback.call1(py, (mini,))
                             {
                                 entry.on_error(err, &mut first_error);
@@ -1257,15 +1432,17 @@ impl PyLogger {
                             continue;
                         }
                     }
-                    if let Err(err) = entry.handler.handle(&record) {
-                        entry.on_error(err, &record, &mut first_error);
+                    let rec = record_for(&record, alt, entry.exc_variant);
+                    if let Err(err) = entry.handler.handle(rec) {
+                        entry.on_error(err, rec, &mut first_error);
                     }
                 }
             });
         } else {
             for entry in handlers.iter() {
-                if let Err(err) = entry.handler.handle(&record) {
-                    entry.on_error(err, &record, &mut first_error);
+                let rec = record_for(&record, alt, entry.exc_variant);
+                if let Err(err) = entry.handler.handle(rec) {
+                    entry.on_error(err, rec, &mut first_error);
                 }
             }
         }
@@ -1281,6 +1458,7 @@ impl PyLogger {
         record: &LogRecord,
         extra_view: RecordExtraView,
         with_file_path: bool,
+        with_extra_repr: bool,
     ) -> PyResult<Bound<'py, PyDict>> {
         let dict = PyDict::new(py);
 
@@ -1325,8 +1503,28 @@ impl PyLogger {
         if let Some(ref exc) = record.exception {
             let _ = dict.set_item(intern!(py, "exception"), exc.as_str());
         }
+        Self::set_record_options(py, &dict, record, with_extra_repr);
 
         Ok(dict)
+    }
+
+    /// `extra_repr` (for `{extra}` in a Python template) and `colors: False` (for
+    /// `opt(colors=False)` records). Both are absent from ordinary records.
+    #[inline]
+    fn set_record_options(
+        py: Python<'_>,
+        dict: &Bound<'_, PyDict>,
+        record: &LogRecord,
+        with_extra_repr: bool,
+    ) {
+        if with_extra_repr {
+            let mut rendered = String::new();
+            write_extra_repr(&record.extra, &mut rendered);
+            let _ = dict.set_item(intern!(py, "extra_repr"), rendered);
+        }
+        if !record.message_markup {
+            let _ = dict.set_item(intern!(py, "colors"), false);
+        }
     }
 
     fn set_record_extra_item<'py>(
@@ -1400,6 +1598,7 @@ impl PyLogger {
         if let Some(ref exc) = record.exception {
             let _ = dict.set_item(intern!(py, "exception"), exc.as_str());
         }
+        Self::set_record_options(py, &dict, record, req.needs_extra_repr);
         if req.needs_nested_extra {
             let extra_dict = PyDict::new(py);
             if req.extra_keys.is_empty() {
@@ -1426,7 +1625,7 @@ impl PyLogger {
         &self,
         level_info: LevelInfo,
         message: String,
-        exception: Option<String>,
+        exception: Option<Bound<'_, PyAny>>,
         name: Option<String>,
         function: Option<String>,
         line: Option<u32>,
@@ -1478,7 +1677,8 @@ impl PyLogger {
             id: process_id.unwrap_or(0),
         };
 
-        let record = LogRecord::with_custom_level_full(
+        let (exception, exc_variants) = extract_exception(exception)?;
+        let mut record = LogRecord::with_custom_level_full(
             level_info.clone(),
             message,
             extra,
@@ -1487,6 +1687,9 @@ impl PyLogger {
             thread,
             process,
         );
+        record.message_markup = self.message_markup;
+        let alt = exc_variants.map(|v| variant_records(&record, v));
+        let alt = alt.as_deref();
 
         // Only filled on an error path for handlers/sinks with catch=False.
         let mut first_error: Option<PyErr> = None;
@@ -1505,8 +1708,17 @@ impl PyLogger {
                     && callbacks.iter().any(|e| {
                         level_no >= e.level as u32
                             && match &e.kind {
-                                CallbackKind::Raw { file_path } => *file_path,
+                                CallbackKind::Raw { file_path, .. } => *file_path,
                                 CallbackKind::FormattedLight(req) => req.needs_file_path,
+                                CallbackKind::Serialized => false,
+                            }
+                    });
+                let with_extra_repr = need_text_full_dict
+                    && callbacks.iter().any(|e| {
+                        level_no >= e.level as u32
+                            && match &e.kind {
+                                CallbackKind::Raw { extra_repr, .. } => *extra_repr,
+                                CallbackKind::FormattedLight(req) => req.needs_extra_repr,
                                 CallbackKind::Serialized => false,
                             }
                     });
@@ -1516,24 +1728,42 @@ impl PyLogger {
                         &record,
                         RecordExtraView::Text,
                         with_file_path,
+                        with_extra_repr,
                     )
                     .ok()
                 } else {
                     None
                 };
                 let shared_json_full: Option<Bound<'_, PyDict>> = if need_json_full_dict {
-                    Self::build_custom_record_dict(py, &record, RecordExtraView::Json, false).ok()
+                    Self::build_custom_record_dict(py, &record, RecordExtraView::Json, false, false)
+                        .ok()
                 } else {
                     None
                 };
 
                 for entry in callbacks.iter() {
                     if level_no >= entry.level as u32 {
-                        let full = match &entry.kind {
-                            CallbackKind::Serialized => shared_json_full.as_ref(),
-                            _ => shared_text_full.as_ref(),
+                        let (shared, view) = match &entry.kind {
+                            CallbackKind::Serialized => {
+                                (shared_json_full.as_ref(), RecordExtraView::Json)
+                            }
+                            _ => (shared_text_full.as_ref(), RecordExtraView::Text),
                         };
-                        if let Some(full) = full
+                        let rec = record_for(&record, alt, entry.exc_variant);
+                        // Only for sinks given a different traceback than the record's
+                        let own_full = if std::ptr::eq(rec, &record) {
+                            None
+                        } else {
+                            Self::build_custom_record_dict(
+                                py,
+                                rec,
+                                view,
+                                with_file_path,
+                                with_extra_repr,
+                            )
+                            .ok()
+                        };
+                        if let Some(full) = own_full.as_ref().or(shared)
                             && let Err(err) = entry.callback.call1(py, (full.clone(),))
                         {
                             entry.on_error(err, &mut first_error);
@@ -1556,15 +1786,17 @@ impl PyLogger {
                             continue;
                         }
                     }
-                    if let Err(err) = entry.handler.handle(&record) {
-                        entry.on_error(err, &record, &mut first_error);
+                    let rec = record_for(&record, alt, entry.exc_variant);
+                    if let Err(err) = entry.handler.handle(rec) {
+                        entry.on_error(err, rec, &mut first_error);
                     }
                 }
             });
         } else {
             for entry in handlers.iter() {
-                if let Err(err) = entry.handler.handle(&record) {
-                    entry.on_error(err, &record, &mut first_error);
+                let rec = record_for(&record, alt, entry.exc_variant);
+                if let Err(err) = entry.handler.handle(rec) {
+                    entry.on_error(err, rec, &mut first_error);
                 }
             }
         }
@@ -1579,6 +1811,7 @@ impl PyLogger {
         record: &LogRecord,
         extra_view: RecordExtraView,
         with_file_path: bool,
+        with_extra_repr: bool,
     ) -> PyResult<Bound<'py, PyDict>> {
         let dict = PyDict::new(py);
         // Using intern!() to cache key strings for better performance
@@ -1614,6 +1847,7 @@ impl PyLogger {
         if let Some(ref exc) = record.exception {
             let _ = dict.set_item(intern!(py, "exception"), exc.as_str());
         }
+        Self::set_record_options(py, &dict, record, with_extra_repr);
         Ok(dict)
     }
 }

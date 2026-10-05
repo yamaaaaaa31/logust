@@ -391,6 +391,7 @@ class TestLightweightRequirementsForRust:
             True,
             False,
             False,
+            False,
         )
 
     def test_extra_nested_flag(self) -> None:

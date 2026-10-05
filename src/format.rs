@@ -7,7 +7,7 @@ use chrono::{DateTime, Local};
 use colored::Color;
 use serde::Serialize;
 
-use crate::handler::{ExtraMap, LogRecord};
+use crate::handler::{ExtraMap, LogRecord, write_extra_repr};
 use crate::level::get_level_color;
 use crate::time_format::TimeSpec;
 
@@ -175,6 +175,8 @@ pub enum FormatToken {
     Message,
     /// {extra[key]} placeholder
     Extra(String),
+    /// {extra} placeholder - the whole extra dict, rendered like `str(dict)`
+    ExtraAll,
     /// {name} placeholder - module/logger name
     Name,
     /// {function} placeholder - function name
@@ -287,6 +289,7 @@ fn field_token(placeholder: &str) -> Option<FormatToken> {
         "file.path" => FormatToken::FilePath,
         "module" => FormatToken::Module,
         "exception" => FormatToken::Exception,
+        "extra" => FormatToken::ExtraAll,
         _ => return None,
     })
 }
@@ -715,7 +718,10 @@ impl FormatConfig {
                     }
                 }
                 FormatToken::Message => {
-                    if !colorize || styles.is_empty() {
+                    if !record.message_markup {
+                        // `opt(colors=False)`: markup in the message is plain text
+                        result.push_str(&record.message);
+                    } else if !colorize || styles.is_empty() {
                         result.push_str(&apply_color_markup(&record.message, colorize));
                     } else {
                         // Keep template styles alive across resets in the message markup
@@ -752,6 +758,7 @@ impl FormatConfig {
                         result.push_str(value.as_str());
                     }
                 }
+                FormatToken::ExtraAll => write_extra_repr(&record.extra, &mut result),
                 FormatToken::Name | FormatToken::Module => {
                     if auto {
                         result.push_str(&cyan_text(&record.caller.name));
@@ -1285,5 +1292,76 @@ mod tests {
             config.format_record(&record, false),
             "{level.color} {thread.x}"
         );
+    }
+
+    fn extra_record(pairs: &[(&str, ExtraValue)]) -> LogRecord {
+        let extra: ExtraMap = pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.clone()))
+            .collect();
+        LogRecord::with_extra(LogLevel::Info, "m".into(), Arc::new(extra))
+    }
+
+    #[test]
+    fn test_extra_all_token_parsed() {
+        let tokens = parse_template("{message} {extra}").unwrap();
+        assert!(matches!(tokens[2], FormatToken::ExtraAll));
+        // With a spec it is not a field (literal, like other unknown placeholders)
+        let tokens = parse_template("{extra:>5}").unwrap();
+        assert!(matches!(&tokens[0], FormatToken::Static(s) if s == "{extra:>5}"));
+    }
+
+    #[test]
+    fn test_extra_all_empty() {
+        let config = FormatConfig::new(Some("{message} {extra}".into()), false);
+        let record = LogRecord::new(LogLevel::Info, "m".into());
+        assert_eq!(config.format_record(&record, false), "m {}");
+    }
+
+    #[test]
+    fn test_extra_all_sorted_and_typed() {
+        let config = FormatConfig::new(Some("{extra}".into()), false);
+        let record = extra_record(&[
+            ("user", ExtraValue::from("alice")),
+            ("count", ExtraValue::non_str("3")),
+            ("flag", ExtraValue::non_str("True")),
+            ("none", ExtraValue::non_str("None")),
+        ]);
+        assert_eq!(
+            config.format_record(&record, false),
+            "{'count': 3, 'flag': True, 'none': None, 'user': 'alice'}"
+        );
+    }
+
+    #[test]
+    fn test_extra_all_string_escapes() {
+        let config = FormatConfig::new(Some("{extra}".into()), false);
+        let record = extra_record(&[
+            ("a", ExtraValue::from("it's")),
+            ("b", ExtraValue::from("'\"")),
+            ("c", ExtraValue::from("x\ny\t\\")),
+            ("d", ExtraValue::from("\u{0}\u{7f}\u{a0}\u{2028}é")),
+        ]);
+        assert_eq!(
+            config.format_record(&record, false),
+            r#"{'a': "it's", 'b': '\'"', 'c': 'x\ny\t\\', 'd': '\x00\x7f\xa0\u2028é'}"#
+        );
+    }
+
+    #[test]
+    fn test_extra_all_not_colorized() {
+        let config = FormatConfig::new(Some("{extra}".into()), false);
+        let record = extra_record(&[("k", ExtraValue::from("v"))]);
+        assert_eq!(config.format_record(&record, true), "{'k': 'v'}");
+    }
+
+    #[test]
+    fn test_message_markup_disabled() {
+        let config = FormatConfig::new(Some("{message}".into()), false);
+        let mut record = LogRecord::new(LogLevel::Info, "<red>x</red>".into());
+        assert_eq!(config.format_record(&record, false), "x");
+        record.message_markup = false;
+        assert_eq!(config.format_record(&record, false), "<red>x</red>");
+        assert_eq!(config.format_record(&record, true), "<red>x</red>");
     }
 }

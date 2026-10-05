@@ -151,6 +151,8 @@ class HandlerConfig(TypedDict, total=False):
                Only valid for file sinks.
         catch: Sink error policy: None drops errors silently (default),
                True reports them to stderr, False raises them.
+        backtrace: Show frames above the catch point in logged tracebacks.
+        diagnose: Show variable values in logged tracebacks.
     """
 
     sink: str | TextIO
@@ -167,6 +169,8 @@ class HandlerConfig(TypedDict, total=False):
     encoding: str
     delay: bool
     catch: bool
+    backtrace: bool
+    diagnose: bool
 
 
 class LevelConfig(TypedDict, total=False):

@@ -81,6 +81,19 @@ PROCESS_TOKENS: frozenset[str] = frozenset({"process", "process.name", "process.
 _TOKEN_ALIASES: dict[str, str] = {"level.name": "level", "file.name": "file"}
 # Segment key of `{time:<spec>}` (rendered through a compiled TimeFormatter)
 _TIME_SPEC_KEY = "time:spec"
+# Segment key of `{extra}` (the whole extra dict)
+_EXTRA_ALL_KEY = "extra:all"
+
+
+def _py_repr_extra(extra: Any) -> str:
+    """Fallback `{extra}` rendering for records without Rust's ``extra_repr``.
+
+    Matches ``write_extra_repr`` in src/handler.rs: keys sorted, values as in
+    ``str(dict)``.
+    """
+    if not isinstance(extra, dict):
+        return "{}"
+    return str({key: extra[key] for key in sorted(extra)})
 
 
 @dataclass(frozen=True, slots=True)
@@ -143,12 +156,14 @@ class ParsedCallableTemplate:
         "_segments",
     )
 
-    # Token pattern: {token} or {token:spec} or {extra[key]} or {extra[key]:spec}
+    # Token pattern: {token} or {token:spec} or {extra[key]} or {extra[key]:spec} or {extra}
     # Only matches known tokens to preserve unknown patterns as literals
     # extra[...] allows any characters except ] (supports hyphens, dots, unicode, etc.)
     # Built from KNOWN_TOKENS to ensure consistency with auto-detect
     _TOKEN_PATTERN = re.compile(
-        r"\{(" + "|".join(re.escape(t) for t in KNOWN_TOKENS) + r"|extra\[[^\]]+\])(?::([^}]*))?\}"
+        r"\{("
+        + "|".join(re.escape(t) for t in KNOWN_TOKENS)
+        + r"|extra\[[^\]]+\]|extra)(?::([^}]*))?\}"
     )
 
     def __init__(self, template: str, colorize: bool = False) -> None:
@@ -173,6 +188,11 @@ class ParsedCallableTemplate:
         self._needs_process = "process" in self._needed_tokens
         # The template places the exception itself: don't append it
         self._has_exception = "exception" in self._needed_tokens
+
+    @property
+    def needs_extra_repr(self) -> bool:
+        """Whether the template uses ``{extra}`` (records must carry ``extra_repr``)."""
+        return _EXTRA_ALL_KEY in self._needed_tokens
 
     @property
     def needs_file_path(self) -> bool:
@@ -220,7 +240,13 @@ class ParsedCallableTemplate:
             key = match.group(1)
             spec = match.group(2)
 
-            if key.startswith("extra["):
+            if key == "extra":
+                if spec is None:
+                    segments.append(TokenSegment(_EXTRA_ALL_KEY, None, False, None, in_markup))
+                else:
+                    # Like the Rust formatter: `{extra:<spec>}` is not a field
+                    segments.append(LiteralSegment(match.group(0)))
+            elif key.startswith("extra["):
                 extra_key = key[6:-1]  # Extract key from extra[key]
                 segments.append(TokenSegment("extra", spec, True, extra_key, in_markup))
             elif key == "time" and spec is not None:
@@ -242,7 +268,7 @@ class ParsedCallableTemplate:
         """Booleans for Rust `FormattedSinkRequirements` / `build_mini_record_dict`.
 
         Order: timestamp, level, name, function, line, file, elapsed, thread, process,
-        message, nested extra, file path. Must match ``src/lib.rs``
+        message, nested extra, file path, extra repr. Must match ``src/lib.rs``
         ``FormattedSinkRequirements``.
         """
         nt = self._needed_tokens
@@ -259,6 +285,7 @@ class ParsedCallableTemplate:
             "message" in nt,
             self._needs_extra,
             "file.path" in nt,
+            _EXTRA_ALL_KEY in nt,
         )
 
     def lightweight_extra_keys_for_rust(self) -> tuple[str, ...]:
@@ -342,7 +369,10 @@ class ParsedCallableTemplate:
                         value = process_str
                     elif key == "message":
                         message = record.get("message", "")
-                        if styles:
+                        if "<" not in message or "colors" in record:
+                            # No markup, or `opt(colors=False)`: the message as is
+                            value = message
+                        elif styles:
                             # Keep template styles alive across resets in the message markup
                             value = apply_color_markup(message, True, "".join(styles))
                         else:
@@ -411,4 +441,9 @@ class ParsedCallableTemplate:
             return record.get("process_id", 0)
         if key == "exception":
             return record.get("exception") or ""
+        if key == _EXTRA_ALL_KEY:
+            rendered = record.get("extra_repr")
+            if rendered is None:
+                rendered = _py_repr_extra(record.get("extra"))
+            return rendered
         return ""

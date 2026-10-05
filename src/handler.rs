@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use std::fmt;
+use std::fmt::{self, Write as _};
 use std::io;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -53,6 +53,8 @@ static ENUM_TYPE: PyOnceLock<Py<PyType>> = PyOnceLock::new();
 pub struct ExtraValue {
     text: String,
     json: Value,
+    /// The Python value was a `str` (`{extra}` quotes it like `repr()`)
+    is_str: bool,
 }
 
 /// Classification of a Python value for fast-path `ExtraValue` construction.
@@ -124,28 +126,37 @@ impl ExtraValue {
             FastKind::None => Ok(Self {
                 text,
                 json: Value::Null,
+                is_str: false,
             }),
             FastKind::Bool(b) => Ok(Self {
                 text,
                 json: Value::Bool(b),
+                is_str: false,
             }),
             FastKind::Str(s) => Ok(Self {
                 text,
                 json: Value::String(s),
+                is_str: true,
             }),
             FastKind::I64(n) => Ok(Self {
                 text,
                 json: Value::Number(Number::from(n)),
+                is_str: false,
             }),
             FastKind::U64(n) => Ok(Self {
                 text,
                 json: Value::Number(Number::from(n)),
+                is_str: false,
             }),
             FastKind::Slow => {
                 let mut seen = HashSet::new();
                 let json = py_to_json_value(value, 0, &mut seen)
                     .unwrap_or_else(|_| Value::String(text.clone()));
-                Ok(Self { text, json })
+                Ok(Self {
+                    text,
+                    json,
+                    is_str: false,
+                })
             }
         }
     }
@@ -159,6 +170,108 @@ impl ExtraValue {
     pub fn as_json(&self) -> &Value {
         &self.json
     }
+
+    /// A non-`str` value whose `str()` is `text` (e.g. an int), for tests
+    #[cfg(test)]
+    pub fn non_str(text: &str) -> Self {
+        Self {
+            text: text.to_string(),
+            json: Value::String(text.to_string()),
+            is_str: false,
+        }
+    }
+
+    /// Append the value as it appears in `str(dict)` (loguru's `{extra}`).
+    ///
+    /// Strings are quoted like Python's `repr()`; other values use their `str()`
+    /// text, which equals `repr()` for `int`, `float`, `bool`, `None`, and
+    /// `list` / `tuple` / `dict` values.
+    pub fn write_repr(&self, out: &mut String) {
+        if self.is_str {
+            write_py_str_repr(&self.text, out);
+        } else {
+            out.push_str(&self.text);
+        }
+    }
+}
+
+/// Whether Python's `str.isprintable()` is false for `c` (approximation of the
+/// Unicode categories Cc, Cf, Co, Zl, Zp and Zs other than the ASCII space).
+fn is_py_unprintable(c: char) -> bool {
+    matches!(
+        c as u32,
+        0x00..=0x1f
+            | 0x7f..=0xa0
+            | 0xad
+            | 0x600..=0x605
+            | 0x61c
+            | 0x6dd
+            | 0x70f
+            | 0x1680
+            | 0x180e
+            | 0x2000..=0x200f
+            | 0x2028..=0x202f
+            | 0x205f..=0x2064
+            | 0x2066..=0x206f
+            | 0x3000
+            | 0xd800..=0xf8ff
+            | 0xfeff
+            | 0xfff9..=0xfffb
+            | 0xf0000..=0x10ffff
+    )
+}
+
+/// Append `s` quoted and escaped like Python's `repr(str)`.
+pub fn write_py_str_repr(s: &str, out: &mut String) {
+    let quote = if s.contains('\'') && !s.contains('"') {
+        '"'
+    } else {
+        '\''
+    };
+    out.reserve(s.len() + 2);
+    out.push(quote);
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if c == quote => {
+                out.push('\\');
+                out.push(c);
+            }
+            c if is_py_unprintable(c) => {
+                let n = c as u32;
+                let _ = if n < 0x100 {
+                    write!(out, "\\x{n:02x}")
+                } else if n < 0x10000 {
+                    write!(out, "\\u{n:04x}")
+                } else {
+                    write!(out, "\\U{n:08x}")
+                };
+            }
+            c => out.push(c),
+        }
+    }
+    out.push(quote);
+}
+
+/// Append the whole extra dict as loguru's `{extra}` renders it (`str(dict)`).
+///
+/// Keys are sorted: the map does not keep insertion order (loguru's does).
+pub fn write_extra_repr(extra: &ExtraMap, out: &mut String) {
+    out.push('{');
+    let mut keys: Vec<&String> = extra.keys().collect();
+    keys.sort_unstable();
+    for (i, key) in keys.into_iter().enumerate() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        write_py_str_repr(key, out);
+        out.push_str(": ");
+        extra[key].write_repr(out);
+    }
+    out.push('}');
 }
 
 impl From<String> for ExtraValue {
@@ -166,6 +279,7 @@ impl From<String> for ExtraValue {
         Self {
             text: value.clone(),
             json: Value::String(value),
+            is_str: true,
         }
     }
 }
@@ -463,6 +577,8 @@ pub struct LogRecord {
     pub caller: CallerInfo,
     pub thread: ThreadInfo,
     pub process: ProcessInfo,
+    /// Render color markup in the message (`opt(colors=False)` turns it off)
+    pub message_markup: bool,
 }
 
 impl LogRecord {
@@ -478,6 +594,7 @@ impl LogRecord {
             caller: CallerInfo::default(),
             thread: ThreadInfo::default(),
             process: ProcessInfo::default(),
+            message_markup: true,
         }
     }
 
@@ -493,6 +610,7 @@ impl LogRecord {
             caller: CallerInfo::default(),
             thread: ThreadInfo::default(),
             process: ProcessInfo::default(),
+            message_markup: true,
         }
     }
 
@@ -514,6 +632,7 @@ impl LogRecord {
             caller,
             thread: ThreadInfo::default(),
             process: ProcessInfo::default(),
+            message_markup: true,
         }
     }
 
@@ -537,6 +656,7 @@ impl LogRecord {
             caller,
             thread,
             process,
+            message_markup: true,
         }
     }
 
@@ -557,6 +677,7 @@ impl LogRecord {
             caller: CallerInfo::default(),
             thread: ThreadInfo::default(),
             process: ProcessInfo::default(),
+            message_markup: true,
         }
     }
 
@@ -577,6 +698,7 @@ impl LogRecord {
             caller: CallerInfo::default(),
             thread: ThreadInfo::default(),
             process: ProcessInfo::default(),
+            message_markup: true,
         }
     }
 
@@ -598,6 +720,7 @@ impl LogRecord {
             caller,
             thread: ThreadInfo::default(),
             process: ProcessInfo::default(),
+            message_markup: true,
         }
     }
 
@@ -621,6 +744,7 @@ impl LogRecord {
             caller,
             thread,
             process,
+            message_markup: true,
         }
     }
 
@@ -718,6 +842,8 @@ pub struct HandlerEntry {
     pub filter: Option<Py<PyAny>>,
     /// Error policy; only consulted when `handle` fails.
     pub catch: CatchMode,
+    /// Traceback variant this handler gets (bit 0: backtrace, bit 1: diagnose)
+    pub exc_variant: u8,
 }
 
 impl HandlerEntry {

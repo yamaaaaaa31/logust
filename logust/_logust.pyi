@@ -144,10 +144,12 @@ class PyLogger:
         level: LogLevel | None = None,
         file_path: bool = False,
         raise_errors: bool = False,
+        extra_repr: bool = False,
     ) -> int:
         """Add a callback to receive log records.
 
-        file_path adds the caller's source file path as ``file_path`` to the records.
+        file_path adds the caller's source file path as ``file_path`` to the records,
+        and extra_repr the extra dict rendered for ``{extra}`` as ``extra_repr``.
         With ``raise_errors=True`` an exception raised by the callback
         propagates to the logging call; otherwise it is dropped.
         """
@@ -239,6 +241,19 @@ class PyLogger:
     @property
     def handler_count(self) -> int:
         """Get the current number of handlers (excludes callbacks)."""
+        ...
+
+    def with_colors(self, colors: bool) -> PyLogger:
+        """Same logger, rendering (True) or not parsing (False) message color markup."""
+        ...
+
+    def set_exception_variant(self, handler_id: int, variant: int) -> bool:
+        """Set a handler's traceback variant (bit 0: backtrace, bit 1: diagnose)."""
+        ...
+
+    @property
+    def exception_variant_mask(self) -> int:
+        """Bit ``v`` is set when a handler or callable sink uses traceback variant ``v``."""
         ...
 
     def level(

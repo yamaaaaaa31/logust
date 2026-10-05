@@ -27,6 +27,7 @@ from ._template import (
     THREAD_TOKENS,
     ParsedCallableTemplate,
 )
+from ._traceback import capture_exception, current_exc_info
 from ._types import Level
 
 _F = TypeVar("_F", bound=Callable[..., Any])
@@ -491,7 +492,7 @@ class Catcher:
         if self._exclude is not None and issubclass(exc_type, self._exclude):
             return False
 
-        tb_str = "".join(traceback.format_exception(exc_type, exc_value, tb))
+        tb_str = capture_exception(self._logger._inner, (exc_type, exc_value, tb))
         # Point the record at the ``with`` block, or at the caller of the decorated function
         depth = 2 if self._from_decorator else 1
         self._logger.log(
@@ -931,9 +932,12 @@ class Logger:
         else:
             extra_out = extra
 
+        if patched_exception is not None and not isinstance(patched_exception, str):
+            patched_exception = str(patched_exception)
         return (
             str(record.get("message", message_str)),
-            None if patched_exception is None else str(patched_exception),
+            # An untouched ``ExceptionText`` keeps its per-handler variants
+            patched_exception,
             extra_out,
         )
 
@@ -1199,9 +1203,9 @@ class Logger:
             ...     logger.exception("Operation failed")
             # Output: ERROR with full traceback
         """
-        exc_info = sys.exc_info()
-        if exc_info[0] is not None:
-            tb = traceback.format_exc()
+        exc_info = current_exc_info()
+        if exc_info is not None:
+            tb = capture_exception(self._inner, exc_info)
             self.error(message, *args, exception=tb, _depth=_depth + 1, **kwargs)
         else:
             self.error(message, *args, _depth=_depth + 1, **kwargs)
@@ -1552,6 +1556,8 @@ class Logger:
         encoding: str | None = None,
         delay: bool | None = None,
         catch: bool | None = None,
+        backtrace: bool = False,
+        diagnose: bool = False,
     ) -> int:
         """Add a handler (file, console, or callable sink).
 
@@ -1597,6 +1603,13 @@ class Logger:
                    None (default) drops the error silently, True prints a
                    report to stderr (loguru's default), False raises the
                    error from the logging call.
+            backtrace: Tracebacks logged by ``exception()``, ``catch()`` and
+                       ``opt(exception=True)`` also show the frames above the
+                       point where the exception was caught. loguru's default
+                       is True.
+            diagnose: Those tracebacks also show the values of the variables
+                      used on each line. They can contain secrets, so this
+                      is off by default (loguru's default is True).
 
         Returns:
             Handler ID for later removal.
@@ -1621,8 +1634,48 @@ class Logger:
         Note:
             Callable sinks can be removed with remove() or remove_callback().
         """
-        import sys
+        handler_id = self._add_handler(
+            sink,
+            level=level,
+            format=format,
+            rotation=rotation,
+            retention=retention,
+            compression=compression,
+            serialize=serialize,
+            filter=filter,
+            enqueue=enqueue,
+            colorize=colorize,
+            collect=collect,
+            mode=mode,
+            encoding=encoding,
+            delay=delay,
+            catch=catch,
+        )
+        if backtrace or diagnose:
+            # Read only when an exception is logged (see _traceback.capture_exception)
+            self._inner.set_exception_variant(handler_id, int(backtrace) | (int(diagnose) << 1))
+        return handler_id
 
+    def _add_handler(
+        self,
+        sink: str | os.PathLike[str] | TextIO | Callable[[str], Any],
+        *,
+        level: LogLevel | str | None,
+        format: str | None,
+        rotation: str | datetime.timedelta | datetime.time | None,
+        retention: str | int | None,
+        compression: bool | str,
+        serialize: bool,
+        filter: Callable[[dict[str, Any]], bool] | None,
+        enqueue: bool,
+        colorize: bool | None,
+        collect: CollectOptions | None,
+        mode: str | None,
+        encoding: str | None,
+        delay: bool | None,
+        catch: bool | None,
+    ) -> int:
+        """Create the handler for ``add()`` and return its ID."""
         if rotation is not None:
             rotation = _rotation_to_str(rotation)
 
@@ -1910,6 +1963,7 @@ class Logger:
                 resolved_level,
                 file_path=not serialize and parsed_template.needs_file_path,
                 raise_errors=raise_errors,
+                extra_repr=not serialize and parsed_template.needs_extra_repr,
             )
         if catch is not None:
             handler_id_box[0] = handler_id
@@ -1954,6 +2008,20 @@ class Logger:
             # Return True if handlers OR callbacks were removed
             return result or callbacks_removed > 0
         return result
+
+    def _with_inner(self, inner: PyLogger) -> Logger:
+        """Logger sharing this one's state, logging through ``inner``."""
+        return Logger(
+            inner,
+            patchers=self._patchers,
+            context=self._context,
+            collect_options=self._collect_options,
+            callback_ids=self._callback_ids,
+            filter_ids=self._filter_ids,
+            raw_callback_ids=self._raw_callback_ids,
+            requirements_cache_box=self._requirements_cache_box,
+            aggregated_options_box=self._aggregated_options_box,
+        )
 
     def bind(self, **kwargs: Any) -> Logger:
         """Create a new logger with bound context values.
@@ -2201,6 +2269,7 @@ class Logger:
                 - delay: Create the file on the first message (file sinks only)
                 - catch: None (drop), True (report to stderr) or False (raise)
                   for sink errors
+                - backtrace / diagnose: Traceback detail (default False)
             levels: List of level configurations. Each dict can have:
                 - name (required): Level name
                 - no: Numeric value (required for a new level; omit it to
@@ -2259,6 +2328,8 @@ class Logger:
                         encoding=handler_config.get("encoding"),
                         delay=handler_config.get("delay"),
                         catch=handler_config.get("catch"),
+                        backtrace=handler_config.get("backtrace", False),
+                        diagnose=handler_config.get("diagnose", False),
                     )
                     handler_ids.append(handler_id)
 
@@ -2289,6 +2360,8 @@ class Logger:
         depth: int = 0,
         backtrace: bool = False,
         diagnose: bool = False,
+        colors: bool | None = None,
+        capture: bool = True,
     ) -> OptLogger:
         """Return a logger with per-message options.
 
@@ -2299,7 +2372,15 @@ class Logger:
             exception: Auto-capture current exception traceback.
             depth: Stack frame adjustment (reserved for future use).
             backtrace: Extend trace beyond catch point to show full call stack.
+                Applies to every handler, on top of ``add(backtrace=...)``.
             diagnose: Show variable values at each stack frame.
+                Applies to every handler, on top of ``add(diagnose=...)``.
+            colors: ``False`` keeps color markup in the message as plain text
+                for this call. ``True`` (or ``None``, the default) renders it:
+                logust always parses message markup, while loguru only does
+                so with ``colors=True``.
+            capture: ``False`` uses keyword arguments only to format the
+                message instead of also adding them to ``extra``.
 
         Returns:
             An OptLogger wrapper with the specified options.
@@ -2332,4 +2413,6 @@ class Logger:
             depth=depth,
             backtrace=backtrace,
             diagnose=diagnose,
+            colors=colors,
+            capture=capture,
         )

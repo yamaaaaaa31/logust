@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import sys
-import traceback
 from typing import TYPE_CHECKING, Any
 
-from ._traceback import format_enhanced_traceback
+from ._traceback import capture_exception, current_exc_info
 
 if TYPE_CHECKING:
     from ._logger import Logger
@@ -28,13 +26,19 @@ class OptLogger:
         depth: int = 0,
         backtrace: bool = False,
         diagnose: bool = False,
+        colors: bool | None = None,
+        capture: bool = True,
     ) -> None:
+        if colors is False:
+            # Same handlers and state, with message markup kept as plain text
+            logger = logger._with_inner(logger._inner.with_colors(False))
         self._logger = logger
         self._lazy = lazy
         self._exception = exception
         self._depth = depth
         self._backtrace = backtrace
         self._diagnose = diagnose
+        self._capture = capture
 
     def _resolve_args(self, args: tuple[Any, ...]) -> tuple[Any, ...]:
         """Evaluate callable positional args when ``lazy=True``."""
@@ -45,14 +49,24 @@ class OptLogger:
     def _get_exception(self) -> str | None:
         """Get exception traceback with optional enhancements."""
         if self._exception or self._backtrace or self._diagnose:
-            if sys.exc_info()[0] is not None:
-                if self._backtrace or self._diagnose:
-                    return format_enhanced_traceback(
-                        backtrace=self._backtrace,
-                        diagnose=self._diagnose,
-                    )
-                return traceback.format_exc()
+            exc_info = current_exc_info()
+            if exc_info is not None:
+                return capture_exception(
+                    self._logger._inner,
+                    exc_info,
+                    backtrace=self._backtrace,
+                    diagnose=self._diagnose,
+                )
         return None
+
+    def _uncaptured(
+        self, message: str, args: tuple[Any, ...], kwargs: dict[str, Any]
+    ) -> tuple[str, tuple[Any, ...], dict[str, Any]]:
+        """``capture=False``: format with the kwargs instead of adding them to extra."""
+        if self._capture or not kwargs:
+            return message, args, kwargs
+        message_str = message if isinstance(message, str) else str(message)
+        return message_str.format(*args, **kwargs), (), {}
 
     def _log(self, level: str, message: str, *args: Any, **kwargs: Any) -> None:
         """Internal log method with option processing."""
@@ -67,11 +81,16 @@ class OptLogger:
 
         exc = kwargs.pop("exception", None) or self._get_exception()
         log_method = getattr(self._logger, level)
+        args = self._resolve_args(args)
+        if not self._capture:
+            if not self._logger.is_level_enabled(level):
+                return
+            message, args, kwargs = self._uncaptured(message, args, kwargs)
         # Formatting (args + kwargs) happens once in Logger, matching loguru.
         # Add depth: +1 for this method, +1 for the caller (trace/debug/etc), + user's depth
         log_method(
             message,
-            *self._resolve_args(args),
+            *args,
             exception=exc,
             _depth=self._depth + 2,
             **kwargs,
@@ -124,11 +143,13 @@ class OptLogger:
         # For lazy evaluation with custom levels, we can't easily check
         # the level in advance, so we format and delegate to the logger
         exc = kwargs.pop("exception", None) or self._get_exception()
+        args = self._resolve_args(args)
+        message, args, kwargs = self._uncaptured(message, args, kwargs)
         # Add depth: +1 for this method, + user's depth
         self._logger.log(
             level,
             message,
-            *self._resolve_args(args),
+            *args,
             exception=exc,
             _depth=self._depth + 1,
             **kwargs,
