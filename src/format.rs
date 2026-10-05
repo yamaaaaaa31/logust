@@ -1064,7 +1064,8 @@ mod tests {
             Some("red".to_string()),
             None,
         );
-        let record = LogRecord::with_custom_level(info, "m".into(), empty_context(), None);
+        let record =
+            LogRecord::with_custom_level(Arc::new(info), "m".into(), empty_context(), None);
         let config = FormatConfig::new(Some("{level:<8}".to_string()), false);
         let out = config.format_record(&record, false);
         let expected = format!("{:<8}", "VERYLONGCUSTOMLEVEL");
@@ -1246,11 +1247,13 @@ mod tests {
         assert!(config.requirements().needs_level);
 
         let info = LevelInfo::new("NOTICE".into(), 35, None, Some("!".into()));
-        let record = LogRecord::with_custom_level(info, "m".into(), empty_context(), None);
+        let record =
+            LogRecord::with_custom_level(Arc::new(info), "m".into(), empty_context(), None);
         assert_eq!(config.format_record(&record, false), "NOTICE|35|!|m");
 
         let info = LevelInfo::new("PLAIN".into(), 36, None, None);
-        let record = LogRecord::with_custom_level(info, "m".into(), empty_context(), None);
+        let record =
+            LogRecord::with_custom_level(Arc::new(info), "m".into(), empty_context(), None);
         assert_eq!(config.format_record(&record, false), "PLAIN|36||m");
 
         let config = FormatConfig::new(Some("{level.name:<8}|".into()), false);

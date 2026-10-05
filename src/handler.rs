@@ -571,7 +571,7 @@ pub struct ProcessInfo {
 pub struct LogRecord {
     pub timestamp: DateTime<Local>,
     pub level: LogLevel,
-    pub level_info: Option<LevelInfo>,
+    pub level_info: Option<Arc<LevelInfo>>,
     pub message: String,
     pub extra: Arc<ExtraMap>,
     pub exception: Option<String>,
@@ -684,7 +684,7 @@ impl LogRecord {
 
     /// Create a log record with custom level info (Arc reference - zero-copy)
     pub fn with_custom_level(
-        level_info: LevelInfo,
+        level_info: Arc<LevelInfo>,
         message: String,
         extra: Arc<ExtraMap>,
         exception: Option<String>,
@@ -705,7 +705,7 @@ impl LogRecord {
 
     /// Create a log record with custom level info and caller
     pub fn with_custom_level_and_caller(
-        level_info: LevelInfo,
+        level_info: Arc<LevelInfo>,
         message: String,
         extra: Arc<ExtraMap>,
         exception: Option<String>,
@@ -727,7 +727,7 @@ impl LogRecord {
 
     /// Create a log record with custom level info, caller, thread and process
     pub fn with_custom_level_full(
-        level_info: LevelInfo,
+        level_info: Arc<LevelInfo>,
         message: String,
         extra: Arc<ExtraMap>,
         exception: Option<String>,

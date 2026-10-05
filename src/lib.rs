@@ -1142,7 +1142,14 @@ impl PyLogger {
 
     /// Look up a level by name: `(name, no, color, icon)`, or `None` if unknown
     fn level_info(&self, name: &str) -> Option<(String, u32, String, Option<String>)> {
-        get_level_info(name).map(|info| (info.name, info.no, info.color, info.icon))
+        get_level_info(name).map(|info| {
+            (
+                info.name.clone(),
+                info.no,
+                info.color.clone(),
+                info.icon.clone(),
+            )
+        })
     }
 
     /// Log at any level (built-in or custom)
@@ -1162,8 +1169,9 @@ impl PyLogger {
         process_name: Option<String>,
         process_id: Option<u32>,
     ) -> PyResult<()> {
-        let level_info = if let Ok(lvl_name) = level_arg.extract::<String>() {
-            get_level_info(&lvl_name)
+        // Borrow the name instead of copying it into a `String`
+        let level_info = if let Ok(lvl_name) = level_arg.cast::<PyString>() {
+            lvl_name.to_str().ok().and_then(get_level_info)
         } else if let Ok(no) = level_arg.extract::<u32>() {
             get_level_by_no(no)
         } else {
@@ -1675,7 +1683,7 @@ impl PyLogger {
     #[allow(clippy::too_many_arguments)]
     fn _log_custom(
         &self,
-        level_info: LevelInfo,
+        level_info: Arc<LevelInfo>,
         message: String,
         exception: Option<Bound<'_, PyAny>>,
         name: Option<String>,
@@ -1943,7 +1951,7 @@ fn level_style(level: &str) -> String {
 /// `(no, icon)` of the level `level` (custom first, then built-in), or None if unknown.
 #[pyfunction]
 fn level_details(level: &str) -> Option<(u32, String)> {
-    get_level_info(level).map(|info| (info.no, info.icon.unwrap_or_default()))
+    get_level_info(level).map(|info| (info.no, info.icon.clone().unwrap_or_default()))
 }
 
 /// A compiled loguru `{time:<spec>}` format, for callable sink templates.

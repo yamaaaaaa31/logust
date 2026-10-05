@@ -198,7 +198,7 @@ fn level_details(name: &str, record: &LogRecord) -> (u32, String) {
     match record.level_info.as_ref() {
         Some(info) => (info.no, info.icon.clone().unwrap_or_default()),
         None => get_level_info(name).map_or((record.level as u32, String::new()), |info| {
-            (info.no, info.icon.unwrap_or_default())
+            (info.no, info.icon.clone().unwrap_or_default())
         }),
     }
 }

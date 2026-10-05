@@ -1,6 +1,7 @@
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{LazyLock, RwLockReadGuard, RwLockWriteGuard};
+use std::sync::{Arc, LazyLock, RwLockReadGuard, RwLockWriteGuard};
 
 use colored::Color;
 use pyo3::prelude::*;
@@ -142,22 +143,27 @@ pub struct LevelInfo {
     pub no: u32,
     pub color: String,
     pub icon: Option<String>,
+    /// `color` resolved once, for console output
+    color_value: Color,
 }
 
 impl LevelInfo {
     /// Create a new level info
     pub fn new(name: String, no: u32, color: Option<String>, icon: Option<String>) -> Self {
+        let color = color.unwrap_or_default();
+        let color_value = get_color_from_name(&color);
         LevelInfo {
             name,
             no,
-            color: color.unwrap_or_default(),
+            color,
             icon,
+            color_value,
         }
     }
 
     /// Get color as colored::Color
     pub fn get_color(&self) -> Color {
-        get_color_from_name(&self.color)
+        self.color_value
     }
 }
 
@@ -217,8 +223,9 @@ fn set_builtin_color(level: LogLevel, color: Color) {
     }
 }
 
-/// Global registry for custom log levels (by name)
-static LEVEL_REGISTRY: LazyLock<RwLock<HashMap<String, LevelInfo>>> =
+/// Global registry for custom log levels (by name). Entries are shared with
+/// the records logged at that level, so a lookup is one `Arc` clone.
+static LEVEL_REGISTRY: LazyLock<RwLock<HashMap<String, Arc<LevelInfo>>>> =
     LazyLock::new(|| RwLock::new(HashMap::new()));
 
 /// Secondary registry for O(1) numeric lookup (level_no -> level_name)
@@ -236,17 +243,26 @@ pub fn register_level(info: LevelInfo) {
         set_builtin_color(builtin, info.get_color());
     }
     let no = info.no;
-    LEVEL_REGISTRY.write().insert(name.clone(), info);
+    LEVEL_REGISTRY.write().insert(name.clone(), Arc::new(info));
     LEVEL_NO_REGISTRY.write().insert(no, name);
     LEVEL_GENERATION.fetch_add(1, Ordering::Release);
 }
 
-/// Look up level by name (checks custom first, then built-in)
-pub fn get_level_info(name: &str) -> Option<LevelInfo> {
-    let upper = name.to_ascii_uppercase();
+/// `name` in upper case, borrowed when it already is (the usual case)
+fn upper_name(name: &str) -> Cow<'_, str> {
+    if name.bytes().any(|b| b.is_ascii_lowercase()) {
+        Cow::Owned(name.to_ascii_uppercase())
+    } else {
+        Cow::Borrowed(name)
+    }
+}
 
-    if let Some(info) = LEVEL_REGISTRY.read().get(&upper) {
-        return Some(info.clone());
+/// Look up level by name (checks custom first, then built-in)
+pub fn get_level_info(name: &str) -> Option<Arc<LevelInfo>> {
+    let upper = upper_name(name);
+
+    if let Some(info) = LEVEL_REGISTRY.read().get(upper.as_ref()) {
+        return Some(Arc::clone(info));
     }
 
     builtin_level(&upper).map(builtin_level_info)
@@ -267,8 +283,26 @@ fn builtin_level(upper: &str) -> Option<LogLevel> {
     })
 }
 
-/// Level info of a built-in level
-fn builtin_level_info(level: LogLevel) -> LevelInfo {
+/// Built-in levels in slot order (see [`LogLevel::slot`])
+const BUILTIN_LEVELS: [LogLevel; 8] = [
+    LogLevel::Trace,
+    LogLevel::Debug,
+    LogLevel::Info,
+    LogLevel::Success,
+    LogLevel::Warning,
+    LogLevel::Error,
+    LogLevel::Fail,
+    LogLevel::Critical,
+];
+
+/// Level info of a built-in level (built once per level and shared)
+fn builtin_level_info(level: LogLevel) -> Arc<LevelInfo> {
+    static INFOS: LazyLock<[Arc<LevelInfo>; 8]> =
+        LazyLock::new(|| BUILTIN_LEVELS.map(|level| Arc::new(make_builtin_level_info(level))));
+    Arc::clone(&INFOS[level.slot() as usize])
+}
+
+fn make_builtin_level_info(level: LogLevel) -> LevelInfo {
     let color = match level {
         LogLevel::Trace => "cyan",
         LogLevel::Debug => "blue",
@@ -289,15 +323,15 @@ fn builtin_level_info(level: LogLevel) -> LevelInfo {
 
 /// Color of the level `name` (custom first, then built-in), without cloning its info
 pub fn get_level_color(name: &str) -> Option<Color> {
-    let upper = name.to_ascii_uppercase();
-    if let Some(info) = LEVEL_REGISTRY.read().get(&upper) {
+    let upper = upper_name(name);
+    if let Some(info) = LEVEL_REGISTRY.read().get(upper.as_ref()) {
         return Some(info.get_color());
     }
     builtin_level(&upper).map(|level| level.color())
 }
 
 /// Look up level by numeric value (O(1) using secondary registry)
-pub fn get_level_by_no(no: u32) -> Option<LevelInfo> {
+pub fn get_level_by_no(no: u32) -> Option<Arc<LevelInfo>> {
     if let Some(name) = LEVEL_NO_REGISTRY.read().get(&no) {
         return LEVEL_REGISTRY.read().get(name).cloned();
     }
