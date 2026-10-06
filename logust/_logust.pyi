@@ -65,7 +65,11 @@ class PyLogger:
     """
 
     def __init__(self, level: LogLevel | None = None) -> None:
-        """Create a new logger with optional default console level."""
+        """Create a new logger with a default console handler on stderr.
+
+        Colors are detected once, here (TTY, NO_COLOR, FORCE_COLOR, CI,
+        PyCharm, Jupyter), like ``add(sys.stderr)``.
+        """
         ...
 
     def add(
@@ -140,11 +144,14 @@ class PyLogger:
         ...
 
     def enable(self, level: LogLevel | None = None) -> None:
-        """Enable console output with given level."""
+        """Put back the console handlers ``disable()`` set aside, or add the default one.
+
+        ``level``, when given, becomes the level of every console handler.
+        """
         ...
 
     def disable(self) -> None:
-        """Disable console output."""
+        """Set every console handler aside until ``enable()``."""
         ...
 
     def is_enabled(self) -> bool:

@@ -49,7 +49,7 @@ logust.disable("mylib")
 from logust import logger
 ```
 
-`logger` is the global `Logger`. It starts with one console handler that writes to `sys.stdout` at the `DEBUG` level. Bound loggers (from `bind()`, `patch()`, `contextualize()`) share its handlers, levels and module rules.
+`logger` is the global `Logger`. It starts with one console handler that writes to standard error at the `DEBUG` level, with colors detected once at import (a terminal, `NO_COLOR`, `FORCE_COLOR`, CI, PyCharm, Jupyter), as in loguru. Bound loggers (from `bind()`, `patch()`, `contextualize()`) share its handlers, levels and module rules.
 
 ### Log methods { #log-methods }
 
@@ -178,8 +178,8 @@ logger.is_enabled() -> bool
 | `set_level(level)` | Sets the minimum level of the **console** handler. |
 | `get_level()` | Returns the console handler's minimum level. |
 | `is_level_enabled(level)` | `True` if at least one handler accepts that level. |
-| `enable()` / `enable(level)` | Turns the console handler back on, optionally with a level. `level` can be passed positionally (a built-in level name or `LogLevel`) or as `level=`. |
-| `disable()` | Turns the console handler off. |
+| `enable()` / `enable(level)` | Turns the console handlers back on: the ones `disable()` switched off, or the default handler if there are none. With a level, it also sets the level of every console handler. `level` can be passed positionally (a built-in level name or `LogLevel`) or as `level=`. |
+| `disable()` | Switches off every console handler (the default one and the `sys.stdout` / `sys.stderr` ones) until `enable()`. |
 | `is_enabled()` | `True` if the console handler is on. |
 
 `set_level()`, `is_level_enabled()` and `level=` take built-in levels only. See [Log Levels](../tutorial/log-levels.md).

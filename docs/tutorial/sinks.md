@@ -31,7 +31,7 @@ stderr | <font color="#4E9A06"><b>INFO</b></font> | Sent to both handlers
 
 </div>
 
-The first message went to **both** handlers: the default one, on standard output, and the new one on standard error, with its own short format.
+The first message went to **both** handlers, the default one and the new one, with its own short format. Both write to standard error.
 
 The `format` argument is the same kind of format string you saw in [First Steps](first-steps.md#the-default-format). [Formatting](formatting.md) shows every field you can use.
 
@@ -104,7 +104,7 @@ INFO     | No colors, even in a terminal
 
 /// info
 
-The automatic detection applies to the handlers **you** add. The default handler always uses colors.
+The [default handler](first-steps.md#the-default-handler) uses the same detection for standard error. It decides once, when Logust is imported, so changing `NO_COLOR` or `FORCE_COLOR` later doesn't affect it.
 
 ///
 

@@ -41,7 +41,7 @@ from logust import logger
 logger.info("first")
 sys.stdin.readline()
 logger.info("second")
-print("survived", file=sys.stderr)
+print("survived", file=sys.stdout)
 """
 
 STREAM_WRAPPER_CHILD = """
@@ -182,11 +182,12 @@ class TestStderrSink:
         assert lines[1] == "survived"
 
 
-def test_default_console_handler_survives_closed_stdout() -> None:
-    stderr, first, code = run_child(DEFAULT_HANDLER_CHILD, close="stdout")
+def test_default_console_handler_survives_closed_stderr() -> None:
+    # The default handler writes to stderr, as in loguru.
+    stdout, first, code = run_child(DEFAULT_HANDLER_CHILD, close="stderr")
     assert first.endswith("first\n")
     assert code == 0
-    assert stderr == "survived\n"
+    assert stdout == "survived\n"
 
 
 class TestPythonStreamWrapper:
