@@ -102,6 +102,8 @@ Every other handler still receives the message first, and then the error is rais
 
 `catch=` works for every kind of sink: a callable that raises, a stream whose `write()` raises, a file that can't be opened or written.
 
+It also applies to a [`filter`](../tutorial/filters.md#when-a-filter-raises) function that raises: the record is not written to that sink, and the error is dropped, reported or raised like a sink error.
+
 /// note | Difference from loguru
 
 loguru's default is `catch=True`. Logust keeps `None` (silent) as the default, so existing applications don't start writing reports to stderr after an upgrade. Pass `catch=True` to match loguru.

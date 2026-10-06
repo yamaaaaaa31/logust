@@ -15,7 +15,7 @@ import threading
 import traceback
 from collections.abc import Callable, Generator, Mapping
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from types import TracebackType
 from typing import TYPE_CHECKING, Any, TextIO, TypeVar, cast, overload
 
@@ -30,7 +30,7 @@ from ._template import (
     ParsedCallableTemplate,
 )
 from ._traceback import capture_exception, current_exc_info
-from ._types import Level
+from ._types import FilterType, Level
 
 _F = TypeVar("_F", bound=Callable[..., Any])
 
@@ -202,6 +202,36 @@ def _collect_options_from_format(format_str: str) -> CollectOptions:
         thread=needs_thread,
         process=needs_process,
     )
+
+
+def _is_native_filter(filter: FilterType) -> bool:
+    """String and dict filters, checked in Rust on the caller's module name."""
+    return isinstance(filter, (str, dict))
+
+
+def _check_filter(filter: FilterType) -> None:
+    """Reject what loguru rejects (str and dict contents are checked in Rust)."""
+    if filter is None or _is_native_filter(filter):
+        return
+    if not callable(filter):
+        raise TypeError(
+            "Invalid filter, it should be a function, a string or a dict, not: "
+            f"'{type(filter).__name__}'"
+        )
+    if cast("object", filter) is builtins.filter:
+        raise ValueError(
+            "The built-in 'filter()' function cannot be used as a 'filter' parameter, "
+            "this is most likely a mistake (please double-check the arguments passed "
+            "to 'logger.add()')."
+        )
+
+
+def _collect_with_caller_name(collect: CollectOptions) -> CollectOptions:
+    """A string / dict filter needs the caller's module name, even when the
+    handler's own format doesn't show it."""
+    if collect.caller is False:
+        return replace(collect, caller=None)
+    return collect
 
 
 if TYPE_CHECKING:
@@ -1965,7 +1995,7 @@ class Logger:
         retention: str | int | None = None,
         compression: bool | str = False,
         serialize: bool = False,
-        filter: Callable[[dict[str, Any]], bool] | None = None,
+        filter: FilterType = None,
         enqueue: bool = False,
         colorize: bool | None = None,
         collect: CollectOptions | None = None,
@@ -1997,8 +2027,20 @@ class Logger:
                          "tar.gz" or "tar.bz2" ("xz", "lzma" and "tar.xz"
                          raise ValueError). Only valid for file sinks.
             serialize: Output as JSON instead of text format.
-            filter: Optional callable that receives a record dict and returns
-                    True if the record should be logged, False to skip.
+            filter: Which records this handler takes (loguru's semantics):
+
+                    - ``"pkg"``: records whose ``name`` is ``pkg`` or a
+                      submodule (``pkg.db``), not ``pkgx``. ``""`` takes all.
+                    - ``{"": "WARNING", "pkg": "DEBUG", "pkg.noisy": False}``:
+                      minimum level per module, by the closest parent module
+                      in the dict (``""`` is the default). Values are level
+                      names, numbers, ``True`` (all) or ``False`` (none).
+                    - A callable that receives the record dict and returns
+                      True to log the record. If it raises, the record is
+                      dropped and the error follows ``catch``.
+
+                    String and dict filters are checked in Rust, without a
+                    Python call per record.
             enqueue: If True, writes are queued and processed asynchronously
                      in a background thread (thread-safe).
                      If False (default), writes are synchronous (reliable).
@@ -2016,10 +2058,10 @@ class Logger:
                       anything else raises ValueError. File sinks only.
             delay: If True, the file is not created until the first message
                    is written. File sinks only.
-            catch: What to do when the sink fails to write a message.
-                   None (default) drops the error silently, True prints a
-                   report to stderr (loguru's default), False raises the
-                   error from the logging call.
+            catch: What to do when the sink fails to write a message, or a
+                   callable filter raises. None (default) drops the error
+                   silently, True prints a report to stderr (loguru's
+                   default), False raises the error from the logging call.
             backtrace: Tracebacks logged by ``exception()``, ``catch()`` and
                        ``opt(exception=True)`` also show the frames above the
                        point where the exception was caught. loguru's default
@@ -2083,7 +2125,7 @@ class Logger:
         retention: str | int | None,
         compression: bool | str,
         serialize: bool,
-        filter: Callable[[dict[str, Any]], bool] | None,
+        filter: FilterType,
         enqueue: bool,
         colorize: bool | None,
         collect: CollectOptions | None,
@@ -2093,6 +2135,8 @@ class Logger:
         catch: bool | None,
     ) -> int:
         """Create the handler for ``add()`` and return its ID."""
+        _check_filter(filter)
+        native_filter = _is_native_filter(filter)
         if rotation is not None:
             rotation = _rotation_to_str(rotation)
 
@@ -2136,11 +2180,13 @@ class Logger:
             else:
                 default_format = "{time} | {level:<8} | {name}:{function}:{line} - {message}"
                 resolved_collect = _collect_options_from_format(format or default_format)
+            if native_filter:
+                resolved_collect = _collect_with_caller_name(resolved_collect)
             self._collect_options[handler_id] = resolved_collect
             # Track as callback for proper removal via remove()
             self._callback_ids.add(handler_id)
-            # Track handlers with filters (they need full records)
-            if filter is not None:
+            # Track handlers with callable filters (they need full records)
+            if callable(filter):
                 self._filter_ids.add(handler_id)
             self._invalidate_requirements_cache()
             return handler_id
@@ -2157,10 +2203,7 @@ class Logger:
                 colorize=colorize,
                 catch=catch,
             )
-            # Always track handler with CollectOptions (default to auto-detect if not specified)
-            self._collect_options[handler_id] = collect if collect is not None else CollectOptions()
-            if filter is not None:
-                self._filter_ids.add(handler_id)
+            self._track_handler(handler_id, collect, filter)
             self._invalidate_requirements_cache()
             return handler_id
 
@@ -2196,12 +2239,23 @@ class Logger:
             delay=delay,
             catch=catch,
         )
-        # Always track handler with CollectOptions (default to auto-detect if not specified)
-        self._collect_options[handler_id] = collect if collect is not None else CollectOptions()
-        if filter is not None:
-            self._filter_ids.add(handler_id)
+        self._track_handler(handler_id, collect, filter)
         self._invalidate_requirements_cache()
         return handler_id
+
+    def _track_handler(
+        self, handler_id: int, collect: CollectOptions | None, filter: FilterType
+    ) -> None:
+        """Record a file / console handler's CollectOptions and filter kind."""
+        # Always track handler with CollectOptions (default to auto-detect if not specified)
+        resolved = collect if collect is not None else CollectOptions()
+        if _is_native_filter(filter):
+            resolved = _collect_with_caller_name(resolved)
+        self._collect_options[handler_id] = resolved
+        # Callable filters receive the full record dict; string / dict filters
+        # only read the module name, checked in Rust.
+        if callable(filter):
+            self._filter_ids.add(handler_id)
 
     @staticmethod
     def _should_colorize(stream: TextIO) -> bool:
@@ -2258,7 +2312,7 @@ class Logger:
         level: LogLevel | str | None = None,
         format: str | None = None,
         serialize: bool = False,
-        filter: Callable[[dict[str, Any]], bool] | None = None,
+        filter: FilterType = None,
         colorize: bool = False,
         catch: bool | None = None,
     ) -> int:
@@ -2271,8 +2325,9 @@ class Logger:
             level: Minimum log level for this handler.
             format: Custom format string.
             serialize: Output as JSON instead of text format.
-            filter: Optional callable that receives a record dict and returns
-                    True if the record should be logged, False to skip.
+            filter: A module name, a dict of minimum level per module, or a
+                    callable that receives a record dict and returns True to
+                    log the record (see ``add()``).
             colorize: Style tokens and render message markup as ANSI codes.
             catch: None silently drops sink errors, True reports them to
                    stderr, False propagates them to the logging call.
@@ -2281,6 +2336,15 @@ class Logger:
             Handler ID for later removal.
         """
         import json
+
+        # String / dict filters are checked in Rust before the sink is called;
+        # only a callable filter runs in the wrappers below.
+        native_filter: str | dict[str | None, str | int | bool] | None = None
+        py_filter: Callable[[dict[str, Any]], bool] | None = None
+        if isinstance(filter, (str, dict)):
+            native_filter = cast("Any", filter)  # ty sees a callable dict subclass here
+        else:
+            py_filter = filter
 
         resolved_level = _to_log_level(level) if level is not None else None
         default_format = "{time} | {level:<8} | {name}:{function}:{line} - {message}"
@@ -2292,7 +2356,7 @@ class Logger:
 
         def callback_wrapper(record: dict[str, Any]) -> None:
             # Apply filter if provided
-            if filter is not None and not filter(record):
+            if py_filter is not None and not py_filter(record):
                 return
 
             try:
@@ -2333,7 +2397,7 @@ class Logger:
             # catch=True/False wrappers are chosen once here, so the default
             # wrapper above stays untouched (no extra per-message call).
             def emit(record: dict[str, Any]) -> None:
-                if filter is not None and not filter(record):
+                if py_filter is not None and not py_filter(record):
                     return
                 if serialize:
                     json_record: dict[str, Any] = {
@@ -2363,17 +2427,22 @@ class Logger:
 
         raise_errors = catch is False
         # Lightweight path: Rust builds a minimal dict; filter/JSON need full dict.
-        if filter is None and not serialize:
+        if py_filter is None and not serialize:
             flags = parsed_template.lightweight_requirements_for_rust()
             extra_keys = parsed_template.lightweight_extra_keys_for_rust()
             handler_id = self._inner.add_formatted_sink_callback(
-                wrapper, flags, extra_keys, resolved_level, raise_errors=raise_errors
+                wrapper,
+                flags,
+                extra_keys,
+                resolved_level,
+                raise_errors=raise_errors,
+                filter=native_filter,
             )
         # Filter callbacks always observe the loguru-compatible text view of
         # extras; only filterless serialized sinks get the typed JSON dict.
-        elif serialize and filter is None:
+        elif serialize and py_filter is None:
             handler_id = self._inner.add_serialized_callback(
-                wrapper, resolved_level, raise_errors=raise_errors
+                wrapper, resolved_level, raise_errors=raise_errors, filter=native_filter
             )
         else:
             handler_id = self._inner.add_callback(
@@ -2382,6 +2451,7 @@ class Logger:
                 file_path=not serialize and parsed_template.needs_file_path,
                 raise_errors=raise_errors,
                 extra_repr=not serialize and parsed_template.needs_extra_repr,
+                filter=native_filter,
             )
         if catch is not None:
             handler_id_box[0] = handler_id
