@@ -343,6 +343,9 @@ fn merge_handler_only_requirements_for_emit_no(
 pub struct PyLogger {
     /// All handlers (console + files)
     handlers: Arc<RwLock<Vec<HandlerEntry>>>,
+    /// Console handlers taken out by `disable()`, put back by `enable()`
+    /// (shared with bound loggers like the handler list)
+    disabled_consoles: Arc<RwLock<Vec<HandlerEntry>>>,
     /// Bound context (extra fields) - immutable after creation for zero-copy sharing
     context: Arc<ExtraMap>,
     /// Registered callbacks
@@ -441,11 +444,31 @@ fn current_context(py: Python<'_>) -> PyResult<Option<Bound<'_, PyDict>>> {
     }
 }
 
+/// The default console handler (stderr, colors auto-detected once here).
+fn default_console_entry(py: Python<'_>, level: LogLevel) -> HandlerEntry {
+    HandlerEntry {
+        id: handler::next_handler_id(),
+        handler: HandlerType::Console(ConsoleHandler::new(py, level)),
+        filter: None,
+        catch: CatchMode::Silent,
+        exc_variant: 0,
+    }
+}
+
+fn set_console_level(handlers: &mut [HandlerEntry], level: LogLevel) {
+    for entry in handlers.iter_mut() {
+        if let HandlerType::Console(ref mut h) = entry.handler {
+            h.level = level;
+        }
+    }
+}
+
 impl PyLogger {
     /// This logger's handler state, logging with `context` as the bound context.
     fn with_context(&self, context: Arc<ExtraMap>) -> PyLogger {
         PyLogger {
             handlers: Arc::clone(&self.handlers),
+            disabled_consoles: Arc::clone(&self.disabled_consoles),
             context,
             callbacks: Arc::clone(&self.callbacks),
             cached_min_level: Arc::clone(&self.cached_min_level),
@@ -515,9 +538,10 @@ thread_local! {
 impl PyLogger {
     #[new]
     #[pyo3(signature = (level=None))]
-    fn new(level: Option<LogLevel>) -> Self {
+    fn new(py: Python<'_>, level: Option<LogLevel>) -> Self {
         let logger = PyLogger {
             handlers: Arc::new(RwLock::new(Vec::new())),
+            disabled_consoles: Arc::new(RwLock::new(Vec::new())),
             context: empty_context(),
             callbacks: Arc::new(RwLock::new(Vec::new())),
             cached_min_level: Arc::new(AtomicU32::new(u32::MAX)),
@@ -529,15 +553,10 @@ impl PyLogger {
         };
 
         let console_level = level.unwrap_or_default();
-        let console_handler = ConsoleHandler::new(console_level);
-        let entry = HandlerEntry {
-            id: handler::next_handler_id(),
-            handler: HandlerType::Console(console_handler),
-            filter: None,
-            catch: CatchMode::Silent,
-            exc_variant: 0,
-        };
-        logger.handlers.write().push(entry);
+        logger
+            .handlers
+            .write()
+            .push(default_console_entry(py, console_level));
         logger.update_min_level_cache();
         logger.update_requirements_cache();
 
@@ -683,17 +702,26 @@ impl PyLogger {
     fn remove(&self, handler_id: Option<u64>) -> bool {
         let mut handlers = self.handlers.write();
 
+        let mut disabled = self.disabled_consoles.write();
+
         let result = if let Some(id) = handler_id {
             if let Some(pos) = handlers.iter().position(|h| h.id == id) {
                 handlers.remove(pos);
+                true
+            } else if let Some(pos) = disabled.iter().position(|h| h.id == id) {
+                // A console handler parked by `disable()`: `enable()` must not
+                // bring it back.
+                disabled.remove(pos);
                 true
             } else {
                 false
             }
         } else {
             handlers.clear();
+            disabled.clear();
             true
         };
+        drop(disabled);
         drop(handlers); // Release lock before updating cache
         self.update_min_level_cache();
         self.update_requirements_cache();
@@ -798,11 +826,9 @@ impl PyLogger {
     fn set_level(&self, level: LogLevel) {
         {
             let mut handlers = self.handlers.write();
-            for entry in handlers.iter_mut() {
-                if let HandlerType::Console(ref mut h) = entry.handler {
-                    h.level = level;
-                }
-            }
+            set_console_level(&mut handlers, level);
+            // Handlers parked by `disable()` come back at this level too.
+            set_console_level(&mut self.disabled_consoles.write(), level);
         }
         self.update_min_level_cache();
         self.update_requirements_cache();
@@ -1077,37 +1103,44 @@ impl PyLogger {
         Ok(true)
     }
 
-    /// Disable console output
+    /// Disable console output: every console handler (the default one and
+    /// those added for `sys.stdout` / `sys.stderr`) is set aside until `enable()`
     fn disable(&self) {
         {
             let mut handlers = self.handlers.write();
-            handlers.retain(|entry| !matches!(entry.handler, HandlerType::Console(_)));
+            let mut disabled = self.disabled_consoles.write();
+            let mut kept = Vec::with_capacity(handlers.len());
+            for entry in handlers.drain(..) {
+                if matches!(entry.handler, HandlerType::Console(_)) {
+                    disabled.push(entry);
+                } else {
+                    kept.push(entry);
+                }
+            }
+            *handlers = kept;
         }
         self.update_min_level_cache();
         self.update_requirements_cache();
     }
 
-    /// Enable console output with given level
+    /// Enable console output: puts back the console handlers `disable()` set
+    /// aside (with their ids, formats and filters), or adds the default console
+    /// handler when there is no console handler at all. `level`, when given,
+    /// becomes the minimum level of every console handler.
     #[pyo3(signature = (level=None))]
-    fn enable(&self, level: Option<LogLevel>) {
+    fn enable(&self, py: Python<'_>, level: Option<LogLevel>) {
         {
             let mut handlers = self.handlers.write();
+            handlers.append(&mut self.disabled_consoles.write());
 
             let has_console = handlers
                 .iter()
                 .any(|e| matches!(e.handler, HandlerType::Console(_)));
 
             if !has_console {
-                let console_level = level.unwrap_or(LogLevel::Debug);
-                let console_handler = ConsoleHandler::new(console_level);
-                let entry = HandlerEntry {
-                    id: handler::next_handler_id(),
-                    handler: HandlerType::Console(console_handler),
-                    filter: None,
-                    catch: CatchMode::Silent,
-                    exc_variant: 0,
-                };
-                handlers.push(entry);
+                handlers.push(default_console_entry(py, level.unwrap_or(LogLevel::Debug)));
+            } else if let Some(level) = level {
+                set_console_level(&mut handlers, level);
             }
         }
         self.update_min_level_cache();
@@ -2495,7 +2528,7 @@ fn _logust(py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(record_compat::record_time_fields, m)?)?;
     m.add_class::<TimeFormatter>()?;
 
-    let default_logger = Py::new(py, PyLogger::new(None))?;
+    let default_logger = Py::new(py, PyLogger::new(py, None))?;
     m.add("logger", default_logger)?;
     m.add("CONTEXT_VAR", context_var(py)?)?;
     m.add_function(wrap_pyfunction!(set_context, m)?)?;

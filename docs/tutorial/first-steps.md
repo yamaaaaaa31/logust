@@ -117,20 +117,29 @@ Where did those lines go? 🤔
 
 When you import Logust, the `logger` already has one **handler** set up for you, the **default handler**. It:
 
-* Writes to the console, on **standard output** (`sys.stdout`).
+* Writes to the console, on **standard error** (`sys.stderr`), like loguru.
 * Uses the default format you saw above.
-* Uses colors. It always does, even when the output is piped or redirected to a file.
+* Uses colors when standard error is a terminal, and plain text when it is piped or redirected to a file. It follows the same rules as the handlers you add yourself, `NO_COLOR` and `FORCE_COLOR` included. See [Colors](sinks.md#colors).
 * Shows every message from `DEBUG` up. `TRACE` messages are hidden.
 
 /// tip
 
-If you redirect the output of your program (`python main.py > out.txt`) and want plain text without color codes, replace the default handler with your own `sys.stdout` handler. Handlers you add yourself only use colors when they write to a terminal. See [Colors](sinks.md#colors).
+Because the logs go to standard error, `python main.py > out.txt` keeps them on your terminal and only puts your program's own output (`print()`) in the file. To save the logs, redirect standard error: `python main.py 2> logs.txt`.
 
 ///
 
 /// info
 
-loguru's default handler writes to standard error (`sys.stderr`). Logust's writes to standard output. If you prefer standard error, you can replace the default handler with your own, as you will see in [Handlers and Sinks](sinks.md#replace-the-default-handler).
+Before Logust 0.6, the default handler wrote to standard output, always with colors. If you want your logs on standard output, replace the default handler with your own, as you will see in [Handlers and Sinks](sinks.md#replace-the-default-handler):
+
+```python
+import sys
+
+from logust import logger
+
+logger.remove()
+logger.add(sys.stdout)
+```
 
 ///
 
@@ -141,4 +150,4 @@ A handler takes messages and sends them somewhere: the console, a file, or any P
 * `import logust` and call `logust.info()`, or, better, `from logust import logger` and call `logger.info()`.
 * There is a single `logger` for the whole application, shared by every module.
 * Each line shows the time, the level, the module, the function, the line and the message.
-* The **default handler** writes colored lines to standard output, from `DEBUG` up.
+* The **default handler** writes to standard error, from `DEBUG` up, with colors on a terminal.

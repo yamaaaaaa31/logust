@@ -146,7 +146,7 @@ logger.remove()
 logger.add(sys.stderr, serialize=True, level="INFO")
 ```
 
-`logger.remove()` takes away the default text sink (which writes to stdout), so the only thing your program logs is JSON. Most collectors read both streams of a container, and a text line in the middle would be a parsing error for them.
+`logger.remove()` takes away the default text sink (which also writes to stderr), so the only thing your program logs is JSON. Most collectors read both streams of a container, and a text line in the middle would be a parsing error for them.
 
 ## Text for you, JSON for machines { #text-for-you-json-for-machines }
 

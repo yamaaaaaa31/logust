@@ -35,7 +35,7 @@ On top of that, Logust only collects what your format needs. If your format does
 
 ### Beautiful by default { #beautiful-by-default }
 
-With zero configuration you get colored, aligned output with the time, level and caller of every message. For the sinks you add, color is detected automatically, and `NO_COLOR` / `FORCE_COLOR` are respected.
+With zero configuration you get aligned output on standard error, as in loguru, with the time, level and caller of every message. Color is detected automatically, for the default handler and for the sinks you add, and `NO_COLOR` / `FORCE_COLOR` are respected.
 
 You can also use color markup in your formats and messages, like `<red>`, `<bold>` or `<level>`. See [Formatting](tutorial/formatting.md).
 

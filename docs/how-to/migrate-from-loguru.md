@@ -25,7 +25,7 @@ logger.info("Hello")
 
 ////
 
-`logger.add()` and its common options (`level`, `format`, `filter`, `rotation`, `retention`, `compression`, `serialize`, `enqueue`, `colorize`, `backtrace`, `diagnose`, `catch`), `bind()`, `contextualize()`, `patch()`, `opt()`, `catch()`, `level()`, `configure()`, `enable()` / `disable()`, `complete()` and `parse()` work the way you know.
+`logger.add()` and its common options (`level`, `format`, `filter`, `rotation`, `retention`, `compression`, `serialize`, `enqueue`, `colorize`, `backtrace`, `diagnose`, `catch`), `bind()`, `contextualize()`, `patch()`, `opt()`, `catch()`, `level()`, `configure()`, `enable()` / `disable()`, `complete()` and `parse()` work the way you know. The default handler is the same too: it writes to `sys.stderr`, from `DEBUG` up, with colors only when loguru would use them (a terminal, `NO_COLOR`, `FORCE_COLOR`, CI, PyCharm, Jupyter).
 
 The rest of this page goes through the differences, by topic.
 
@@ -194,7 +194,7 @@ So a filter like `record["extra"]["order_id"] > 1000` needs an `int(...)` with L
 * **`level()`**: returns `Level(name, no, color, icon)` like loguru, but `color` is a color name (`"green"`) rather than markup (`"<green><bold>"`). Level names are case-insensitive. Passing a new `no` for an existing **custom** level re-registers it instead of raising; for a built-in level it raises `TypeError`, as in loguru.
 * **`filter`**: strings (`filter="mypkg"`), dicts (`filter={"": "WARNING", "mypkg": "DEBUG"}`) and callables work as in loguru, and are validated the same way when you call `add()`. String and dict filters are checked in Rust, without a Python call per message. A filter that raises drops the record as in loguru; with Logust's default `catch=None` the error is not reported (pass `catch=True` for loguru's report). See [Filtering Records](../tutorial/filters.md).
 * **Coroutine sinks**: `async def` sinks are not supported yet. `add()` raises `TypeError` instead of silently never awaiting them.
-* **`enable()` / `disable()`**: `enable("mylib")` and `disable("mylib")` follow loguru (prefix match on the dotted module name, most specific rule wins, `""` means all modules). **Without a name**, or with a built-in level name such as `enable("INFO")`, they keep Logust's meaning: they turn the console handler off and on. loguru has no such form. Records from [`InterceptHandler`](intercept-standard-logging.md) are matched against the `logging` logger name. See [Logging in Libraries](../advanced/library-logging.md).
+* **`enable()` / `disable()`**: `enable("mylib")` and `disable("mylib")` follow loguru (prefix match on the dotted module name, most specific rule wins, `""` means all modules). **Without a name**, or with a built-in level name such as `enable("INFO")`, they keep Logust's meaning: they switch the console handlers (the default one and your `sys.stdout` / `sys.stderr` ones) off and back on. loguru has no such form. Records from [`InterceptHandler`](intercept-standard-logging.md) are matched against the `logging` logger name. See [Logging in Libraries](../advanced/library-logging.md).
 * **`logger.parse()`**: the same as `logust.parse()`. It takes a file path (not an open file), and `cast` must be a dict. See [Parsing Logs](../advanced/parsing.md).
 
 ## Recap { #recap }
