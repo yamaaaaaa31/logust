@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Write as _};
-use std::io;
+use std::io::{self, Write as _};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -854,16 +854,20 @@ impl HandlerEntry {
         match self.catch {
             CatchMode::Silent => {}
             CatchMode::Report => {
-                eprintln!(
+                let report = format!(
                     "--- Logging error in Logust Handler #{} ---\n\
                      Record was: {} | {}\n\
                      OSError: {}\n\
-                     --- End of logging error ---",
+                     --- End of logging error ---\n",
                     self.id,
                     record.level_name(),
                     record.message,
                     err
                 );
+                // One report per failed record. A write error here (stderr
+                // itself closed or broken) is dropped rather than reported
+                // again, so a broken stderr can never loop or panic.
+                let _ = io::stderr().lock().write_all(report.as_bytes());
             }
             CatchMode::Raise => {
                 if first_error.is_none() {
@@ -918,11 +922,22 @@ impl ConsoleHandler {
 
     pub fn handle(&self, record: &LogRecord) -> io::Result<()> {
         if record.level_no() >= self.level as u32 {
-            let output = self.format.format_record(record, self.colorize);
+            let mut output = self.format.format_record(record, self.colorize);
+            output.push('\n');
+            // `println!` / `eprintln!` panic on a write error (a closed pipe
+            // once the reader of `app.py | head` has exited), and that panic
+            // would escape the logging call as `PanicException`. Writing the
+            // line ourselves returns the `io::Error` to the catch policy.
+            //
+            // Flushing is unchanged: Rust's stdout is always line-buffered,
+            // and a single write ending in '\n' goes straight to the fd (one
+            // syscall) whether it is a tty, a pipe or a file. Stderr is
+            // unbuffered. A closed descriptor (EBADF) is still treated as a
+            // successful write by the standard library.
             if self.use_stderr {
-                eprintln!("{}", output);
+                io::stderr().lock().write_all(output.as_bytes())?;
             } else {
-                println!("{}", output);
+                io::stdout().lock().write_all(output.as_bytes())?;
             }
         }
         Ok(())

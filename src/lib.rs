@@ -7,13 +7,16 @@ mod record_compat;
 mod sink;
 mod time_format;
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, RwLockReadGuard, RwLockWriteGuard};
 
+use pyo3::ffi;
 use pyo3::intern;
 use pyo3::prelude::*;
+use pyo3::sync::PyOnceLock;
 use pyo3::types::{PyDict, PyString, PyTuple};
 
 pub use format::{FormatConfig, LOGGER_START_TIME, TokenRequirements, format_elapsed};
@@ -356,6 +359,138 @@ const FAST_THREAD: u64 = 2;
 const FAST_PROCESS: u64 = 4;
 const FAST_UNAVAILABLE: u64 = 8;
 
+/// The `contextvars.ContextVar` behind `Logger.contextualize()`.
+///
+/// Inside a block its value, in that thread or task only, is the dict of the
+/// active blocks' values (the Python `Logger` sets it through [`set_context`]
+/// and resets it); outside every block it is unset (or `None`). It is created
+/// once at import and exported as `CONTEXT_VAR`, so Python and
+/// [`PyLogger::log_fast`] read the same variable.
+static CONTEXT_VAR: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
+
+/// Whether `contextualize()` has ever been entered in this process. Until
+/// then the variable cannot hold a value anywhere, so [`PyLogger::log_fast`]
+/// skips the `PyContextVar_Get` lookup (about 10 ns) entirely.
+static CONTEXT_USED: AtomicBool = AtomicBool::new(false);
+
+/// `CONTEXT_VAR.set(value)` for `Logger.contextualize()`: returns the reset
+/// token. Also records that `contextualize()` is in use (see [`CONTEXT_USED`]).
+#[pyfunction]
+fn set_context<'py>(py: Python<'py>, value: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
+    let var = context_var(py)?;
+    CONTEXT_USED.store(true, Ordering::Release);
+    // SAFETY: `var` is a ContextVar; the result is a new reference to the
+    // token, or null with an exception set
+    let token = unsafe { ffi::PyContextVar_Set(var.as_ptr(), value.as_ptr()) };
+    unsafe { Bound::from_owned_ptr_or_err(py, token) }
+}
+
+fn context_var(py: Python<'_>) -> PyResult<&Bound<'_, PyAny>> {
+    CONTEXT_VAR
+        .get_or_try_init(py, || {
+            // SAFETY: a valid C string name and a null default; the result is a
+            // new reference or null with an exception set
+            let ptr =
+                unsafe { ffi::PyContextVar_New(c"logust_context".as_ptr(), std::ptr::null_mut()) };
+            unsafe { Bound::from_owned_ptr_or_err(py, ptr) }.map(Bound::unbind)
+        })
+        .map(|var| var.bind(py))
+}
+
+/// The `contextualize()` values of the current thread or task, if any block
+/// is active there. Costs one `PyContextVar_Get` (about 10 ns when the
+/// variable is unset, which is why [`CONTEXT_USED`] gates the call).
+fn current_context(py: Python<'_>) -> PyResult<Option<Bound<'_, PyDict>>> {
+    let var = context_var(py)?;
+    let mut value: *mut ffi::PyObject = std::ptr::null_mut();
+    // SAFETY: `var` is a ContextVar; `value` receives a new reference, or
+    // stays null when the variable is unset
+    let rc = unsafe { ffi::PyContextVar_Get(var.as_ptr(), std::ptr::null_mut(), &mut value) };
+    if rc != 0 {
+        return Err(PyErr::fetch(py));
+    }
+    // SAFETY: `value` is null or a new reference we now own
+    let Some(value) = (unsafe { Bound::from_owned_ptr_or_opt(py, value) }) else {
+        return Ok(None);
+    };
+    match value.cast_into::<PyDict>() {
+        Ok(dict) if !dict.is_empty() => Ok(Some(dict)),
+        // `None` (the value `contextualize()` falls back to when it cannot
+        // reset its token) or an empty dict: no context
+        _ => Ok(None),
+    }
+}
+
+impl PyLogger {
+    /// This logger's handler state, logging with `context` as the bound context.
+    fn with_context(&self, context: Arc<ExtraMap>) -> PyLogger {
+        PyLogger {
+            handlers: Arc::clone(&self.handlers),
+            context,
+            callbacks: Arc::clone(&self.callbacks),
+            cached_min_level: Arc::clone(&self.cached_min_level),
+            cached_callback_min_level: Arc::clone(&self.cached_callback_min_level),
+            cached_requirements_by_level: Arc::clone(&self.cached_requirements_by_level),
+            cached_handler_requirements: Arc::clone(&self.cached_handler_requirements),
+            fast_collect: Arc::clone(&self.fast_collect),
+            message_markup: self.message_markup,
+        }
+    }
+
+    /// `{**context, **bound}`: the `contextualize()` values under this logger's
+    /// bound ones, which is loguru's precedence (`bind()` beats `contextualize()`).
+    fn merge_context(&self, context: &Bound<'_, PyDict>) -> PyResult<Arc<ExtraMap>> {
+        let mut merged = ExtraMap::with_capacity(context.len() + self.context.len());
+        for (key, value) in context.iter() {
+            merged.insert(key.extract::<String>()?, ExtraValue::from_py(&value)?);
+        }
+        for (key, value) in self.context.iter() {
+            merged.insert(key.clone(), value.clone());
+        }
+        Ok(Arc::new(merged))
+    }
+
+    /// [`Self::merge_context`] through this thread's one-entry cache: a block
+    /// logging several messages in a row (through the same logger) converts the
+    /// values once; interleaved tasks rebuild, as they would without the cache.
+    fn merged_context(&self, context: &Bound<'_, PyDict>) -> PyResult<Arc<ExtraMap>> {
+        let hit = MERGED_CONTEXT.with(|cache| {
+            cache.borrow().as_ref().and_then(|entry| {
+                (entry.dict.as_ptr() == context.as_ptr()
+                    && Arc::ptr_eq(&entry.bound, &self.context))
+                .then(|| Arc::clone(&entry.merged))
+            })
+        });
+        if let Some(merged) = hit {
+            return Ok(merged);
+        }
+        let merged = self.merge_context(context)?;
+        let entry = MergedContext {
+            dict: context.clone().unbind(),
+            bound: Arc::clone(&self.context),
+            merged: Arc::clone(&merged),
+        };
+        // Dropping the previous entry may free its dict, which can run
+        // arbitrary Python code (`__del__`): do it outside the borrow
+        let previous = MERGED_CONTEXT.with(|cache| cache.borrow_mut().replace(entry));
+        drop(previous);
+        Ok(merged)
+    }
+}
+
+/// The last `contextualize()` merge done on a thread: `merged` is
+/// `{**dict, **bound}`. The strong references keep both keys' addresses from
+/// being reused while the entry is cached.
+struct MergedContext {
+    dict: Py<PyDict>,
+    bound: Arc<ExtraMap>,
+    merged: Arc<ExtraMap>,
+}
+
+thread_local! {
+    static MERGED_CONTEXT: RefCell<Option<MergedContext>> = const { RefCell::new(None) };
+}
+
 #[pymethods]
 impl PyLogger {
     #[new]
@@ -415,15 +550,33 @@ impl PyLogger {
         let format_config = FormatConfig::try_new(format, serialize)
             .map_err(pyo3::exceptions::PyValueError::new_err)?;
 
-        let (time_rotation, max_size) = rotation
-            .as_ref()
-            .map(|r| sink::parse_rotation(r))
-            .unwrap_or((Rotation::Never, None));
+        // Unrecognized values used to be accepted and silently never rotate or
+        // clean up (e.g. loguru's "1 week" or "12:00"); reject them instead.
+        let (time_rotation, max_size) = match rotation.as_deref() {
+            None => (Rotation::Never, None),
+            Some(r) => match sink::parse_rotation(r) {
+                (Rotation::Never, None) => {
+                    return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                        "Unsupported rotation {r:?}: use \"daily\", \"hourly\" or a size \
+                         such as \"500 MB\""
+                    )));
+                }
+                parsed => parsed,
+            },
+        };
 
-        let (retention_days, retention_count) = retention
-            .as_ref()
-            .map(|r| sink::parse_retention(r))
-            .unwrap_or((None, None));
+        let (retention_days, retention_count) = match retention.as_deref() {
+            None => (None, None),
+            Some(r) => match sink::parse_retention(r) {
+                (None, None) => {
+                    return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                        "Unsupported retention {r:?}: use a number of files such as 10 \
+                         or a duration such as \"10 days\""
+                    )));
+                }
+                parsed => parsed,
+            },
+        };
 
         let config = FileSinkConfig {
             path: PathBuf::from(path),
@@ -536,34 +689,40 @@ impl PyLogger {
             }
         };
 
-        let new_logger = PyLogger {
-            handlers: Arc::clone(&self.handlers),
-            context: new_context,
-            callbacks: Arc::clone(&self.callbacks),
-            cached_min_level: Arc::clone(&self.cached_min_level),
-            cached_callback_min_level: Arc::clone(&self.cached_callback_min_level),
-            cached_requirements_by_level: Arc::clone(&self.cached_requirements_by_level),
-            cached_handler_requirements: Arc::clone(&self.cached_handler_requirements),
-            fast_collect: Arc::clone(&self.fast_collect),
-            message_markup: self.message_markup,
+        Py::new(py, self.with_context(new_context))
+    }
+
+    /// The logger one message logs through inside a `contextualize()` block:
+    /// `context` (the block's values, a non-empty dict) under this logger's
+    /// bound values, then the message's own `extra` kwargs on top. The
+    /// context merge is cached per thread like `log_fast`'s.
+    #[pyo3(signature = (context, extra=None))]
+    fn contextualized(
+        &self,
+        py: Python,
+        context: &Bound<'_, PyDict>,
+        extra: Option<&Bound<'_, PyDict>>,
+    ) -> PyResult<Py<PyLogger>> {
+        let merged = self.merged_context(context)?;
+        let new_context = match extra {
+            None => merged,
+            Some(dict) if dict.is_empty() => merged,
+            Some(dict) => {
+                let mut ctx = (*merged).clone();
+                for (key, value) in dict.iter() {
+                    ctx.insert(key.extract::<String>()?, ExtraValue::from_py(&value)?);
+                }
+                Arc::new(ctx)
+            }
         };
-        Py::new(py, new_logger)
+        Py::new(py, self.with_context(new_context))
     }
 
     /// Same logger, with color markup in messages rendered (`True`) or kept as
     /// plain text (`False`). Used by `opt(colors=False)`.
     fn with_colors(&self, py: Python, colors: bool) -> PyResult<Py<PyLogger>> {
-        let new_logger = PyLogger {
-            handlers: Arc::clone(&self.handlers),
-            context: Arc::clone(&self.context),
-            callbacks: Arc::clone(&self.callbacks),
-            cached_min_level: Arc::clone(&self.cached_min_level),
-            cached_callback_min_level: Arc::clone(&self.cached_callback_min_level),
-            cached_requirements_by_level: Arc::clone(&self.cached_requirements_by_level),
-            cached_handler_requirements: Arc::clone(&self.cached_handler_requirements),
-            fast_collect: Arc::clone(&self.fast_collect),
-            message_markup: colors,
-        };
+        let mut new_logger = self.with_context(Arc::clone(&self.context));
+        new_logger.message_markup = colors;
         Py::new(py, new_logger)
     }
 
@@ -788,6 +947,8 @@ impl PyLogger {
     /// collected value has a shape Python would reject. The Python `Logger` only
     /// calls this with no `*args`/`**kwargs`, no exception, no patchers and no
     /// module activation rules, which is everything else the Python path does.
+    /// An active `contextualize()` block (see [`CONTEXT_VAR`]) is handled here:
+    /// its values go under this logger's bound context, as on the Python path.
     ///
     /// Arguments are positional-only to skip keyword matching.
     #[pyo3(signature = (level_no, message, depth, owner, /))]
@@ -815,6 +976,18 @@ impl PyLogger {
         if flags & FAST_UNAVAILABLE != 0 {
             return Ok(false);
         }
+
+        // Inside ``contextualize()`` the record's extra is the block's values
+        // under this logger's bound ones. Processes that never contextualize
+        // skip the ContextVar lookup altogether.
+        let extra = if CONTEXT_USED.load(Ordering::Acquire) {
+            match current_context(py)? {
+                Some(context) => self.merged_context(&context)?,
+                None => Arc::clone(&self.context),
+            }
+        } else {
+            Arc::clone(&self.context)
+        };
 
         // ``str(message)``: an exact ``str`` is used as is, anything else is
         // converted, as the Python path does.
@@ -861,7 +1034,8 @@ impl PyLogger {
             Some(p) => (Some(p.name), Some(p.id)),
             None => (None, None),
         };
-        self._log(
+        self._log_extra(
+            extra,
             level,
             message,
             None,
@@ -1481,6 +1655,41 @@ impl PyLogger {
         process_name: Option<String>,
         process_id: Option<u32>,
     ) -> PyResult<()> {
+        self._log_extra(
+            Arc::clone(&self.context),
+            level,
+            message,
+            exception,
+            name,
+            function,
+            line,
+            file,
+            thread_name,
+            thread_id,
+            process_name,
+            process_id,
+        )
+    }
+
+    /// [`Self::_log`] with `extra` as the record's context instead of this
+    /// logger's bound one (`log_fast` inside a `contextualize()` block).
+    #[inline]
+    #[allow(clippy::too_many_arguments)]
+    fn _log_extra(
+        &self,
+        extra: Arc<ExtraMap>,
+        level: LogLevel,
+        message: String,
+        exception: Option<Bound<'_, PyAny>>,
+        name: Option<String>,
+        function: Option<String>,
+        line: Option<u32>,
+        file: Option<String>,
+        thread_name: Option<String>,
+        thread_id: Option<u64>,
+        process_name: Option<String>,
+        process_id: Option<u32>,
+    ) -> PyResult<()> {
         // Nothing takes this record: skip the locks (the common filtered-out path)
         if (level as u32) < self.cached_min_level.load(Ordering::Relaxed) {
             return Ok(());
@@ -1508,8 +1717,6 @@ impl PyLogger {
 
         let has_callbacks = !callbacks.is_empty() && has_eligible_callback;
         let needs_gil = has_callbacks || has_eligible_filtered_handler;
-
-        let extra = Arc::clone(&self.context);
 
         let caller = CallerInfo::with_file(
             name.unwrap_or_default(),
@@ -2186,6 +2393,8 @@ fn _logust(py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     let default_logger = Py::new(py, PyLogger::new(None))?;
     m.add("logger", default_logger)?;
+    m.add("CONTEXT_VAR", context_var(py)?)?;
+    m.add_function(wrap_pyfunction!(set_context, m)?)?;
 
     Ok(())
 }

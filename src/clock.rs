@@ -65,6 +65,36 @@ fn reset_cache() {
     OFFSET_CACHE.store(EMPTY, Ordering::Relaxed);
 }
 
+/// Shared by every test that changes the process-wide `TZ` variable.
+#[cfg(all(test, unix))]
+pub(crate) mod tz_test {
+    use std::sync::Mutex;
+
+    static TZ_LOCK: Mutex<()> = Mutex::new(());
+
+    /// Run `f` on a fresh thread (chrono caches the zone per thread) with
+    /// `TZ=tz`, then restore the previous `TZ`. Calls are serialized across
+    /// the whole crate because the environment is process-wide.
+    pub(crate) fn with_tz(tz: &str, f: impl FnOnce() + Send) {
+        let _guard = TZ_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let previous = std::env::var_os("TZ");
+        // SAFETY: tests touching the environment are serialized by `TZ_LOCK`
+        unsafe { std::env::set_var("TZ", tz) };
+        super::reset_cache();
+        std::thread::scope(|scope| {
+            scope.spawn(f);
+        });
+        // SAFETY: as above
+        unsafe {
+            match previous {
+                Some(value) => std::env::set_var("TZ", value),
+                None => std::env::remove_var("TZ"),
+            }
+        }
+        super::reset_cache();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -96,33 +126,11 @@ mod tests {
     /// `TZ` is process-wide, so these tests run one at a time and restore it.
     #[cfg(unix)]
     mod with_tz {
-        use std::sync::Mutex;
-
         use chrono::{Duration, Offset};
 
         use super::*;
 
-        static TZ_LOCK: Mutex<()> = Mutex::new(());
-
-        /// Run `f` on a fresh thread (chrono caches the zone per thread) with `TZ=tz`.
-        fn with_tz(tz: &str, f: impl FnOnce() + Send) {
-            let _guard = TZ_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-            let previous = std::env::var_os("TZ");
-            // SAFETY: tests touching the environment are serialized by `TZ_LOCK`
-            unsafe { std::env::set_var("TZ", tz) };
-            reset_cache();
-            std::thread::scope(|scope| {
-                scope.spawn(f);
-            });
-            // SAFETY: as above
-            unsafe {
-                match previous {
-                    Some(value) => std::env::set_var("TZ", value),
-                    None => std::env::remove_var("TZ"),
-                }
-            }
-            reset_cache();
-        }
+        use crate::clock::tz_test::with_tz;
 
         fn utc(s: &str) -> DateTime<Utc> {
             DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&Utc)

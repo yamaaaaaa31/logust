@@ -2,7 +2,15 @@
 
 import datetime
 from collections.abc import Callable
+from contextvars import ContextVar, Token
 from typing import Any
+
+CONTEXT_VAR: ContextVar[dict[str, Any] | None]
+"""The ``contextualize()`` values of the current thread or task (unset outside a block)."""
+
+def set_context(value: dict[str, Any] | None) -> Token[dict[str, Any] | None]:
+    """``CONTEXT_VAR.set(value)``, also marking ``contextualize()`` as in use for the fast path."""
+    ...
 
 class LogLevel:
     """Log level enum with numeric ordering.
@@ -104,6 +112,14 @@ class PyLogger:
 
     def bind(self, kwargs: dict[str, Any] | None = None) -> PyLogger:
         """Create a new logger with bound context values."""
+        ...
+
+    def contextualized(
+        self, context: dict[str, Any], extra: dict[str, Any] | None = None
+    ) -> PyLogger:
+        """Logger for one message inside ``contextualize()``: ``context`` under this
+        logger's bound values, with the message's ``extra`` kwargs on top.
+        """
         ...
 
     def set_level(self, level: LogLevel) -> None:
