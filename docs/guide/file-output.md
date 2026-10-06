@@ -171,6 +171,23 @@ logger.add("app.log", rotation=time(0, 0))
 logger.add("app.log", rotation=timedelta(days=7))  # ValueError
 ```
 
+### Daylight saving time
+
+Boundaries are local wall-clock times, so a daylight saving change affects
+them the same way it does in loguru:
+
+- When clocks fall back and an hour repeats, the file rotates at the first
+  occurrence of the boundary. The repeated hour does not rotate again, so the
+  file after a `"hourly"` rotation at 01:00 covers both 01:00 hours and the
+  next rotation is at 02:00.
+- When clocks spring forward and the boundary falls into the skipped hour,
+  the file rotates at the transition itself (the first instant after the
+  gap). A `"daily"` file in a zone that skips midnight, such as
+  `America/Santiago`, rotates when the clock jumps to 01:00.
+
+The next boundary is computed when a file is opened or rotated, never per
+message.
+
 ## Retention
 
 Automatically delete old log files:
