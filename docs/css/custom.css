@@ -1,4 +1,4 @@
-/* Fira Code, as in the FastAPI docs, plus Noto Color Emoji so emoji look the same everywhere */
+/* Fira Code for code, plus Noto Color Emoji so emoji look the same everywhere */
 @import url(https://cdn.jsdelivr.net/npm/firacode@6.2.0/distr/fira_code.css);
 @import url(https://fonts.googleapis.com/css2?family=Noto+Color+Emoji&display=swap);
 
