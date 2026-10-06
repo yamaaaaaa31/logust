@@ -57,7 +57,7 @@ fastapi = [
 ]
 docs = [
     "mkdocs-material>=9.5",
-    "mkdocstrings[python]>=0.24",
+    "mkdocs-redirects>=1.2",
     "mkdocs-minify-plugin>=0.8",
 ]
 
