@@ -22,6 +22,7 @@ Everything below is importable from `logust`:
 | `RecordLevelStr`, `RecordFile`, `RecordThread`, `RecordProcess`, `RecordElapsed` | Record value types | [Record value types](#record-value-types) |
 | `HandlerConfig`, `LevelConfig` | `configure()` dict types | [Configuration types](#configuration-types) |
 | `FilterCallback`, `PatcherCallback`, `LogCallback` | Callback protocols | [Callback protocols](#callback-protocols) |
+| `FilterType` | What `add(filter=...)` accepts | [Callback protocols](#callback-protocols) |
 | `parse`, `parse_json` | Log file parsers | [Parsing](#parsing) |
 | `__version__` | Version string, e.g. `"0.5.0"` | |
 
@@ -123,22 +124,22 @@ Adds a handler and returns its ID.
 | `retention` | `str | int | None` | `None` | Files only. `"10 days"`, or a number of files. Other strings raise `ValueError`. See [Retention](../tutorial/rotation-retention.md#retention). |
 | `compression` | `bool | str` | `False` | Files only. `True` (gzip), `"gz"`, `"bz2"`, `"zip"`, `"tar"`, `"tar.gz"`, `"tar.bz2"`. |
 | `serialize` | `bool` | `False` | Write JSON lines. See [JSON Output](../tutorial/json-output.md). |
-| `filter` | `Callable[[dict], bool] | None` | `None` | Returns `True` to keep a record. See [Filtering Records](../tutorial/filters.md). |
+| `filter` | `FilterType` | `None` | Which records this sink takes. A string keeps a module and its submodules (`"mypkg"` matches `mypkg` and `mypkg.db`, not `mypkgx`; `""` matches all). A dict maps modules to a minimum level, the closest parent module in the dict deciding (`{"": "WARNING", "mypkg": "DEBUG", "noisy": False}`; values: level name, number, `True` for all, `False` for none). A callable receives the record dict and returns `True` to keep it; if it raises, the record is dropped and the error follows `catch`. See [Filtering Records](../tutorial/filters.md). |
 | `enqueue` | `bool` | `False` | Files only. Write in a background thread. See [Async Writes](../advanced/async-writes.md). |
 | `colorize` | `bool | None` | `None` | ANSI colors and markup rendering. `None`: auto-detect for streams (TTY, `NO_COLOR`, `FORCE_COLOR`, CI, PyCharm, Jupyter); `False` for files, callables and `serialize=True`. |
 | `collect` | `CollectOptions | None` | `None` | What to collect for this handler. `None`: detected from `format`. See [`CollectOptions`](#collectoptions). |
 | `mode` | `str | None` | `None` | Files only. `"a"` (append, default) or `"w"` (truncate on first open). |
 | `encoding` | `str | None` | `None` | Files only. UTF-8 aliases only: files are always UTF-8. |
 | `delay` | `bool | None` | `None` | Files only. `True`: create the file on the first message. |
-| `catch` | `bool | None` | `None` | Sink errors. `None`: drop silently. `True`: print a report to stderr. `False`: raise from the logging call. See [Sink Errors](../advanced/sink-errors.md). |
+| `catch` | `bool | None` | `None` | Sink errors, and errors raised by a `filter` callable. `None`: drop silently. `True`: print a report to stderr. `False`: raise from the logging call. See [Sink Errors](../advanced/sink-errors.md). |
 | `backtrace` | `bool` | `False` | Logged tracebacks also show the frames above the catch point. |
 | `diagnose` | `bool` | `False` | Logged tracebacks also show variable values (can leak secrets). See [Tracebacks](../advanced/tracebacks.md). |
 | `buffering` | `int | None` | `None` | Files only, as in `open()`. `None`: an 8 KB buffer (a file with `rotation` writes each line). `1`: write each line before the logging call returns, like loguru, so it survives a kill. `N > 1`: a buffer of `N` bytes. Negative: 8192 bytes. `0` raises `ValueError`. Buffers are written when full, on `complete()`, `remove()` and at normal exit. Ignored with `enqueue=True`. See [When it's written](../tutorial/file-output.md#make-sure-its-written). |
 
 Raises:
 
-* `TypeError`: `mode`, `encoding`, `delay` or `buffering` for a non-file sink; a `buffering` that is not an `int`; an `async def` sink; an unknown keyword argument; a `rotation` or `retention` of another type.
-* `ValueError`: an unsupported `compression`, `mode`, `encoding`, `rotation` or `retention` value (for example `rotation="1 week"`), or `buffering=0`.
+* `TypeError`: `mode`, `encoding`, `delay` or `buffering` for a non-file sink; a `buffering` that is not an `int`; an `async def` sink; an unknown keyword argument; a `rotation` or `retention` of another type; a `filter` that is not a string, dict or callable, or a dict with a non-string key or a value that is not a level name, number or `bool`.
+* `ValueError`: an unsupported `compression`, `mode`, `encoding`, `rotation` or `retention` value (for example `rotation="1 week"`), or `buffering=0`; a `filter` dict with an unknown level name or a negative number; the built-in `filter()` function as `filter`.
 
 ```python
 import sys
@@ -541,6 +542,8 @@ RecordElapsed(seconds=83, microseconds=456000)  # a timedelta; str() == "00:01:2
 | `FilterCallback` | `(record: dict) -> bool` | `add(filter=...)` |
 | `PatcherCallback` | `(record: dict) -> None` | `patch()`, `configure(patcher=...)` |
 | `LogCallback` | `(record: dict) -> None` | `add_callback()` |
+
+`FilterType` is the type of `add(filter=...)` and `HandlerConfig["filter"]`: `str | dict[str | None, str | int | bool] | Callable[[dict[str, Any]], bool] | None`.
 
 ---
 

@@ -66,6 +66,7 @@ from ._parse import parse, parse_json
 from ._record import RecordElapsed, RecordFile, RecordLevelStr, RecordProcess, RecordThread
 from ._types import (
     FilterCallback,
+    FilterType,
     HandlerConfig,
     Level,
     LevelConfig,
@@ -120,6 +121,7 @@ __all__ = [
     "CallerInfo",
     "CollectOptions",
     "FilterCallback",
+    "FilterType",
     "HandlerConfig",
     "Level",
     "LevelConfig",
