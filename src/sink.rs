@@ -707,14 +707,28 @@ impl FileSink {
         };
         let truncate_on_open = config.delay && config.truncate;
 
+        // A non-empty file left over from an earlier run belongs to the period
+        // it was last written in, so the first write after that period's
+        // boundary rotates it (loguru rotates on the file's creation time).
         let now = Local::now();
-        let next_boundary = FileSinkInner::calculate_next_rotation_boundary(&config.rotation, &now);
+        let file_time = if config.truncate || current_size == 0 {
+            now
+        } else {
+            fs::metadata(&path)
+                .and_then(|m| m.modified())
+                .map(DateTime::<Local>::from)
+                .ok()
+                .filter(|modified| *modified <= now)
+                .unwrap_or(now)
+        };
+        let next_boundary =
+            FileSinkInner::calculate_next_rotation_boundary(&config.rotation, &file_time);
 
         let inner = Arc::new(FileSinkInner {
             config,
             state: StdMutex::new(FileSinkState { backend }),
             current_size: AtomicU64::new(current_size),
-            current_file_time: StdMutex::new(now),
+            current_file_time: StdMutex::new(file_time),
             next_rotation_boundary: AtomicI64::new(
                 next_boundary.map(|b| b.timestamp_millis()).unwrap_or(0),
             ),
@@ -2685,6 +2699,56 @@ mod tests {
         sink.write("new").unwrap();
         sink.flush().unwrap();
         assert_eq!(fs::read_to_string(&path).unwrap(), "old\nnew\n");
+        drop(sink);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_existing_file_from_previous_period_rotates_on_first_write() {
+        let dir = unique_temp_path("stale-file-rotation");
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("app.log");
+        fs::write(&path, "old\n").unwrap();
+        let two_days_ago = SystemTime::now() - Duration::from_secs(2 * 24 * 60 * 60);
+        OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(two_days_ago)
+            .unwrap();
+
+        let sink = FileSink::new(FileSinkConfig {
+            path: path.clone(),
+            rotation: Rotation::Daily,
+            ..FileSinkConfig::default()
+        })
+        .unwrap();
+        assert!(
+            sink.inner.check_rotation_needed(),
+            "a file last written two days ago should rotate on the first write"
+        );
+
+        sink.write("new").unwrap();
+        sink.flush().unwrap();
+
+        assert_eq!(fs::read_to_string(&path).unwrap(), "new\n");
+        let rotated: Vec<PathBuf> = fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .filter(|p| p != &path && p.extension().is_some_and(|ext| ext == "log"))
+            .collect();
+        assert_eq!(
+            rotated.len(),
+            1,
+            "expected one rotated file, got {rotated:?}"
+        );
+        assert_eq!(fs::read_to_string(&rotated[0]).unwrap(), "old\n");
+        assert!(
+            sink.inner.next_rotation_boundary.load(Ordering::Relaxed)
+                > chrono::Utc::now().timestamp_millis(),
+            "the boundary after rotation must be in the future"
+        );
+
         drop(sink);
         let _ = fs::remove_dir_all(&dir);
     }

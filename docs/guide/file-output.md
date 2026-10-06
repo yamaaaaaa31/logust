@@ -186,7 +186,9 @@ them the same way it does in loguru:
   `America/Santiago`, rotates when the clock jumps to 01:00.
 
 The next boundary is computed when a file is opened or rotated, never per
-message.
+message. A log file left over from an earlier day or hour (last written before
+the current boundary) is rotated on the first write after the sink is added,
+so short-lived processes still get one file per period.
 
 ## Retention
 
