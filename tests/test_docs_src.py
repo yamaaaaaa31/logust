@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -20,6 +21,9 @@ def test_docs_example_runs(path: Path, tmp_path: Path) -> None:
         cwd=tmp_path,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        # A pipe on Windows defaults to cp1252, which can't print level icons (emoji)
+        env={**os.environ, "PYTHONIOENCODING": "utf-8"},
         timeout=60,
     )
     if result.returncode != 0:
