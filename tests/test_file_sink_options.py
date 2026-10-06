@@ -412,3 +412,20 @@ class TestConfigure:
     def test_configure_rejects_file_options_for_streams(self, session_logger: Logger) -> None:
         with pytest.raises(TypeError):
             session_logger.configure(handlers=[{"sink": io.StringIO(), "mode": "w"}])
+
+
+@pytest.mark.parametrize(
+    ("option", "value"),
+    [
+        ("rotation", "12:00"),
+        ("rotation", "1 week"),
+        ("rotation", "monday at 12:00"),
+        ("retention", "1 week"),
+        ("retention", "forever"),
+    ],
+)
+def test_unsupported_rotation_and_retention_are_rejected(
+    session_logger: Logger, tmp_path: Path, option: str, value: str
+) -> None:
+    with pytest.raises(ValueError, match=f"Unsupported {option}"):
+        session_logger.add(tmp_path / "app.log", **{option: value})

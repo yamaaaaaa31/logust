@@ -638,7 +638,9 @@ struct FileSinkInner {
     current_size: AtomicU64,
     current_file_time: StdMutex<DateTime<Local>>,
     /// Cached next rotation boundary as epoch milliseconds for O(1) time-based rotation check.
-    /// 0 means no rotation boundary (equivalent to None).
+    /// 0 means no time-based rotation is configured (`Rotation::Never`); with
+    /// `Daily` or `Hourly` this is always a real instant, see
+    /// `calculate_next_rotation_boundary`.
     next_rotation_boundary: AtomicI64,
     /// PID of the process that currently owns the live backend.
     /// Child processes created via fork() lazily reopen/recreate the backend on first use.
@@ -705,14 +707,28 @@ impl FileSink {
         };
         let truncate_on_open = config.delay && config.truncate;
 
+        // A non-empty file left over from an earlier run belongs to the period
+        // it was last written in, so the first write after that period's
+        // boundary rotates it (loguru rotates on the file's creation time).
         let now = Local::now();
-        let next_boundary = FileSinkInner::calculate_next_rotation_boundary(&config.rotation, &now);
+        let file_time = if config.truncate || current_size == 0 {
+            now
+        } else {
+            fs::metadata(&path)
+                .and_then(|m| m.modified())
+                .map(DateTime::<Local>::from)
+                .ok()
+                .filter(|modified| *modified <= now)
+                .unwrap_or(now)
+        };
+        let next_boundary =
+            FileSinkInner::calculate_next_rotation_boundary(&config.rotation, &file_time);
 
         let inner = Arc::new(FileSinkInner {
             config,
             state: StdMutex::new(FileSinkState { backend }),
             current_size: AtomicU64::new(current_size),
-            current_file_time: StdMutex::new(now),
+            current_file_time: StdMutex::new(file_time),
             next_rotation_boundary: AtomicI64::new(
                 next_boundary.map(|b| b.timestamp_millis()).unwrap_or(0),
             ),
@@ -1200,37 +1216,87 @@ impl FileSinkInner {
         }
     }
 
-    /// Calculate the next rotation boundary based on rotation strategy
+    /// Calculate the next rotation boundary based on rotation strategy.
+    ///
+    /// The boundary is the next local wall-clock midnight (`Daily`) or top of
+    /// the hour (`Hourly`) after `from`, resolved to an instant with the same
+    /// rules loguru applies to its naive local times:
+    ///
+    /// - an ambiguous wall-clock time (DST fall-back) rotates at its first
+    ///   occurrence; the repeated hour does not rotate a second time
+    /// - a nonexistent wall-clock time (DST spring-forward gap) rotates at the
+    ///   first instant after the gap, that is at the transition itself
+    ///
+    /// Only `Rotation::Never` yields `None`. If the local zone cannot resolve
+    /// the boundary at all, the sink falls back to `from` plus one period
+    /// measured in absolute time, so a configured rotation never stops.
+    /// This runs only when a file is opened or rotated, never per write.
     fn calculate_next_rotation_boundary(
         rotation: &Rotation,
         from: &DateTime<Local>,
     ) -> Option<DateTime<Local>> {
-        use chrono::{Duration, NaiveTime};
+        use chrono::Duration;
 
-        match rotation {
-            Rotation::Never => None,
+        let (naive_boundary, period) = match rotation {
+            Rotation::Never => return None,
             Rotation::Daily => {
                 let tomorrow = from.date_naive() + Duration::days(1);
-                let midnight = NaiveTime::from_hms_opt(0, 0, 0).unwrap();
-                tomorrow
-                    .and_time(midnight)
-                    .and_local_timezone(Local)
-                    .single()
+                (
+                    tomorrow.and_hms_opt(0, 0, 0).unwrap_or(from.naive_local()),
+                    Duration::days(1),
+                )
             }
             Rotation::Hourly => {
-                let next_hour = from.date_naive().and_hms_opt(from.hour() + 1, 0, 0);
-                if let Some(nh) = next_hour {
-                    nh.and_local_timezone(Local).single()
-                } else {
-                    let tomorrow = from.date_naive() + Duration::days(1);
-                    let midnight = NaiveTime::from_hms_opt(0, 0, 0).unwrap();
-                    tomorrow
-                        .and_time(midnight)
-                        .and_local_timezone(Local)
-                        .single()
+                let this_hour = from
+                    .date_naive()
+                    .and_hms_opt(from.hour(), 0, 0)
+                    .unwrap_or(from.naive_local());
+                (this_hour + Duration::hours(1), Duration::hours(1))
+            }
+        };
+
+        let boundary = Self::resolve_local_boundary(naive_boundary)
+            .filter(|boundary| boundary > from)
+            .unwrap_or_else(|| *from + period);
+        Some(boundary)
+    }
+
+    /// Map a local wall-clock boundary to an instant, tolerating DST changes.
+    ///
+    /// Returns the earliest instant at which a local clock shows `naive`, or
+    /// the first instant after a gap (probed minute by minute, since DST gaps
+    /// are whole minutes). `None` only if the zone has no valid local time for
+    /// two days after `naive`.
+    fn resolve_local_boundary(naive: chrono::NaiveDateTime) -> Option<DateTime<Local>> {
+        use chrono::{LocalResult, TimeZone};
+
+        const MAX_GAP_PROBES: u32 = 48 * 60;
+
+        let mut probe = naive;
+        for _ in 0..MAX_GAP_PROBES {
+            let candidates = match probe.and_local_timezone(Local) {
+                LocalResult::Single(instant) => [Some(instant), None],
+                // chrono orders the pair differently for TZif data and POSIX
+                // rule strings, so order by instant instead of trusting it
+                LocalResult::Ambiguous(a, b) if a <= b => [Some(a), Some(b)],
+                LocalResult::Ambiguous(a, b) => [Some(b), Some(a)],
+                LocalResult::None => [None, None],
+            };
+            for candidate in candidates.into_iter().flatten() {
+                // chrono reports the instant that closes a transition (02:00
+                // on a US fall-back day, 02:00 on a spring-forward day) as a
+                // valid local time although no clock ever shows it. Re-derive
+                // the wall-clock time from the instant to skip those.
+                let shown = Local
+                    .from_utc_datetime(&candidate.naive_utc())
+                    .naive_local();
+                if shown == probe {
+                    return Some(candidate);
                 }
             }
+            probe += chrono::Duration::minutes(1);
         }
+        None
     }
 
     /// Check and perform rotation if needed
@@ -2635,5 +2701,322 @@ mod tests {
         assert_eq!(fs::read_to_string(&path).unwrap(), "old\nnew\n");
         drop(sink);
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_existing_file_from_previous_period_rotates_on_first_write() {
+        let dir = unique_temp_path("stale-file-rotation");
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("app.log");
+        fs::write(&path, "old\n").unwrap();
+        let two_days_ago = SystemTime::now() - Duration::from_secs(2 * 24 * 60 * 60);
+        OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(two_days_ago)
+            .unwrap();
+
+        let sink = FileSink::new(FileSinkConfig {
+            path: path.clone(),
+            rotation: Rotation::Daily,
+            ..FileSinkConfig::default()
+        })
+        .unwrap();
+        assert!(
+            sink.inner.check_rotation_needed(),
+            "a file last written two days ago should rotate on the first write"
+        );
+
+        sink.write("new").unwrap();
+        sink.flush().unwrap();
+
+        assert_eq!(fs::read_to_string(&path).unwrap(), "new\n");
+        let rotated: Vec<PathBuf> = fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .filter(|p| p != &path && p.extension().is_some_and(|ext| ext == "log"))
+            .collect();
+        assert_eq!(
+            rotated.len(),
+            1,
+            "expected one rotated file, got {rotated:?}"
+        );
+        assert_eq!(fs::read_to_string(&rotated[0]).unwrap(), "old\n");
+        assert!(
+            sink.inner.next_rotation_boundary.load(Ordering::Relaxed)
+                > chrono::Utc::now().timestamp_millis(),
+            "the boundary after rotation must be in the future"
+        );
+
+        drop(sink);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_fresh_sink_never_stores_zero_boundary_for_time_rotation() {
+        for rotation in [Rotation::Daily, Rotation::Hourly] {
+            let path = unique_temp_path("fresh-boundary").join("app.log");
+            let sink = FileSink::new(FileSinkConfig {
+                path: path.clone(),
+                rotation,
+                ..FileSinkConfig::default()
+            })
+            .unwrap();
+            let boundary = sink.inner.next_rotation_boundary.load(Ordering::Relaxed);
+            assert!(
+                boundary > chrono::Utc::now().timestamp_millis(),
+                "{rotation:?}"
+            );
+            drop(sink);
+            let _ = fs::remove_file(&path);
+            if let Some(parent) = path.parent() {
+                let _ = fs::remove_dir(parent);
+            }
+        }
+    }
+
+    /// DST handling of `calculate_next_rotation_boundary`. `TZ` is
+    /// process-wide, so these run under the crate's TZ lock; Windows chrono
+    /// ignores `TZ`, hence unix only. POSIX rule strings keep the tests
+    /// independent of the installed tzdata.
+    #[cfg(unix)]
+    mod rotation_boundary_dst {
+        use chrono::{DateTime, Datelike, Utc};
+
+        use super::*;
+        use crate::clock::tz_test::with_tz;
+
+        /// Eastern US: spring forward 02:00 -> 03:00 (second Sunday of March),
+        /// fall back 02:00 -> 01:00 (first Sunday of November).
+        const US_EASTERN: &str = "EST5EDT,M3.2.0,M11.1.0";
+        /// Chile: DST starts at 24:00 on the first Saturday of September
+        /// (00:00 -> 01:00, so midnight does not exist) and ends at 24:00 on
+        /// the first Saturday of April (00:00 -> 23:00).
+        const CHILE: &str = "CLT4CLST,M9.1.6/24,M4.1.6/24";
+        /// Cuba: fall back at 01:00 -> 00:00 on the first Sunday of November,
+        /// so midnight happens twice.
+        const CUBA: &str = "CST5CDT,M3.2.0/0,M11.1.0/1";
+
+        fn utc(s: &str) -> DateTime<Utc> {
+            DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&Utc)
+        }
+
+        fn boundary_after(rotation: Rotation, from: &str) -> DateTime<Utc> {
+            let from = utc(from).with_timezone(&Local);
+            let boundary = FileSinkInner::calculate_next_rotation_boundary(&rotation, &from)
+                .expect("time-based rotation always has a boundary");
+            assert!(boundary > from, "boundary {boundary} must follow {from}");
+            boundary.with_timezone(&Utc)
+        }
+
+        #[test]
+        fn never_has_no_boundary() {
+            let now = Local::now();
+            assert!(
+                FileSinkInner::calculate_next_rotation_boundary(&Rotation::Never, &now).is_none()
+            );
+        }
+
+        #[test]
+        fn plain_hours_and_days() {
+            with_tz("UTC", || {
+                assert_eq!(
+                    boundary_after(Rotation::Hourly, "2024-06-15T10:17:42.5Z"),
+                    utc("2024-06-15T11:00:00Z")
+                );
+                assert_eq!(
+                    boundary_after(Rotation::Hourly, "2024-06-15T23:59:59.999Z"),
+                    utc("2024-06-16T00:00:00Z")
+                );
+                assert_eq!(
+                    boundary_after(Rotation::Daily, "2024-06-15T10:17:42Z"),
+                    utc("2024-06-16T00:00:00Z")
+                );
+                // Exactly on a boundary: the next one, never the same instant
+                assert_eq!(
+                    boundary_after(Rotation::Hourly, "2024-06-15T10:00:00Z"),
+                    utc("2024-06-15T11:00:00Z")
+                );
+            });
+            with_tz(US_EASTERN, || {
+                // 2024-06-15 is EDT (UTC-4): 10:17 local -> 11:00 local
+                assert_eq!(
+                    boundary_after(Rotation::Hourly, "2024-06-15T14:17:42Z"),
+                    utc("2024-06-15T15:00:00Z")
+                );
+                // local midnight 2024-06-16 EDT
+                assert_eq!(
+                    boundary_after(Rotation::Daily, "2024-06-15T14:17:42Z"),
+                    utc("2024-06-16T04:00:00Z")
+                );
+            });
+        }
+
+        #[test]
+        fn hourly_spring_forward_gap_rotates_at_the_transition() {
+            with_tz(US_EASTERN, || {
+                // 2024-03-10 01:30 EST; 02:00 local does not exist, the clock
+                // jumps to 03:00 EDT at 07:00Z.
+                let transition = utc("2024-03-10T07:00:00Z");
+                assert_eq!(
+                    boundary_after(Rotation::Hourly, "2024-03-10T06:30:00Z"),
+                    transition
+                );
+                // After rotating at the transition, the next boundary is
+                // 04:00 EDT: one rotation per wall-clock hour, no drift.
+                assert_eq!(
+                    boundary_after(Rotation::Hourly, "2024-03-10T07:00:00.001Z"),
+                    utc("2024-03-10T08:00:00Z")
+                );
+            });
+        }
+
+        #[test]
+        fn hourly_fall_back_rotates_once_for_the_repeated_hour() {
+            with_tz(US_EASTERN, || {
+                // 2024-11-03 00:30 EDT; 01:00 local happens twice
+                // (05:00Z as EDT, 06:00Z as EST). Rotate at the first.
+                assert_eq!(
+                    boundary_after(Rotation::Hourly, "2024-11-03T04:30:00Z"),
+                    utc("2024-11-03T05:00:00Z")
+                );
+                // From the rotation at 01:00 EDT the next boundary is 02:00
+                // EST (07:00Z): the second 01:00 does not rotate again.
+                assert_eq!(
+                    boundary_after(Rotation::Hourly, "2024-11-03T05:00:00.001Z"),
+                    utc("2024-11-03T07:00:00Z")
+                );
+                // Opened during the second 01:00 (01:30 EST): 02:00 EST.
+                assert_eq!(
+                    boundary_after(Rotation::Hourly, "2024-11-03T06:30:00Z"),
+                    utc("2024-11-03T07:00:00Z")
+                );
+            });
+        }
+
+        #[test]
+        fn daily_midnight_gap_rotates_at_the_transition() {
+            with_tz(CHILE, || {
+                // Saturday 2024-09-07 23:30 CLT (-04). Midnight does not
+                // exist: 24:00 -04 becomes 01:00 -03 at 04:00Z.
+                let transition = utc("2024-09-08T04:00:00Z");
+                assert_eq!(
+                    boundary_after(Rotation::Daily, "2024-09-08T03:30:00Z"),
+                    transition
+                );
+                // Next boundary: midnight 2024-09-09 CLST (-03)
+                assert_eq!(
+                    boundary_after(Rotation::Daily, "2024-09-08T04:00:00.001Z"),
+                    utc("2024-09-09T03:00:00Z")
+                );
+            });
+        }
+
+        #[test]
+        fn daily_ambiguous_midnight_rotates_once() {
+            with_tz(CUBA, || {
+                // Saturday 2024-11-02 23:30 CDT (-04). Sunday 00:00 happens
+                // twice: 04:00Z (CDT) and 05:00Z (CST). Rotate at the first.
+                assert_eq!(
+                    boundary_after(Rotation::Daily, "2024-11-03T03:30:00Z"),
+                    utc("2024-11-03T04:00:00Z")
+                );
+                // Next boundary: Monday 00:00 CST (05:00Z), one rotation per day
+                assert_eq!(
+                    boundary_after(Rotation::Daily, "2024-11-03T04:00:00.001Z"),
+                    utc("2024-11-04T05:00:00Z")
+                );
+                // Hourly across the same fall-back (01:00 CDT -> 00:00 CST at
+                // 05:00Z): from 00:30 CDT the clock never shows 01:00 CDT, so
+                // the next hour boundary is 01:00 CST (06:00Z), then 02:00 CST.
+                assert_eq!(
+                    boundary_after(Rotation::Hourly, "2024-11-03T04:30:00Z"),
+                    utc("2024-11-03T06:00:00Z")
+                );
+                assert_eq!(
+                    boundary_after(Rotation::Hourly, "2024-11-03T05:00:00.001Z"),
+                    utc("2024-11-03T06:00:00Z")
+                );
+                assert_eq!(
+                    boundary_after(Rotation::Hourly, "2024-11-03T06:00:00.001Z"),
+                    utc("2024-11-03T07:00:00Z")
+                );
+            });
+        }
+
+        #[test]
+        fn sink_opened_before_a_gap_rotates_after_it() {
+            // End-to-end through `FileSink`: a crafted zone whose DST starts
+            // right after the sink is opened makes the next hour boundary
+            // fall into the gap; the sink must still rotate.
+            // Standard time is UTC and DST starts on a whole second 2-3 s
+            // from now. The gap is sized so that it ends on a whole minute,
+            // because the boundary probe walks whole minutes (real zones
+            // always change on one); a real 60-minute shift would make this
+            // test wait for the next minute instead. chrono classifies a rule
+            // by comparing only the months of its two transitions, so the DST
+            // end lands in another month.
+            let now = Utc::now();
+            let start = (now + chrono::Duration::seconds(3))
+                .with_nanosecond(0)
+                .unwrap();
+            let shift = match start.second() {
+                0 => "1".to_string(),
+                second => format!("1:00:{:02}", 60 - second),
+            };
+            let end = start + chrono::Duration::days(40);
+            let rule = format!(
+                "LST0LDT-{shift},{}/{},{}/{}",
+                start.ordinal0(),
+                start.format("%H:%M:%S"),
+                end.ordinal0(),
+                end.format("%H:%M:%S")
+            );
+            with_tz(&rule, || {
+                let dir = unique_temp_path("dst-gap-sink");
+                fs::create_dir_all(&dir).unwrap();
+                let path = dir.join("app.log");
+                let sink = FileSink::new(FileSinkConfig {
+                    path: path.clone(),
+                    rotation: Rotation::Hourly,
+                    ..FileSinkConfig::default()
+                })
+                .unwrap();
+                let boundary = sink.inner.next_rotation_boundary.load(Ordering::Relaxed);
+                // Either the transition itself (next hour inside the gap) or,
+                // if the hour turned in the 2-3 s before it, that hour.
+                assert!(
+                    boundary > 0 && boundary <= start.timestamp_millis(),
+                    "boundary {boundary} should be at or before the DST transition at {} \
+                     (rule {rule}, local now {})",
+                    start.timestamp_millis(),
+                    Local::now()
+                );
+                sink.write("before").unwrap();
+                sink.flush().unwrap();
+
+                let deadline = Instant::now() + Duration::from_secs(10);
+                loop {
+                    thread::sleep(Duration::from_millis(50));
+                    sink.write("after").unwrap();
+                    sink.flush().unwrap();
+                    let rotated = fs::read_dir(&dir)
+                        .unwrap()
+                        .map(|e| e.unwrap().path())
+                        .any(|p| p != path && p.extension().is_some_and(|ext| ext == "log"));
+                    if rotated {
+                        break;
+                    }
+                    assert!(Instant::now() < deadline, "no rotation across the DST gap");
+                }
+                assert!(
+                    sink.inner.next_rotation_boundary.load(Ordering::Relaxed)
+                        > Utc::now().timestamp_millis()
+                );
+                drop(sink);
+                let _ = fs::remove_dir_all(&dir);
+            });
+        }
     }
 }

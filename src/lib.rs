@@ -550,15 +550,33 @@ impl PyLogger {
         let format_config = FormatConfig::try_new(format, serialize)
             .map_err(pyo3::exceptions::PyValueError::new_err)?;
 
-        let (time_rotation, max_size) = rotation
-            .as_ref()
-            .map(|r| sink::parse_rotation(r))
-            .unwrap_or((Rotation::Never, None));
+        // Unrecognized values used to be accepted and silently never rotate or
+        // clean up (e.g. loguru's "1 week" or "12:00"); reject them instead.
+        let (time_rotation, max_size) = match rotation.as_deref() {
+            None => (Rotation::Never, None),
+            Some(r) => match sink::parse_rotation(r) {
+                (Rotation::Never, None) => {
+                    return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                        "Unsupported rotation {r:?}: use \"daily\", \"hourly\" or a size \
+                         such as \"500 MB\""
+                    )));
+                }
+                parsed => parsed,
+            },
+        };
 
-        let (retention_days, retention_count) = retention
-            .as_ref()
-            .map(|r| sink::parse_retention(r))
-            .unwrap_or((None, None));
+        let (retention_days, retention_count) = match retention.as_deref() {
+            None => (None, None),
+            Some(r) => match sink::parse_retention(r) {
+                (None, None) => {
+                    return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                        "Unsupported retention {r:?}: use a number of files such as 10 \
+                         or a duration such as \"10 days\""
+                    )));
+                }
+                parsed => parsed,
+            },
+        };
 
         let config = FileSinkConfig {
             path: PathBuf::from(path),
