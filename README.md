@@ -32,13 +32,14 @@ A recent release-build run of the included throughput suite (`benchmarks/bench_t
 
 | Scenario | logging | loguru | logust |
 |----------|---------|--------|--------|
-| File write (sync) | 71.19 ms | 78.31 ms | **22.59 ms** |
-| Formatted messages | 70.68 ms | 84.58 ms | **27.84 ms** |
-| JSON serialize | N/A | 179.09 ms | **26.66 ms** |
-| With context (sync) | N/A | 79.74 ms | **22.93 ms** |
-| File write (async + complete) | N/A | 332.29 ms | **6.90 ms** |
+| File write (sync) | 69.68 ms | 81.39 ms | **22.86 ms** |
+| File write (sync, `buffering=65536`) | N/A | 53.54 ms | **7.55 ms** |
+| Formatted messages | 70.12 ms | 85.13 ms | **24.22 ms** |
+| JSON serialize | N/A | 167.82 ms | **25.43 ms** |
+| With context (sync) | N/A | 90.16 ms | **24.04 ms** |
+| File write (async + complete) | N/A | 448.00 ms | **6.87 ms** |
 
-In the sync scenarios, all three libraries write each line to the file before the logging call returns, so logged lines survive a crash or a kill. With `enqueue=True`, `logust` batches the writes in a background thread and finished in about 7 ms, while `loguru` took about 330 ms.
+In the sync scenarios, all three libraries write each line to the file before the logging call returns, so logged lines survive a crash or a kill. With `buffering=65536` (lines batched in memory) or `enqueue=True` (batched in a background thread), `logust` finished in about 7 ms.
 
 See `benchmarks/README.md` for reproduction steps and the [Benchmarks](https://yamaaaaaa31.github.io/logust/latest/about/benchmarks/) page in the docs.
 

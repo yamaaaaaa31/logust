@@ -59,7 +59,7 @@ import atexit
 from typing import TYPE_CHECKING, Any
 
 from ._logger import CallerInfo, CollectOptions, Logger, ProcessInfo, ThreadInfo
-from ._logust import LogLevel, PyLogger, Rotation, _flush_async_sinks_at_exit
+from ._logust import LogLevel, PyLogger, Rotation, _flush_file_sinks_at_exit
 from ._logust import logger as _rust_logger
 from ._opt import OptLogger
 from ._parse import parse, parse_json
@@ -88,11 +88,12 @@ __version__ = "0.5.0"
 
 logger = Logger(_rust_logger)
 
-# Drain ``enqueue=True`` file sinks at normal exit. Registered at import, so it
-# runs after any ``atexit`` handler the application registers later (which may
-# still log). Not left to interpreter teardown: a filter or callable sink that
-# refers back to the logger forms a reference cycle that is never freed there.
-atexit.register(_flush_async_sinks_at_exit)
+# Drain ``enqueue=True`` and flush ``buffering=N`` file sinks at normal exit.
+# Registered at import, so it runs after any ``atexit`` handler the application
+# registers later (which may still log). Not left to interpreter teardown: a
+# filter or callable sink that refers back to the logger forms a reference
+# cycle that is never freed there.
+atexit.register(_flush_file_sinks_at_exit)
 
 # Per-message entry points are bound once so ``logust.info(...)`` resolves as a
 # plain module global instead of going through ``__getattr__`` on every call.

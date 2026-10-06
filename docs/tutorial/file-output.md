@@ -134,7 +134,35 @@ The file is in the operating system's hands at that point, which is enough to su
 
 ///
 
-Writing every line as it comes costs one system call per message. If that matters for you, `enqueue=True` batches the writes in a background thread, see [Writing in the background](#writing-in-the-background). Those messages reach the file a little later, and `logger.complete()` waits for them.
+### Faster: buffering or a background thread { #buffering }
+
+Writing every line as it comes costs one system call per message, and that's most of the time of a file log call. If you log a lot, there are two ways to batch the writes:
+
+* `buffering=N` (as in `open()`) keeps up to `N` bytes in memory, and writes them when the buffer is full:
+
+    ```python
+    logger.add("app.log", buffering=65536)
+    ```
+
+* `enqueue=True` writes in a background thread, which batches the lines it receives and writes them at most 100 ms after they are logged. See [Writing in the background](#writing-in-the-background).
+
+Here's the time per message for a file sink with the default format, on an Apple Silicon Mac (100,000 messages, best of 7 runs):
+
+| Sink | Time per message | A killed process loses... |
+|------|------------------|---------------------------|
+| `logger.add("app.log")` | 2.9 µs | nothing |
+| `logger.add("app.log", buffering=65536)` | 0.9 µs | up to 64 KiB of lines |
+| `logger.add("app.log", enqueue=True)` | 0.9 µs (in the calling thread) | the last ~100 ms of lines |
+
+With either option, `logger.complete()` writes what's pending, and so do `logger.remove()` and a normal exit, even when you don't call them. A process that ends without cleanup (`SIGTERM`, `os._exit()`, a crash) loses what is still in memory. That's the trade-off.
+
+/// note | Technical Details
+
+`buffering` follows `open()`'s rules for a text file: `1` (the default) writes each line, a larger number is the buffer size in bytes, and a negative number means the default size of 8192 bytes. `0` (unbuffered) is not allowed for text files in `open()`, and raises `ValueError` here too. A line is never split between two writes, and a line longer than the buffer is written directly.
+
+With `enqueue=True`, `buffering` is ignored: the background thread already batches the writes.
+
+///
 
 ## Append or overwrite { #append-or-overwrite }
 
@@ -246,6 +274,6 @@ That's covered in [Async Writes](../advanced/async-writes.md).
 
 * `logger.add("app.log")` writes every message to `app.log`, appending to it, in UTF-8. Missing directories are created.
 * Each file has its own `level` and `format`. `set_level()` doesn't affect files.
-* Each line is in the file as soon as the logging call returns, so it survives a crash or a kill. Only `enqueue=True` sinks write later, and `logger.complete()` waits for them.
+* Each line is in the file as soon as the logging call returns, so it survives a crash or a kill. `buffering=N` and `enqueue=True` batch the writes, about 3x faster, and `logger.complete()` (or a normal exit) writes what they hold.
 * `mode="w"` starts a fresh file on every run, `delay=True` creates the file only when the first message arrives.
 * Files grow forever, unless you rotate them. That's the topic of the next chapter: [Rotation, Retention and Compression](rotation-retention.md).

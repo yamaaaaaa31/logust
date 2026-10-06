@@ -14,14 +14,15 @@ The libraries are configured to write the same kind of line to a file: time, lev
 
 | Scenario | logging | loguru | logust |
 |----------|---------|--------|--------|
-| File write (sync) | 71.19 ms | 78.31 ms | **22.59 ms** |
-| Formatted messages | 70.68 ms | 84.58 ms | **27.84 ms** |
-| JSON serialize | N/A | 179.09 ms | **26.66 ms** |
-| With context (sync) | N/A | 79.74 ms | **22.93 ms** |
+| File write (sync) | 69.68 ms | 81.39 ms | **22.86 ms** |
+| File write (sync, `buffering=65536`) | N/A | 53.54 ms | **7.55 ms** |
+| Formatted messages | 70.12 ms | 85.13 ms | **24.22 ms** |
+| JSON serialize | N/A | 167.82 ms | **25.43 ms** |
+| With context (sync) | N/A | 90.16 ms | **24.04 ms** |
 
-In the sync scenarios, all three libraries write each line to the file before the logging call returns (one `write()` system call per message), so a logged line survives a crash or a kill. That system call is most of Logust's time here: the formatting itself happens in Rust. To batch the writes instead, see the async scenarios below.
+In the sync scenarios, all three libraries write each line to the file before the logging call returns (one `write()` system call per message), so a logged line survives a crash or a kill. That system call is most of Logust's time here: the formatting itself happens in Rust. The `buffering=65536` row batches the writes in a 64 KiB buffer instead (loguru passes `buffering` to `open()`; `logging.FileHandler` has no such option). See also the async scenarios below.
 
-`N/A`: the standard `logging` module has no built-in JSON output or context binding, so those scenarios are not measured for it.
+`N/A`: the standard `logging` module has no built-in JSON output, context binding or write buffering for files, so those scenarios are not measured for it.
 
 ## Async writes { #async-writes }
 
@@ -29,9 +30,9 @@ With `enqueue=True`, the file writes happen in a background thread. See [Async W
 
 | Scenario | loguru | logust |
 |----------|--------|--------|
-| File write (async + complete) | 332.29 ms | **6.90 ms** |
-| With context (async + complete) | 320.34 ms | **7.00 ms** |
-| Async non-blocking (no wait) | 412.67 ms | **7.40 ms** |
+| File write (async + complete) | 448.00 ms | **6.87 ms** |
+| With context (async + complete) | 365.72 ms | **6.90 ms** |
+| Async non-blocking (no wait) | 335.22 ms | **6.64 ms** |
 
 ## Sync vs async latency { #sync-vs-async-latency }
 
@@ -39,8 +40,8 @@ This one measures the time spent in the **main thread** only. That's the real be
 
 | Library | Sync | Async |
 |---------|------|-------|
-| loguru | 81.14 ms | 338.15 ms |
-| logust | 24.64 ms | 8.55 ms |
+| loguru | 92.72 ms | 378.00 ms |
+| logust | 26.17 ms | 8.76 ms |
 
 In this run, loguru's `enqueue=True` path was slower than its sync path, while Logust's async path took about a third of its sync latency: the background thread writes many lines per system call.
 

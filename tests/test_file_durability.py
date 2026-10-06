@@ -148,3 +148,159 @@ class TestEnqueueFlushInterval:
                 time.sleep(0.02)
         finally:
             session_logger.remove(handler_id)
+
+
+class TestBuffering:
+    """``buffering=N`` (N > 1) trades durability for fewer system calls."""
+
+    def test_lines_stay_in_memory_until_complete(
+        self, session_logger: Logger, tmp_path: Path
+    ) -> None:
+        log_file = tmp_path / "app.log"
+        handler_id = session_logger.add(log_file, format="{message}", buffering=65536)
+        try:
+            session_logger.info("first")
+            session_logger.info("second")
+            assert _read(log_file) == ""
+            session_logger.complete()
+            assert _read(log_file) == "first\nsecond\n"
+        finally:
+            session_logger.remove(handler_id)
+
+    def test_full_buffer_is_written_with_whole_lines(
+        self, session_logger: Logger, tmp_path: Path
+    ) -> None:
+        log_file = tmp_path / "app.log"
+        handler_id = session_logger.add(log_file, format="{message}", buffering=64)
+        try:
+            for i in range(20):
+                session_logger.info("line {:02d}", i)  # 8 bytes per line
+            written = _read(log_file)
+            # Only whole lines reach the file, and some are still buffered.
+            assert written.endswith("\n")
+            assert 0 < len(written) < 20 * 8
+            session_logger.complete()
+            assert _read(log_file) == "".join(f"line {i:02d}\n" for i in range(20))
+        finally:
+            session_logger.remove(handler_id)
+
+    def test_line_larger_than_buffer(self, session_logger: Logger, tmp_path: Path) -> None:
+        log_file = tmp_path / "app.log"
+        handler_id = session_logger.add(log_file, format="{message}", buffering=16)
+        try:
+            session_logger.info("short")
+            session_logger.info("x" * 100)
+            # The long line pushes the buffered one out, then is written whole.
+            assert _read(log_file) == "short\n" + "x" * 100 + "\n"
+        finally:
+            session_logger.remove(handler_id)
+
+    def test_remove_writes_the_buffer(self, session_logger: Logger, tmp_path: Path) -> None:
+        log_file = tmp_path / "app.log"
+        handler_id = session_logger.add(log_file, format="{message}", buffering=65536)
+        session_logger.info("pending")
+        session_logger.remove(handler_id)
+        assert _read(log_file) == "pending\n"
+
+    def test_rotation_with_buffering(self, session_logger: Logger, tmp_path: Path) -> None:
+        log_file = tmp_path / "app.log"
+        handler_id = session_logger.add(
+            log_file, format="{message}", rotation="100 MB", buffering=65536
+        )
+        try:
+            session_logger.info("one")
+            assert _read(log_file) == ""
+            session_logger.complete()
+            assert _read(log_file) == "one\n"
+        finally:
+            session_logger.remove(handler_id)
+
+    @pytest.mark.parametrize(
+        "setup",
+        [
+            'logger.add(sys.argv[1], format="{message}", buffering=65536)',
+            'logger.add(sys.argv[1], format="{message}", buffering=65536, filter=lambda r: True)',
+            'logger.add(sys.argv[1], format="{message}", buffering=65536)\n'
+            "logger.add(lambda m: None)",
+            'logger.add(sys.argv[1], format="{message}", buffering=-1, rotation="10 MB")',
+        ],
+        ids=["plain", "lambda-filter", "callable-sink", "default-size-rotation"],
+    )
+    def test_flushed_at_normal_exit(self, tmp_path: Path, setup: str) -> None:
+        log_file = tmp_path / "app.log"
+        code = "import sys\n" + setup + "\nfor i in range(3):\n    logger.info('line {}', i)\n"
+        result = _run(code, log_file)
+        assert result.returncode == 0, result.stderr
+        assert _read(log_file) == "line 0\nline 1\nline 2\n"
+
+    def test_os_exit_loses_the_buffer(self, tmp_path: Path) -> None:
+        # The documented trade-off.
+        log_file = tmp_path / "app.log"
+        result = _run(
+            """
+            import os, sys
+            logger.add(sys.argv[1], format="{message}", buffering=65536)
+            logger.info("buffered")
+            os._exit(0)
+            """,
+            log_file,
+        )
+        assert result.returncode == 0, result.stderr
+        assert _read(log_file) == ""
+
+    def test_one_is_the_default(self, session_logger: Logger, tmp_path: Path) -> None:
+        log_file = tmp_path / "app.log"
+        handler_id = session_logger.add(log_file, format="{message}", buffering=1)
+        try:
+            session_logger.info("now")
+            assert _read(log_file) == "now\n"
+        finally:
+            session_logger.remove(handler_id)
+
+    def test_ignored_with_enqueue(self, session_logger: Logger, tmp_path: Path) -> None:
+        log_file = tmp_path / "app.log"
+        handler_id = session_logger.add(log_file, format="{message}", enqueue=True, buffering=65536)
+        try:
+            session_logger.info("queued")
+            session_logger.complete()
+            assert _read(log_file) == "queued\n"
+        finally:
+            session_logger.remove(handler_id)
+
+    def test_zero_is_rejected(self, session_logger: Logger, tmp_path: Path) -> None:
+        with pytest.raises(ValueError, match="buffering=0"):
+            session_logger.add(tmp_path / "app.log", buffering=0)
+
+    def test_too_large_is_rejected(self, session_logger: Logger, tmp_path: Path) -> None:
+        with pytest.raises(ValueError, match="too large"):
+            session_logger.add(tmp_path / "app.log", buffering=1 << 40)
+
+    @pytest.mark.parametrize("value", [True, 1.5, "8192"])
+    def test_non_int_is_rejected(
+        self, session_logger: Logger, tmp_path: Path, value: object
+    ) -> None:
+        with pytest.raises(TypeError, match="buffering"):
+            session_logger.add(tmp_path / "app.log", buffering=value)  # type: ignore[arg-type]
+
+    @pytest.mark.parametrize("sink", ["stream", "callable"])
+    def test_non_file_sink_raises_type_error(self, session_logger: Logger, sink: str) -> None:
+        import io
+
+        target: object = io.StringIO() if sink == "stream" else (lambda m: None)
+        with pytest.raises(TypeError, match="buffering"):
+            session_logger.add(target, buffering=1)  # type: ignore[arg-type]
+
+    def test_configure_accepts_buffering(self, tmp_path: Path) -> None:
+        log_file = tmp_path / "app.log"
+        result = _run(
+            """
+            import sys
+            logger.configure(handlers=[
+                {"sink": sys.argv[1], "format": "{message}", "buffering": 65536},
+            ])
+            logger.info("configured")
+            """,
+            log_file,
+        )
+        assert result.returncode == 0, result.stderr
+        assert _read(log_file) == "configured\n"

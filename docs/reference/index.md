@@ -108,6 +108,7 @@ logger.add(
     catch=None,
     backtrace=False,
     diagnose=False,
+    buffering=None,
 ) -> int
 ```
 
@@ -132,11 +133,12 @@ Adds a handler and returns its ID.
 | `catch` | `bool | None` | `None` | Sink errors. `None`: drop silently. `True`: print a report to stderr. `False`: raise from the logging call. See [Sink Errors](../advanced/sink-errors.md). |
 | `backtrace` | `bool` | `False` | Logged tracebacks also show the frames above the catch point. |
 | `diagnose` | `bool` | `False` | Logged tracebacks also show variable values (can leak secrets). See [Tracebacks](../advanced/tracebacks.md). |
+| `buffering` | `int | None` | `None` | Files only, as in `open()`. `None` or `1`: write each line before the logging call returns. `N > 1`: keep up to `N` bytes in memory, written when the buffer is full, on `complete()`, `remove()` and at normal exit. Negative: 8192 bytes. `0` raises `ValueError`. Ignored with `enqueue=True`. See [When it's written](../tutorial/file-output.md#make-sure-its-written). |
 
 Raises:
 
-* `TypeError`: `mode`, `encoding` or `delay` for a non-file sink; an `async def` sink; an unknown keyword argument; a `rotation` or `retention` of another type.
-* `ValueError`: an unsupported `compression`, `mode`, `encoding`, `rotation` or `retention` value (for example `rotation="1 week"`).
+* `TypeError`: `mode`, `encoding`, `delay` or `buffering` for a non-file sink; a `buffering` that is not an `int`; an `async def` sink; an unknown keyword argument; a `rotation` or `retention` of another type.
+* `ValueError`: an unsupported `compression`, `mode`, `encoding`, `rotation` or `retention` value (for example `rotation="1 week"`), or `buffering=0`.
 
 ```python
 import sys
@@ -160,7 +162,7 @@ Removes the handler with that ID, or **all** handlers (the console handler inclu
 logger.complete() -> None
 ```
 
-Waits until the messages queued by `enqueue=True` file sinks are written and flushed. Sync file sinks write each line before the logging call returns, so they have nothing pending. Logust does the same at normal interpreter exit; call it yourself before reading your log files or before an exit that skips cleanup. See [When it's written](../tutorial/file-output.md#make-sure-its-written).
+Waits until the messages queued by `enqueue=True` file sinks are written and flushed, and writes what `buffering=N` file sinks hold in memory. Sync file sinks with the default `buffering` write each line before the logging call returns, so they have nothing pending. Logust does the same at normal interpreter exit; call it yourself before reading your log files or before an exit that skips cleanup. See [When it's written](../tutorial/file-output.md#make-sure-its-written).
 
 ### Level control { #level-control }
 
@@ -333,7 +335,7 @@ logger.configure(
 
 | Parameter | Description |
 |-----------|-------------|
-| `handlers` | Dicts of [`add()`](#add) arguments, with a required `sink` key. Accepted keys: `sink`, `level`, `format`, `rotation`, `retention`, `compression`, `serialize`, `filter`, `enqueue`, `colorize`, `mode`, `encoding`, `delay`, `catch`, `backtrace`, `diagnose` (see [`HandlerConfig`](#configuration-types)). `collect` is not read. |
+| `handlers` | Dicts of [`add()`](#add) arguments, with a required `sink` key. Accepted keys: `sink`, `level`, `format`, `rotation`, `retention`, `compression`, `serialize`, `filter`, `enqueue`, `colorize`, `mode`, `encoding`, `delay`, `catch`, `backtrace`, `diagnose`, `buffering` (see [`HandlerConfig`](#configuration-types)). `collect` is not read. |
 | `levels` | Dicts of [`level()`](#level-method) arguments: `name` (required), `no`, `color`, `icon`. Applied before the handlers. |
 | `extra` | Bound to every record of this logger. |
 | `patcher` | Added to this logger's patchers. |
@@ -527,7 +529,7 @@ RecordElapsed(seconds=83, microseconds=456000)  # a timedelta; str() == "00:01:2
 
 `TypedDict`s for the dicts of [`configure()`](#configure):
 
-* `HandlerConfig`: `sink`, `level`, `format`, `rotation`, `retention`, `compression`, `serialize`, `filter`, `enqueue`, `colorize`, `mode`, `encoding`, `delay`, `catch`, `backtrace`, `diagnose`.
+* `HandlerConfig`: `sink`, `level`, `format`, `rotation`, `retention`, `compression`, `serialize`, `filter`, `enqueue`, `colorize`, `mode`, `encoding`, `delay`, `catch`, `backtrace`, `diagnose`, `buffering`.
 * `LevelConfig`: `name`, `no`, `color`, `icon`.
 
 ## Callback protocols { #callback-protocols }

@@ -83,6 +83,7 @@ class PyLogger:
         mode: str | None = None,
         delay: bool | None = None,
         catch: bool | None = None,
+        buffering: int | None = None,
     ) -> int:
         """Add a file handler and return its ID.
 
@@ -90,6 +91,8 @@ class PyLogger:
         ``"gz"``, ``"bz2"``, ``"zip"``, ``"tar"``, ``"tar.gz"``, ``"tar.bz2"``.
         ``mode`` is ``"a"`` (default) or ``"w"``. ``catch``: ``None`` drops
         write errors, ``True`` reports them to stderr, ``False`` raises.
+        ``buffering``: ``1`` (default) writes each line, ``N > 1`` buffers up
+        to ``N`` bytes, negative means 8192, ``0`` raises ``ValueError``.
         """
         ...
 
@@ -478,8 +481,8 @@ def level_details(level: str) -> tuple[int, str] | None:
     """(no, icon) of the named level (icon is "" if it has none), or None if unknown."""
     ...
 
-def _flush_async_sinks_at_exit() -> None:
-    """Drain every ``enqueue=True`` file sink (registered with ``atexit`` at import)."""
+def _flush_file_sinks_at_exit() -> None:
+    """Drain ``enqueue=True`` and flush ``buffering=N`` file sinks (``atexit``, at import)."""
     ...
 
 def record_time_fields() -> tuple[datetime.datetime, str, datetime.timedelta]:

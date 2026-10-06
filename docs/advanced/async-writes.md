@@ -67,7 +67,7 @@ Call `logger.complete()`:
 
 /// info
 
-Sync file sinks (the default) don't need any of this: each logging call writes its line to the file before it returns, see [When it's written](../tutorial/file-output.md#make-sure-its-written). `logger.complete()` is harmless for them, so you can call it at shutdown whatever your sinks are.
+Sync file sinks (the default) don't need any of this: each logging call writes its line to the file before it returns, see [When it's written](../tutorial/file-output.md#make-sure-its-written). `logger.complete()` is harmless for them, so you can call it at shutdown whatever your sinks are. The same advice applies to sync sinks with `buffering=N`, which keep lines in memory until their buffer is full.
 
 ///
 
@@ -90,21 +90,21 @@ Logust's sync writes are already fast: the formatting and writing happen in Rust
 | Who writes | The calling thread | A background thread |
 | A slow disk... | ...slows down the logging call | ...is absorbed by the queue |
 | Errors | Can be [reported or raised](sink-errors.md) by the logging call | Printed to stderr by the writer thread |
-| Process killed (`SIGTERM`, `os._exit()`, crash) | Every logged line is in the file | The last ~100 ms of messages can be lost |
+| Process killed (`SIGTERM`, `os._exit()`, crash) | Every logged line is in the file (up to `N` bytes lost with `buffering=N`) | The last ~100 ms of messages can be lost |
 | Good for | Most apps, scripts, CLIs | Web servers, high-throughput services, slow or network storage |
 
 Here's the time spent in the **main thread** for 10,000 messages, in one run of the benchmark suite ([`benchmarks/bench_throughput.py`](https://github.com/yamaaaaaa31/logust/tree/main/benchmarks)):
 
 | Library | Sync | Async |
 |---------|------|-------|
-| loguru | 81.14 ms | 338.15 ms |
-| logust | 24.64 ms | 8.55 ms |
+| loguru | 92.72 ms | 378.00 ms |
+| logust | 26.17 ms | 8.76 ms |
 
 In that run, loguru's `enqueue=True` path was slower than its sync path, while Logust's async path took about a third of its sync time. Your numbers will depend on your machine and disk, see [Benchmarks](../about/benchmarks.md) to reproduce them.
 
 /// tip
 
-Use `enqueue=True` when a **stalled disk must never stall your requests**. For a script or a CLI, the default is simpler, and errors surface where they happen.
+Use `enqueue=True` when a **stalled disk must never stall your requests**. For a script or a CLI, the default is simpler, and errors surface where they happen. If you only want fewer system calls, `buffering=65536` batches the writes in the calling thread, see [Faster: buffering or a background thread](../tutorial/file-output.md#buffering). With `enqueue=True`, `buffering` is ignored.
 
 ///
 
