@@ -101,6 +101,21 @@ logger.info("Hello")
 
 `logger.info("{} by {user}", "login", user="alice")` formats the same in both libraries. loguru also copies every keyword argument into `extra`; logust only adds the ones not used by a placeholder, so `user` above is not in `extra`. Use `bind()` when a value should be both in the message and in `extra`. `opt(capture=False)` keeps every keyword argument out of `extra` in both libraries.
 
+### `contextualize()`
+
+Context-local in both libraries (a `contextvars` variable), with the same precedence:
+`contextualize()` values, then `bind()` values, then the message's keyword arguments (see
+[Context](guide/context.md#precedence)). Differences:
+
+- logust's `contextualize()` yields the logger (`with logger.contextualize(...) as log:`);
+  loguru's yields `None`.
+- `configure(extra=...)` binds the values to the logger in logust, so they override
+  `contextualize()` values like `bind()` does; in loguru they are the core defaults and
+  `contextualize()` overrides them.
+- A block entered in one `contextvars` context and exited in another (for example an async
+  generator closed by another task) restores the previous values instead of raising
+  `ValueError`.
+
 ### Callable sinks receive no trailing newline
 
 loguru passes callable sinks the formatted message **with** a trailing `"\n"`, so its recipes use `end=""`. Logust passes it **without** one, so drop `end=""` when porting:
