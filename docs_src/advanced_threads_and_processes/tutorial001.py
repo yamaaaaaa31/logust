@@ -17,8 +17,6 @@ for thread in threads:
 for thread in threads:
     thread.join()
 
-logger.complete()
-
 with open("threads.log") as f:
     lines = f.read().splitlines()
 print(len(lines), "lines, for example:", lines[-1])

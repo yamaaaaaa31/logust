@@ -182,7 +182,7 @@ So a filter like `record["extra"]["order_id"] > 1000` needs an `int(...)` with L
 * **`encoding`**: files are always written as UTF-8. UTF-8 aliases are accepted; other encodings raise `ValueError`.
 * **`catch`**: loguru defaults to `catch=True`, which prints sink errors to stderr. Logust defaults to `catch=None`, which drops them silently. Pass `catch=True` for loguru's behavior, or `catch=False` to raise the error from the logging call. See [Sink Errors](../advanced/sink-errors.md).
 * **Rotated file names** follow Logust's `app.<timestamp>.pid<pid>.log` pattern, with the archive extension appended (for example `.log.zip`). See [Rotated file names](../tutorial/rotation-retention.md#rotated-file-names).
-* **`buffering`** and the other `open()` arguments are not supported: they raise `TypeError`.
+* **`buffering`** and the other `open()` arguments are not supported: they raise `TypeError`. Like loguru's default (line buffering), each line is in the file when the logging call returns; for batched writes, use `enqueue=True`.
 * **Time-based `rotation`**: `timedelta(days=1)`, `timedelta(hours=1)` and `time(0, 0)` are supported, and rotate on clock boundaries (midnight, top of the hour, local time, daylight saving changes handled like loguru). Other intervals and times raise `ValueError`.
 * **`rotation` and `retention` strings**: sizes (`"500 MB"`), `"daily"` / `"1 day"` and `"hourly"` / `"1 hour"` for rotation, and a number of days (`"10 days"`) for retention. loguru also accepts values like `"1 week"`, `"monday at 12:00"`, `"2 months"` or functions; in Logust, unsupported strings raise `ValueError` when you call `add()`. See [All rotation values](../tutorial/rotation-retention.md#all-rotation-values).
 

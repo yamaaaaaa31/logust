@@ -160,7 +160,7 @@ Removes the handler with that ID, or **all** handlers (the console handler inclu
 logger.complete() -> None
 ```
 
-Flushes all file handlers and waits for pending background writes (`enqueue=True`). See [Make sure it's written](../tutorial/file-output.md#make-sure-its-written).
+Waits until the messages queued by `enqueue=True` file sinks are written and flushed. Sync file sinks write each line before the logging call returns, so they have nothing pending. Logust does the same at normal interpreter exit; call it yourself before reading your log files or before an exit that skips cleanup. See [When it's written](../tutorial/file-output.md#make-sure-its-written).
 
 ### Level control { #level-control }
 

@@ -2311,6 +2311,12 @@ fn apply_color_markup<'a>(text: &'a str, colorize: bool, base: &str) -> std::bor
     format::apply_color_markup_within(text, colorize, base)
 }
 
+/// Drain every `enqueue=True` file sink; `logust` registers this with `atexit`.
+#[pyfunction]
+fn _flush_async_sinks_at_exit() {
+    sink::flush_async_sinks_at_exit();
+}
+
 /// Style `text` in the bold color of the level `level`.
 #[pyfunction]
 fn colorize_level(text: &str, level: &str) -> String {
@@ -2385,6 +2391,7 @@ fn _logust(py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     m.add_function(wrap_pyfunction!(apply_color_markup, m)?)?;
     m.add_function(wrap_pyfunction!(colorize_level, m)?)?;
+    m.add_function(wrap_pyfunction!(_flush_async_sinks_at_exit, m)?)?;
     m.add_function(wrap_pyfunction!(split_format_markup, m)?)?;
     m.add_function(wrap_pyfunction!(level_style, m)?)?;
     m.add_function(wrap_pyfunction!(level_details, m)?)?;

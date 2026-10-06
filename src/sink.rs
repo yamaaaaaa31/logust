@@ -8,11 +8,12 @@ use std::os::unix::fs::MetadataExt;
 use std::os::windows::io::AsRawHandle;
 use std::path::{Path, PathBuf};
 #[cfg(unix)]
+use std::sync::OnceLock;
+#[cfg(unix)]
 use std::sync::TryLockError;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
-#[cfg(unix)]
-use std::sync::{LazyLock, OnceLock, Weak};
+use std::sync::{LazyLock, Weak};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -47,7 +48,8 @@ const TB: u64 = GB * 1024;
 #[cfg(unix)]
 static ATFORK_REGISTRATION: OnceLock<Result<(), i32>> = OnceLock::new();
 
-#[cfg(unix)]
+/// Every live `enqueue=True` sink: paused around `fork()` (Unix) and drained
+/// at interpreter exit by [`flush_async_sinks_at_exit`].
 static ASYNC_SINK_REGISTRY: LazyLock<StdMutex<Vec<Weak<FileSinkInner>>>> =
     LazyLock::new(|| StdMutex::new(Vec::new()));
 
@@ -738,7 +740,6 @@ impl FileSink {
             truncate_on_open: AtomicBool::new(truncate_on_open),
         });
 
-        #[cfg(unix)]
         if inner.config.enqueue {
             register_async_sink(&inner);
         }
@@ -871,19 +872,32 @@ impl FileSinkInner {
 
         let writer_handle = thread::spawn(move || {
             let flush_interval = Duration::from_millis(ASYNC_FLUSH_INTERVAL_MS);
-            let mut last_flush = Instant::now();
+            // When the oldest line still sitting in the buffer was written;
+            // `None` while nothing is buffered. Every buffered line reaches the
+            // file at most `flush_interval` after it was written, whether the
+            // queue then goes idle (timeout) or keeps receiving lines.
+            let mut dirty_since: Option<Instant> = None;
             let mut batch_lock = None;
 
-            loop {
-                let timeout = if coordinate_rotation {
-                    flush_interval
-                        .checked_sub(last_flush.elapsed())
-                        .unwrap_or(Duration::ZERO)
+            let flush = |writer: &mut RotatingFileWriter,
+                         batch_lock: &mut Option<FileLockGuard>| {
+                if coordinate_rotation {
+                    let _ = writer.flush_buffered(&path, batch_lock);
                 } else {
-                    flush_interval
+                    let _ = writer.flush_without_lock();
+                }
+            };
+
+            loop {
+                let received = match dirty_since {
+                    Some(since) => {
+                        receiver.recv_timeout(flush_interval.saturating_sub(since.elapsed()))
+                    }
+                    // Nothing to flush: sleep until the next message.
+                    None => receiver.recv().map_err(|_| RecvTimeoutError::Disconnected),
                 };
 
-                match receiver.recv_timeout(timeout) {
+                match received {
                     Ok(WriterMessage::Write(msg)) => {
                         let result = if coordinate_rotation {
                             writer.write_line_buffered(&path, &msg, &mut batch_lock)
@@ -897,36 +911,23 @@ impl FileSinkInner {
                             let _ = writeln!(io::stderr(), "Failed to write to log: {}", err);
                         }
 
-                        if coordinate_rotation && last_flush.elapsed() >= flush_interval {
-                            let _ = writer.flush_buffered(&path, &mut batch_lock);
-                            last_flush = Instant::now();
+                        let since = *dirty_since.get_or_insert_with(Instant::now);
+                        if since.elapsed() >= flush_interval {
+                            flush(&mut writer, &mut batch_lock);
+                            dirty_since = None;
                         }
                     }
                     Ok(WriterMessage::Flush { ack }) => {
-                        if coordinate_rotation {
-                            let _ = writer.flush_buffered(&path, &mut batch_lock);
-                            last_flush = Instant::now();
-                        } else {
-                            let _ = writer.flush_without_lock();
-                        }
+                        flush(&mut writer, &mut batch_lock);
+                        dirty_since = None;
                         let _ = ack.send(());
                     }
                     Err(RecvTimeoutError::Timeout) => {
-                        if coordinate_rotation {
-                            if batch_lock.is_some() {
-                                let _ = writer.flush_buffered(&path, &mut batch_lock);
-                            }
-                            last_flush = Instant::now();
-                        } else {
-                            let _ = writer.flush_without_lock();
-                        }
+                        flush(&mut writer, &mut batch_lock);
+                        dirty_since = None;
                     }
                     Err(RecvTimeoutError::Disconnected) => {
-                        if coordinate_rotation {
-                            let _ = writer.flush_buffered(&path, &mut batch_lock);
-                        } else {
-                            let _ = writer.flush_without_lock();
-                        }
+                        flush(&mut writer, &mut batch_lock);
                         break;
                     }
                 }
@@ -966,7 +967,12 @@ impl FileSinkInner {
                     if coordinate_rotation {
                         writer.write_line(&self.config.path, &message)?;
                     } else {
+                        // Flushed per line like the rotation path above, so a
+                        // logged line is in the file (and survives SIGTERM,
+                        // `os._exit()` or a crash) once the call returns.
+                        // `enqueue=True` is the batched alternative.
                         writer.write_line_unlocked(&message)?;
+                        writer.flush_without_lock()?;
                     }
                     None
                 }
@@ -1743,13 +1749,44 @@ fn ensure_atfork_registered() -> io::Result<()> {
     }
 }
 
-#[cfg(unix)]
 fn register_async_sink(sink: &Arc<FileSinkInner>) {
     let mut registry = ASYNC_SINK_REGISTRY
         .lock()
         .unwrap_or_else(|e| e.into_inner());
     registry.retain(|weak| weak.upgrade().is_some());
     registry.push(Arc::downgrade(sink));
+}
+
+/// Drain every live `enqueue=True` sink: wait until its writer thread has
+/// written and flushed everything queued so far.
+///
+/// Registered with Python's `atexit` at import. Interpreter teardown is not a
+/// reliable place for this: a filter or callable sink that closes a reference
+/// cycle back to the logger (a `lambda` defined in `__main__` refers to that
+/// module's globals, which hold the logger) keeps the handlers alive past
+/// finalization, so their `Drop` never runs. Synchronous sinks need nothing
+/// here, since every write is flushed before the logging call returns.
+pub fn flush_async_sinks_at_exit() {
+    let sinks: Vec<Arc<FileSinkInner>> = {
+        let mut registry = ASYNC_SINK_REGISTRY
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        registry.retain(|weak| weak.strong_count() > 0);
+        registry.iter().filter_map(Weak::upgrade).collect()
+    };
+    // The registry lock is released before flushing: a flush waits for the
+    // writer thread, and `fork()` handlers take the registry lock.
+    let pid = std::process::id();
+    for sink in sinks {
+        // A fork() child never wrote through an inherited sink it has not
+        // rebuilt; flushing would only reopen the parent's file.
+        if sink.creation_pid.load(Ordering::Acquire) != pid {
+            continue;
+        }
+        if let Err(err) = sink.flush() {
+            let _ = writeln!(io::stderr(), "Failed to flush log file at exit: {}", err);
+        }
+    }
 }
 
 #[cfg(unix)]

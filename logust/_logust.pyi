@@ -478,6 +478,10 @@ def level_details(level: str) -> tuple[int, str] | None:
     """(no, icon) of the named level (icon is "" if it has none), or None if unknown."""
     ...
 
+def _flush_async_sinks_at_exit() -> None:
+    """Drain every ``enqueue=True`` file sink (registered with ``atexit`` at import)."""
+    ...
+
 def record_time_fields() -> tuple[datetime.datetime, str, datetime.timedelta]:
     """(time, timestamp, elapsed) for the current instant, shaped like a filter record's."""
     ...

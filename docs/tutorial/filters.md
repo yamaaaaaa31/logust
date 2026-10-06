@@ -39,12 +39,6 @@ The console (the default sink, with no filter) shows everything. `audit.log` onl
 
 The filter only applies to the sink it was given to. Every sink decides on its own.
 
-/// tip
-
-The `logger.complete()` at the end makes sure everything waiting to be written reaches the files before the program exits. It is a good habit at the end of a script that writes to files.
-
-///
-
 ## The record dict { #the-record-dict }
 
 The record your filter receives has the same shape as loguru's, so filters written for loguru usually work as is. These are the keys you will use the most:

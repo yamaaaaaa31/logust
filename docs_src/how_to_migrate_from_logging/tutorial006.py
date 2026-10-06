@@ -9,4 +9,3 @@ logger.add(
 logger.add("daily.log", rotation="daily", retention="7 days")
 
 logger.info("Rotation without RotatingFileHandler")
-logger.complete()

@@ -108,13 +108,11 @@ $ cat app.log
 
 You'll see all the fields and time tokens in [Formatting](formatting.md). And if your logs are read by a machine more than by a person, [JSON Output](json-output.md) is probably what you want.
 
-## Make sure it's written { #make-sure-its-written }
+## When it's written { #make-sure-its-written }
 
-To be fast, Logust **buffers** file writes and flushes them in batches. Everything is flushed when your program exits, so normally you don't have to think about it.
+Each logging call writes its line **to the file before it returns**. You can read the file right away, from the same program or with `tail -f app.log`:
 
-But if you want to read the file from the same program, or make sure the messages are on disk at a specific point, call `logger.complete()`:
-
-```python hl_lines="7"
+```python
 --8<-- "docs_src/file_output/tutorial004.py"
 ```
 
@@ -128,7 +126,15 @@ $ python main.py
 
 </div>
 
-Without `logger.complete()`, the file could still be empty when you open it.
+It also means a line that was logged is not lost if the process ends abruptly: killed with `SIGTERM`, stopped with `os._exit()`, or crashed. That's the same guarantee as loguru and the standard `logging` module.
+
+/// tip
+
+The file is in the operating system's hands at that point, which is enough to survive the process dying. Surviving a power loss or a kernel crash would need an `fsync()` per line, which Logust doesn't do (neither do loguru and `logging`).
+
+///
+
+Writing every line as it comes costs one system call per message. If that matters for you, `enqueue=True` batches the writes in a background thread, see [Writing in the background](#writing-in-the-background). Those messages reach the file a little later, and `logger.complete()` waits for them.
 
 ## Append or overwrite { #append-or-overwrite }
 
@@ -228,7 +234,7 @@ The `encoding` argument exists for compatibility with loguru. It accepts any spe
 
 ## Writing in the background { #writing-in-the-background }
 
-By default, each logging call writes to the file buffer before it returns. For very high-throughput applications, Logust can do the writing in a background thread with `enqueue=True`:
+By default, each logging call writes its line to the file before it returns. For very high-throughput applications, Logust can do the writing in a background thread with `enqueue=True`, which batches many lines in one write:
 
 ```python
 logger.add("app.log", enqueue=True)
@@ -240,6 +246,6 @@ That's covered in [Async Writes](../advanced/async-writes.md).
 
 * `logger.add("app.log")` writes every message to `app.log`, appending to it, in UTF-8. Missing directories are created.
 * Each file has its own `level` and `format`. `set_level()` doesn't affect files.
-* `logger.complete()` makes sure buffered messages are written.
+* Each line is in the file as soon as the logging call returns, so it survives a crash or a kill. Only `enqueue=True` sinks write later, and `logger.complete()` waits for them.
 * `mode="w"` starts a fresh file on every run, `delay=True` creates the file only when the first message arrives.
 * Files grow forever, unless you rotate them. That's the topic of the next chapter: [Rotation, Retention and Compression](rotation-retention.md).

@@ -2,7 +2,7 @@
 
 How fast is Logust, compared to the standard `logging` module and loguru? Here are the numbers. 🚀
 
-They come from one recent run of the benchmark suite in the repository (`benchmarks/bench_throughput.py`), with a **release** build, on the maintainer's machine. Your numbers will be different, but the proportions should be similar. You can [run them yourself](#run-the-benchmarks).
+They come from one recent run of the benchmark suite in the repository (`benchmarks/bench_throughput.py`), with a **release** build, on an Apple Silicon Mac with CPython 3.14. Your numbers will be different, but the proportions should be similar. You can [run them yourself](#run-the-benchmarks).
 
 ## What is measured { #what-is-measured }
 
@@ -14,12 +14,12 @@ The libraries are configured to write the same kind of line to a file: time, lev
 
 | Scenario | logging | loguru | logust |
 |----------|---------|--------|--------|
-| File write (sync) | 963.57 ms | 2676.74 ms | **15.93 ms** |
-| Formatted messages | 966.38 ms | 2710.67 ms | **15.65 ms** |
-| JSON serialize | N/A | 2717.99 ms | **14.91 ms** |
-| With context (sync) | N/A | 2600.08 ms | **14.29 ms** |
+| File write (sync) | 71.19 ms | 78.31 ms | **22.59 ms** |
+| Formatted messages | 70.68 ms | 84.58 ms | **27.84 ms** |
+| JSON serialize | N/A | 179.09 ms | **26.66 ms** |
+| With context (sync) | N/A | 79.74 ms | **22.93 ms** |
 
-In this run, Logust stayed in the mid-teens of milliseconds for sync file writes, formatted messages, JSON serialization and bound context.
+In the sync scenarios, all three libraries write each line to the file before the logging call returns (one `write()` system call per message), so a logged line survives a crash or a kill. That system call is most of Logust's time here: the formatting itself happens in Rust. To batch the writes instead, see the async scenarios below.
 
 `N/A`: the standard `logging` module has no built-in JSON output or context binding, so those scenarios are not measured for it.
 
@@ -29,9 +29,9 @@ With `enqueue=True`, the file writes happen in a background thread. See [Async W
 
 | Scenario | loguru | logust |
 |----------|--------|--------|
-| File write (async + complete) | 3019.49 ms | **16.50 ms** |
-| With context (async + complete) | 3062.94 ms | **16.99 ms** |
-| Async non-blocking (no wait) | 3158.39 ms | **16.18 ms** |
+| File write (async + complete) | 332.29 ms | **6.90 ms** |
+| With context (async + complete) | 320.34 ms | **7.00 ms** |
+| Async non-blocking (no wait) | 412.67 ms | **7.40 ms** |
 
 ## Sync vs async latency { #sync-vs-async-latency }
 
@@ -39,10 +39,10 @@ This one measures the time spent in the **main thread** only. That's the real be
 
 | Library | Sync | Async |
 |---------|------|-------|
-| loguru | 2704.37 ms | 3225.03 ms |
-| logust | 15.01 ms | 17.20 ms |
+| loguru | 81.14 ms | 338.15 ms |
+| logust | 24.64 ms | 8.55 ms |
 
-In this run, loguru's `enqueue=True` path was slower than its sync path, while Logust's async path stayed close to its sync latency.
+In this run, loguru's `enqueue=True` path was slower than its sync path, while Logust's async path took about a third of its sync latency: the background thread writes many lines per system call.
 
 ## Run the benchmarks { #run-the-benchmarks }
 

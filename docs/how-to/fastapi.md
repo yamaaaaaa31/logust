@@ -315,9 +315,11 @@ You can find the full event contract and more examples in [Canonical Events](../
 
 ## Flush file logs on shutdown { #flush-file-logs-on-shutdown }
 
-File sinks are buffered, and the buffer is written when the program exits normally. But Uvicorn, when it receives `SIGTERM` (the signal Docker and Kubernetes send to stop a container), ends the process in a way that skips that, and the last messages written to files can be **lost**.
+When Uvicorn receives `SIGTERM` (the signal Docker and Kubernetes send to stop a container), it shuts the app down gracefully and then ends the process with that same signal, which skips Python's normal exit steps (`atexit` handlers included).
 
-Call [`logger.complete()`](../tutorial/file-output.md#make-sure-its-written) when the app shuts down, in the `lifespan`:
+With the default sync file sinks, that's fine: each line is written to the file before the logging call returns, see [When it's written](../tutorial/file-output.md#make-sure-its-written). But messages still waiting in the queue of an [`enqueue=True`](../advanced/async-writes.md) sink would be **lost**.
+
+So call [`logger.complete()`](../advanced/async-writes.md#complete-wait-for-the-writes) when the app shuts down, in the `lifespan`. It waits until the queued messages are written, and it costs nothing with sync sinks, so the shutdown stays safe if you switch to `enqueue=True` later:
 
 ```python
 @asynccontextmanager
@@ -372,4 +374,4 @@ $ uvicorn main:app
 * Every request gets an ID: `get_request_id()` in your code, `extra["request_id"]` in every record.
 * Sensitive keys in bodies and query parameters are masked as `"***"` by default.
 * `canonical=True` logs one structured `http.request` event per request; add fields with `add_event_fields()` and sample with `sample_rate`, `slow_ms` or a `TailSampler`.
-* Call `logger.complete()` on shutdown so file logs are not lost.
+* Call `logger.complete()` on shutdown so the queue of `enqueue=True` sinks is written before Uvicorn ends the process. Sync file sinks never lose a logged line.

@@ -32,13 +32,13 @@ A recent release-build run of the included throughput suite (`benchmarks/bench_t
 
 | Scenario | logging | loguru | logust |
 |----------|---------|--------|--------|
-| File write (sync) | 963.57 ms | 2676.74 ms | **15.93 ms** |
-| Formatted messages | 966.38 ms | 2710.67 ms | **15.65 ms** |
-| JSON serialize | N/A | 2717.99 ms | **14.91 ms** |
-| With context (sync) | N/A | 2600.08 ms | **14.29 ms** |
-| File write (async + complete) | N/A | 3019.49 ms | **16.50 ms** |
+| File write (sync) | 71.19 ms | 78.31 ms | **22.59 ms** |
+| Formatted messages | 70.68 ms | 84.58 ms | **27.84 ms** |
+| JSON serialize | N/A | 179.09 ms | **26.66 ms** |
+| With context (sync) | N/A | 79.74 ms | **22.93 ms** |
+| File write (async + complete) | N/A | 332.29 ms | **6.90 ms** |
 
-In the same run, `logust` stayed in the 14-17 ms range for JSON serialization, context-bound logging, and async file writes, while `loguru` took roughly 2.6-3.1 s for those scenarios.
+In the sync scenarios, all three libraries write each line to the file before the logging call returns, so logged lines survive a crash or a kill. With `enqueue=True`, `logust` batches the writes in a background thread and finished in about 7 ms, while `loguru` took about 330 ms.
 
 See `benchmarks/README.md` for reproduction steps and the [Benchmarks](https://yamaaaaaa31.github.io/logust/latest/about/benchmarks/) page in the docs.
 

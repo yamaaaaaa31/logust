@@ -24,6 +24,5 @@ for thread in threads:
 for thread in threads:
     thread.join()
 
-logger.complete()
 with open("free-threaded.log") as f:
     print(sum(1 for _ in f), "lines")

@@ -6,7 +6,6 @@ logger.add("requests.log", format="{level} {extra[path]} {extra[status]} {extra[
 logger.info("Request", path="/", status=200, ms=12)
 logger.info("Request", path="/search", status=200, ms=840)
 logger.info("Request", path="/cart", status=500, ms=33)
-logger.complete()
 
 pattern = r"(?P<level>\w+) (?P<path>\S+) (?P<status>\d+) (?P<ms>\d+)ms"
 

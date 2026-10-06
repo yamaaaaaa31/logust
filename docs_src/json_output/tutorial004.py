@@ -10,7 +10,6 @@ logger.add("app.json", serialize=True, mode="w")
 logger.bind(order_id=1234).info("Order created")
 logger.bind(order_id=1234).warning("Payment retried")
 
-logger.complete()
 with open("app.json") as file:
     for line in file:
         record = json.loads(line)
