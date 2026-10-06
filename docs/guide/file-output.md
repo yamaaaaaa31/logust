@@ -275,6 +275,15 @@ the first error is raised.
     default so existing applications do not start writing reports to stderr.
     Pass `catch=True` to match loguru.
 
+Console sinks (`sys.stdout`, `sys.stderr` and the default handler) follow the
+same policy. Their usual failure is a reader that has gone away, as in
+`python app.py | head -1`: Python ignores `SIGPIPE`, so every later write
+fails with `EPIPE`. With the default `catch=None` the application keeps
+running and the remaining console output is dropped; `catch=True` prints one
+report per dropped message (nothing is printed when stderr itself is the
+broken pipe); `catch=False` raises `BrokenPipeError` from the logging call.
+A closed descriptor (`os.close(1)`) is still treated as a successful write.
+
 For file sinks, a report or exception can only come from a failed open or
 write in the calling thread. With `enqueue=True`, write errors happen on the
 background writer thread and are printed to stderr whatever `catch` is set

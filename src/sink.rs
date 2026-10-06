@@ -876,7 +876,9 @@ impl FileSinkInner {
                         };
 
                         if let Err(err) = result {
-                            eprintln!("Failed to write to log: {}", err);
+                            // Never `eprintln!` here: a broken stderr would
+                            // panic and kill the writer thread.
+                            let _ = writeln!(io::stderr(), "Failed to write to log: {}", err);
                         }
 
                         if coordinate_rotation && last_flush.elapsed() >= flush_interval {
