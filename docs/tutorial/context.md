@@ -75,7 +75,7 @@ You can also add a value to a single record with a keyword argument: `logger.inf
 
 `bind()` has one limitation: you need to pass the bound logger around. Functions that use the global `logger` don't see its values.
 
-`contextualize()` solves that. It adds values to the `logger` itself, for the duration of a `with` block:
+`contextualize()` solves that. It adds values to everything logged inside a `with` block:
 
 ```python hl_lines="14"
 --8<-- "docs_src/context/tutorial003.py"
@@ -120,20 +120,99 @@ INFO | Only user_id again | {'user_id': 42}
 
 If an inner block uses a key that the outer one already has, the inner value is used until the inner block ends.
 
-### What `contextualize()` changes { #what-contextualize-changes }
+### Every logger sees it { #what-contextualize-changes }
 
-`contextualize()` changes the logger object it is called on, until the block ends. That has a few consequences that are good to know:
+The values of a `contextualize()` block are not attached to one logger object. They belong to the code running inside the block, so **every** logger sees them there: `logger` itself, loggers created with `bind()` (before or inside the block), and the module-level functions like `logust.info()`.
 
-* It applies to that logger object only. Loggers created with `bind()` **before** the block don't get the values, and a logger you `bind()` **inside** the block keeps them after the block ends (a bound logger is a snapshot of the context when it was created).
-* The change is visible to **all threads and asyncio tasks** that use that logger while the block is running, not only to the code inside the block.
+```python hl_lines="8 11 12"
+--8<-- "docs_src/context/tutorial009.py"
+```
 
-/// warning
+<div class="termy">
 
-Because of that second point, don't use `contextualize()` on a shared logger when several requests or tasks run at the same time (threads, `asyncio.gather()`, async web frameworks). Their values would mix: a record from one task could carry another task's `request_id`, and with overlapping blocks the context restored at the end may not be the original one.
+```console
+$ python main.py
 
-For concurrent code, use `bind()` and pass the bound logger along, which is always safe. If you need context that follows the current request automatically, store it in a `contextvars.ContextVar` and add it to every record with a patcher, see [Records and patch()](../advanced/records-and-patch.md).
+INFO | Query sent | {'component': 'db', 'request_id': 'r-17'}
+INFO | Retrying | {'attempt': 2, 'request_id': 'r-17'}
+INFO | Retry finished | {'attempt': 2}
+```
+
+</div>
+
+`db_logger` was created **before** the block, and it still gets the `request_id` inside it.
+
+`retry_logger` was created **inside** the block, but it doesn't keep the `request_id` after the block ends: it only keeps what you passed to `bind()` itself. A bound logger never takes a snapshot of the `contextualize()` values, it reads them each time it logs.
+
+/// tip
+
+The block yields the logger it was opened on, so you can also write `with logger.contextualize(order_id=1234) as log:` and use `log` inside.
 
 ///
+
+### Context-local: safe with threads and `asyncio` { #context-local }
+
+Here is the best part. The values live in a [`contextvars`](https://docs.python.org/3/library/contextvars.html) variable, the same mechanism loguru uses. That makes them **context-local**: each thread and each asyncio task sees only the blocks it entered itself.
+
+So you can use `contextualize()` in concurrent code, like several requests handled at the same time:
+
+```python hl_lines="16 23"
+--8<-- "docs_src/context/tutorial007.py"
+```
+
+<div class="termy">
+
+```console
+$ python main.py
+
+INFO | Checkout started | {'order_id': 1}
+INFO | Checkout started | {'order_id': 2}
+INFO | Charging 25 EUR | {'order_id': 1}
+INFO | Checkout done | {'order_id': 1}
+INFO | Charging 40 EUR | {'order_id': 2}
+INFO | Checkout done | {'order_id': 2}
+INFO | All orders handled | {}
+```
+
+</div>
+
+The two `handle_order()` tasks run at the same time, and their lines are interleaved. But each line has the `order_id` of its **own** task, even across the `await`. And `"All orders handled"`, logged by `main()` outside of both blocks, has no context at all. 🎉
+
+That's exactly what you need in an async web framework: open a block with the request ID at the start of each request, and every line logged while handling that request carries it, without mixing it up with the other requests.
+
+/// info
+
+A task started **inside** a block inherits its values, because asyncio copies the current context when it creates a task. A new `threading.Thread` doesn't, by default. You will see the details, and how to pass the values to a thread, in [Threads and Processes](../advanced/threads-and-processes.md#context-in-threads-and-tasks).
+
+///
+
+### Precedence { #precedence }
+
+The same key can come from several places. They are merged into `extra` in the same order as loguru, and **later sources win**:
+
+1. `contextualize()` values of the current thread or task.
+2. `bind()` values of the logger (and `configure(extra=...)`).
+3. The message's own keyword arguments.
+
+```python hl_lines="8 10 11"
+--8<-- "docs_src/context/tutorial008.py"
+```
+
+<div class="termy">
+
+```console
+$ python main.py
+
+INFO | Only contextualize() | {'step': 'checkout', 'user': 'from-contextualize'}
+INFO | bind() wins | {'step': 'checkout', 'user': 'from-bind'}
+INFO | The keyword argument wins | {'step': 'checkout', 'user': 'from-kwarg'}
+```
+
+</div>
+
+Only `user` is overridden. `step` comes from the block in all three records, because nothing else sets it.
+
+The more specific the source, the higher it wins: a block applies to everything in it, a bound logger to its own records, and a keyword argument to one single record.
 
 ## Use cases { #use-cases }
 
@@ -158,11 +237,11 @@ $ python main.py
 
 This one uses [JSON output](json-output.md), where context really pays off: in your aggregator, `extra.request_id = "080787ae"` gives you the whole story of that request.
 
-Because it uses `bind()`, it is safe even when many requests are handled at the same time.
+Here `bind()` is a good fit, because `handle_request()` logs through `req_logger` directly. If the request also calls functions that use the global `logger`, open a `contextualize()` block instead (or as well), as in [Context-local: safe with threads and `asyncio`](#context-local).
 
 ### User session logging { #user-session-logging }
 
-In a script, a CLI or a worker that handles one thing at a time, `contextualize()` lets every function deep in the call stack log with the user's details, without passing anything around:
+`contextualize()` lets every function deep in the call stack log with the user's details, without passing anything around:
 
 ```python hl_lines="20"
 --8<-- "docs_src/context/tutorial006.py"
@@ -190,7 +269,8 @@ Sometimes you want to compute context **for each record**, for example to add th
 * Context values travel with each record as `extra`, shown with `{extra[key]}` / `{extra}` or as typed JSON fields.
 * `logger.bind(key=value)` returns a new logger that always adds the values. The original logger is unchanged.
 * Bound loggers can be bound again, to add context step by step.
-* `with logger.contextualize(key=value):` adds values to `logger` itself until the block ends, so functions you call get them too. Blocks can be nested.
-* `contextualize()` is visible to every thread and task using that logger: for concurrent code, use `bind()` instead.
+* `with logger.contextualize(key=value):` adds values to every record logged inside the block, by any logger, so functions you call get them too. Blocks can be nested.
+* `contextualize()` is context-local: each thread and asyncio task sees only its own blocks, so it is safe for concurrent requests.
+* When a key comes from several places, `contextualize()` < `bind()` < the message's keyword arguments.
 
 Next, let's see what to do when things go wrong: [Logging Exceptions](exceptions.md).

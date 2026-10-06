@@ -91,6 +91,20 @@ Rotation is aligned to the clock, not to when the file was opened: a file opened
 
 The rotation happens with the first message written after the boundary. If your application was stopped overnight, `app.log` still has yesterday's messages, and it's rotated as soon as you log the first message of the new day.
 
+That also works for short-lived processes, like a script run by `cron` every few minutes: when a run opens an `app.log` that was last written before the current boundary (an earlier day, or an earlier hour), the first message rotates it. So you still get one file per day or per hour.
+
+### Daylight saving time { #daylight-saving-time }
+
+Boundaries are **local wall-clock** times, so they follow daylight saving changes, the same way as in loguru. Most of the time you don't need to think about it, but if you are curious:
+
+/// details | Technical Details
+
+* When clocks **fall back** and an hour repeats, the file rotates at the **first** occurrence of the boundary. The repeated hour doesn't rotate again: with `"hourly"`, the file started at 01:00 covers both 01:00 hours, and the next rotation is at 02:00.
+* When clocks **spring forward** and the boundary falls into the skipped hour, the file rotates at the transition itself, the first instant after the gap. For example, a `"daily"` file in a zone that skips midnight, like `America/Santiago`, rotates when the clock jumps to 01:00.
+* The next boundary is computed when a file is opened or rotated, never for each message, so this costs nothing on your logging calls.
+
+///
+
 ### `timedelta` and `time` { #timedelta-and-time }
 
 For compatibility with loguru, `rotation` also accepts `datetime.timedelta` and `datetime.time` values, as long as they mean the same as `"daily"` or `"hourly"`:
@@ -105,7 +119,7 @@ For compatibility with loguru, `rotation` also accepts `datetime.timedelta` and 
 | `timedelta(hours=1)` | `"hourly"` |
 | `time(0, 0)` | `"daily"` |
 
-Any other interval or time of day raises a `ValueError`, instead of silently doing something different from what you asked for:
+Any other interval or time of day raises a `ValueError` when you call `logger.add()`, instead of silently doing something different from what you asked for:
 
 ```python hl_lines="6"
 --8<-- "docs_src/rotation_retention/tutorial008.py"
@@ -135,13 +149,25 @@ To sum up, these are the values `rotation` accepts:
 | `"hourly"`, `"1 hour"`, `timedelta(hours=1)` | Every hour, on the hour |
 | `None` (default) | Never |
 
-/// warning
+Any other value is rejected right away, when you call `logger.add()`: an unsupported string, like `"1 week"`, `"10 seconds"` or `"midnight"`, raises a `ValueError`, and a value of another type, like an `int`, raises a `TypeError`:
 
-Stick to the strings in this table. Other strings, like `"1 week"`, `"10 seconds"` or `"midnight"`, are **not** rejected: the file is simply **never rotated**.
+```python hl_lines="5"
+--8<-- "docs_src/rotation_retention/tutorial009.py"
+```
 
-Only `timedelta` and `time` values are checked and raise a `ValueError`.
+<div class="termy">
 
-///
+```console
+$ python main.py
+
+ValueError: Unsupported rotation "1 week": use "daily", "hourly" or a size such as "500 MB"
+ValueError: Unsupported rotation "midnight": use "daily", "hourly" or a size such as "500 MB"
+TypeError: rotation must be str, datetime.timedelta or datetime.time, not int
+```
+
+</div>
+
+That's on purpose: a typo in `rotation` should fail when your application starts, not leave you with one huge file that is never rotated. 🚨
 
 /// info
 
@@ -188,11 +214,23 @@ Pass a string like `"10 days"` to delete the rotated files that were last modifi
 
 Retention by time is counted in whole days: `"1 day"`, `"7 days"`, `"30 days"`...
 
-/// warning
+As with rotation, any other retention string, like `"1 week"`, `"2 months"` or `"1 hour"`, raises a `ValueError` when you call `logger.add()`:
 
-As with rotation, a retention string that isn't a number of days or a count (like `"1 week"` or `"2 months"`) is silently ignored, and no file is ever deleted. Write `"7 days"` instead of `"1 week"`.
+```python hl_lines="4"
+--8<-- "docs_src/rotation_retention/tutorial010.py"
+```
 
-///
+<div class="termy">
+
+```console
+$ python main.py
+
+ValueError: Unsupported retention "1 week": use a number of files such as 10 or a duration such as "10 days"
+```
+
+</div>
+
+Write `"7 days"` instead of `"1 week"`.
 
 ### When retention runs { #when-retention-runs }
 
@@ -273,4 +311,5 @@ With this, your logs take a bounded amount of disk space, and you don't have to 
 * Rotated files are renamed to `name.<date>_<time>_<microseconds>.pid<id>.ext`, and `app.log` stays the current file.
 * `retention=5` keeps the 5 most recent rotated files, `retention="10 days"` deletes the ones older than 10 days. It runs after each rotation.
 * `compression=True` gzips rotated files. `"zip"`, `"bz2"`, `"tar"`, `"tar.gz"` and `"tar.bz2"` pick another format.
-* Only use the rotation and retention values listed on this page: unknown strings are silently ignored.
+* Time rotation follows local wall-clock time, daylight saving changes included, and a file left over from an earlier period is rotated on the first write.
+* Unsupported rotation and retention values raise a `ValueError` (or a `TypeError` for a wrong type) when you call `logger.add()`.

@@ -159,7 +159,7 @@ The middleware gives every request an **ID**. If the request has an `X-Request-I
 While the request is handled, the ID is:
 
 * Available anywhere in your code, with `get_request_id()`.
-* Bound to every Logust message as the extra fields `request_id` and `path`, using [`contextualize()`](../tutorial/context.md#temporary-context-with-contextualize).
+* Bound to every Logust message as the extra fields `request_id` and `path`, using [`contextualize()`](../tutorial/context.md#temporary-context-with-contextualize). The values are [context-local](../tutorial/context.md#context-local): when many requests are handled at the same time, each message gets the ID of its own request.
 
 The default format doesn't show extra fields, so let's add `{extra[request_id]}` to it:
 

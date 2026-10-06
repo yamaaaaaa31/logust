@@ -60,6 +60,16 @@ If you want a value both in the message and in `extra`, `bind()` it, as in the s
 
 `opt(capture=False)` keeps **every** keyword argument out of `extra`, in both libraries. Read more in [Message Arguments](../tutorial/message-arguments.md#extra-keyword-arguments-go-to-extra).
 
+## `contextualize()` { #contextualize }
+
+`contextualize()` is **context-local** in both libraries: the values live in a `contextvars` variable, so each thread and asyncio task sees only its own blocks. The precedence is the same too: `contextualize()` values, then `bind()` values, then the message's keyword arguments, later sources winning. See [Adding Context](../tutorial/context.md#precedence).
+
+There are a few small differences:
+
+* Logust's `contextualize()` yields the logger, so `with logger.contextualize(...) as log:` works. loguru's yields `None`.
+* `configure(extra=...)` **binds** the values to the logger in Logust, so they override `contextualize()` values with the same key, like `bind()` does. In loguru they are the core defaults, and `contextualize()` overrides them.
+* A block entered in one `contextvars` context and exited in another (for example, an async generator closed by another task) restores the previous values, instead of raising `ValueError` as loguru does.
+
 ## Callable sinks receive no trailing newline { #callable-sinks-receive-no-trailing-newline }
 
 loguru passes callable sinks the formatted message **with** a trailing `"\n"`, so loguru recipes often use `end=""`. Logust passes it **without** one, so drop `end=""` when you port them:
@@ -173,7 +183,8 @@ So a filter like `record["extra"]["order_id"] > 1000` needs an `int(...)` with L
 * **`catch`**: loguru defaults to `catch=True`, which prints sink errors to stderr. Logust defaults to `catch=None`, which drops them silently. Pass `catch=True` for loguru's behavior, or `catch=False` to raise the error from the logging call. See [Sink Errors](../advanced/sink-errors.md).
 * **Rotated file names** follow Logust's `app.<timestamp>.pid<pid>.log` pattern, with the archive extension appended (for example `.log.zip`). See [Rotated file names](../tutorial/rotation-retention.md#rotated-file-names).
 * **`buffering`** and the other `open()` arguments are not supported: they raise `TypeError`.
-* **Time-based `rotation`**: `timedelta(days=1)`, `timedelta(hours=1)` and `time(0, 0)` are supported, and rotate on clock boundaries (midnight, top of the hour). Other intervals and times raise `ValueError`.
+* **Time-based `rotation`**: `timedelta(days=1)`, `timedelta(hours=1)` and `time(0, 0)` are supported, and rotate on clock boundaries (midnight, top of the hour, local time, daylight saving changes handled like loguru). Other intervals and times raise `ValueError`.
+* **`rotation` and `retention` strings**: sizes (`"500 MB"`), `"daily"` / `"1 day"` and `"hourly"` / `"1 hour"` for rotation, and a number of days (`"10 days"`) for retention. loguru also accepts values like `"1 week"`, `"monday at 12:00"`, `"2 months"` or functions; in Logust, unsupported strings raise `ValueError` when you call `add()`. See [All rotation values](../tutorial/rotation-retention.md#all-rotation-values).
 
 `mode`, `encoding` and `delay` only apply to file sinks; passing them for another sink raises `TypeError`.
 
@@ -193,4 +204,5 @@ So a filter like `record["extra"]["order_id"] > 1000` needs an `int(...)` with L
 * `backtrace` and `diagnose` are off by default; turn them on explicitly.
 * Message markup is always parsed; `opt(raw=...)` and `opt(record=...)` are not available.
 * `record["exception"]` is text, and `record["extra"]` values are strings in filters, patchers and callbacks.
-* Some file options have a smaller set of values: no `xz` compression, `"a"` / `"w"` modes only, UTF-8 only.
+* `contextualize()` is context-local as in loguru, but yields the logger, and `configure(extra=...)` values win over it.
+* Some file options have a smaller set of values: no `xz` compression, `"a"` / `"w"` modes only, UTF-8 only, and fewer `rotation` / `retention` strings (others raise `ValueError`).

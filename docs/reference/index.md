@@ -118,8 +118,8 @@ Adds a handler and returns its ID.
 | `sink` | `str | os.PathLike | TextIO | Callable[[str], Any]` | | A file path, a stream (any object with `write()`, like `sys.stdout` or `io.StringIO`), or a callable that receives the formatted message (without a trailing newline). A stream is bound when `add()` is called. |
 | `level` | `LogLevel | str | None` | `None` | Minimum level. A built-in level name or `LogLevel`. |
 | `format` | `str | None` | `None` | Format string. `None` uses `"{time} | {level:<8} | {name}:{function}:{line} - {message}"`. See [Formatting](../tutorial/formatting.md). |
-| `rotation` | `str | timedelta | time | None` | `None` | Files only. `"500 MB"`, `"daily"`, `"hourly"`, `timedelta(days=1)`, `timedelta(hours=1)`, `time(0, 0)`. See [Rotation](../tutorial/rotation-retention.md). |
-| `retention` | `str | int | None` | `None` | Files only. `"10 days"`, or a number of files. |
+| `rotation` | `str | timedelta | time | None` | `None` | Files only. `"500 MB"`, `"daily"` / `"1 day"`, `"hourly"` / `"1 hour"`, `timedelta(days=1)`, `timedelta(hours=1)`, `time(0, 0)`. Boundaries are local wall-clock times. Other values raise. See [Rotation](../tutorial/rotation-retention.md). |
+| `retention` | `str | int | None` | `None` | Files only. `"10 days"`, or a number of files. Other strings raise `ValueError`. See [Retention](../tutorial/rotation-retention.md#retention). |
 | `compression` | `bool | str` | `False` | Files only. `True` (gzip), `"gz"`, `"bz2"`, `"zip"`, `"tar"`, `"tar.gz"`, `"tar.bz2"`. |
 | `serialize` | `bool` | `False` | Write JSON lines. See [JSON Output](../tutorial/json-output.md). |
 | `filter` | `Callable[[dict], bool] | None` | `None` | Returns `True` to keep a record. See [Filtering Records](../tutorial/filters.md). |
@@ -135,8 +135,8 @@ Adds a handler and returns its ID.
 
 Raises:
 
-* `TypeError`: `mode`, `encoding` or `delay` for a non-file sink; an `async def` sink; an unknown keyword argument; a `rotation` of another type.
-* `ValueError`: an unsupported `compression`, `mode`, `encoding` or `rotation` value.
+* `TypeError`: `mode`, `encoding` or `delay` for a non-file sink; an `async def` sink; an unknown keyword argument; a `rotation` or `retention` of another type.
+* `ValueError`: an unsupported `compression`, `mode`, `encoding`, `rotation` or `retention` value (for example `rotation="1 week"`).
 
 ```python
 import sys
@@ -241,7 +241,7 @@ logger.patch(patcher: Callable[[dict], None]) -> Logger
 | Method | Description |
 |--------|-------------|
 | `bind(**kwargs)` | Returns a new logger that adds `kwargs` to `extra` of every record. |
-| `contextualize(**kwargs)` | Within the `with` block, adds `kwargs` to `extra` of every record of this logger. |
+| `contextualize(**kwargs)` | Within the `with` block, adds `kwargs` to `extra` of every record logged by any logger. Context-local (`contextvars`): each thread and asyncio task sees only its own blocks. Yields the logger. Precedence: `contextualize()` < `bind()` < message keyword arguments. |
 | `patch(patcher)` | Returns a new logger that calls `patcher(record)` before each record is sent. Patchers accumulate. |
 
 A patcher's record has no caller fields, and only its changes to `message`, `extra` and `exception` are used. See [Adding Context](../tutorial/context.md) and [Records and patch()](../advanced/records-and-patch.md).

@@ -242,9 +242,9 @@ Return the ID to the client (in a response header or an error body), and support
 
 `get_request_id()` returns an empty string outside a request. An incoming ID is sanitized: characters outside printable ASCII are dropped, and it's truncated to 128 characters.
 
-/// warning
+/// check
 
-The `request_id` in the extra of your own messages comes from [`contextualize()`](../tutorial/context.md), which is currently shared by concurrent requests (see [Threads and Processes](threads-and-processes.md#threads)). The value in the canonical event itself, and `get_request_id()`, are always those of the current request.
+The `request_id` in the extra of your own messages comes from [`contextualize()`](../tutorial/context.md#context-local), which is context-local. Each request runs in its own task, so when many requests are handled at the same time, every message still carries the ID of **its own** request.
 
 ///
 
