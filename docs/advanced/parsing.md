@@ -8,7 +8,7 @@ Logust includes two small helpers to read log files back as Python dicts: `parse
 
 `parse()` takes a file path and a **regular expression** with **named groups**. It reads the file line by line, and gives you a dict with the groups of each line that matches:
 
-```python hl_lines="1 10 12"
+```python hl_lines="1 11 13"
 --8<-- "docs_src/advanced_parsing/tutorial001.py"
 ```
 
@@ -43,7 +43,7 @@ Write the pattern for the format you used in `logger.add()`. If you control both
 
 All the values are strings by default. Pass `cast` to convert some groups, with a dict of group name to type (or any function that takes a string):
 
-```python hl_lines="14"
+```python hl_lines="15"
 --8<-- "docs_src/advanced_parsing/tutorial002.py"
 ```
 
@@ -73,7 +73,7 @@ Unlike loguru's `logger.parse()`, Logust's takes a file **path** (not an open fi
 
 If you write your logs with `serialize=True`, there's no need for a pattern. `parse_json()` reads a **JSON Lines** file, one JSON object per line:
 
-```python hl_lines="1 9 12"
+```python hl_lines="1 10 13"
 --8<-- "docs_src/advanced_parsing/tutorial003.py"
 ```
 

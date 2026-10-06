@@ -2023,15 +2023,16 @@ class Logger:
             diagnose: Those tracebacks also show the values of the variables
                       used on each line. They can contain secrets, so this
                       is off by default (loguru's default is True).
-            buffering: As in ``open()``. ``1`` (default) writes each line to
-                       the file before the logging call returns, so it
-                       survives a crash or a kill. ``N > 1`` keeps up to
-                       ``N`` bytes in memory and writes them when the buffer
-                       is full, on ``complete()``, ``remove()`` and at normal
-                       exit (faster, but a killed process loses them). A
-                       negative value means 8192 bytes; ``0`` raises
-                       ValueError. Ignored with ``enqueue=True``, which
-                       batches writes on its own. File sinks only.
+            buffering: As in ``open()``. By default (None), lines are
+                       kept in an 8 KB buffer, written when it is full, on
+                       ``complete()``, ``remove()`` and at normal exit (a
+                       sink with ``rotation`` writes each line). ``1``
+                       writes each line to the file before the logging call
+                       returns, so it survives a crash or a kill, like
+                       loguru. ``N > 1`` sets the buffer size in bytes, a
+                       negative value means 8192, ``0`` raises ValueError.
+                       Ignored with ``enqueue=True``, which batches writes
+                       on its own. File sinks only.
 
         Returns:
             Handler ID for later removal.
@@ -2701,7 +2702,7 @@ class Logger:
                 - mode: "a" (default) or "w" (file sinks only)
                 - encoding: UTF-8 aliases only (file sinks only)
                 - delay: Create the file on the first message (file sinks only)
-                - buffering: 1 (default) writes each line, N > 1 buffers N bytes
+                - buffering: 1 writes each line, N > 1 buffers N bytes
                   (file sinks only)
                 - catch: None (drop), True (report to stderr) or False (raise)
                   for sink errors

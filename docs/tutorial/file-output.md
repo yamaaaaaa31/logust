@@ -110,9 +110,11 @@ You'll see all the fields and time tokens in [Formatting](formatting.md). And if
 
 ## When it's written { #make-sure-its-written }
 
-Each logging call writes its line **to the file before it returns**. You can read the file right away, from the same program or with `tail -f app.log`:
+To be fast, Logust **buffers** file writes: lines are kept in memory (8 KB) and written to the file when the buffer is full. What's left is written when your program exits normally, so usually you don't have to think about it, even if you never call anything.
 
-```python
+If you want to read the file from the same program, or make sure the messages are in the file at a specific point, call `logger.complete()`:
+
+```python hl_lines="7"
 --8<-- "docs_src/file_output/tutorial004.py"
 ```
 
@@ -126,41 +128,44 @@ $ python main.py
 
 </div>
 
-It also means a line that was logged is not lost if the process ends abruptly: killed with `SIGTERM`, stopped with `os._exit()`, or crashed. That's the same guarantee as loguru and the standard `logging` module.
+Without `logger.complete()`, the file could still be empty when you open it. `logger.remove()` also writes what the removed handlers hold.
 
-/// tip
+A file with [rotation](rotation-retention.md) is the exception: each line is written when it is logged, so that several processes can share and rotate it.
 
-The file is in the operating system's hands at that point, which is enough to survive the process dying. Surviving a power loss or a kernel crash would need an `fsync()` per line, which Logust doesn't do (neither do loguru and `logging`).
+### When the process is killed { #when-the-process-is-killed }
 
-///
+A normal exit writes the buffer. But a process that ends **without cleanup** loses the lines still in memory: killed by a signal like `SIGTERM` (Docker and Kubernetes send it to stop a container, and Uvicorn re-raises it after a graceful shutdown), stopped with `os._exit()`, or crashed.
 
-### Faster: buffering or a background thread { #buffering }
+If those last lines matter, you have two options:
 
-Writing every line as it comes costs one system call per message, and that's most of the time of a file log call. If you log a lot, there are two ways to batch the writes:
-
-* `buffering=N` (as in `open()`) keeps up to `N` bytes in memory, and writes them when the buffer is full:
+* `buffering=1` (as in `open()`) writes each line to the file **before the logging call returns**. It survives any of those, and `tail -f app.log` shows the lines right away. That's what loguru and the standard `logging` module do:
 
     ```python
-    logger.add("app.log", buffering=65536)
+    logger.add("app.log", buffering=1)
     ```
 
-* `enqueue=True` writes in a background thread, which batches the lines it receives and writes them at most 100 ms after they are logged. See [Writing in the background](#writing-in-the-background).
+* Call `logger.complete()` in your shutdown code, before the process can be killed. See [FastAPI](../how-to/fastapi.md#flush-file-logs-on-shutdown) for an example.
 
-Here's the time per message for a file sink with the default format, on an Apple Silicon Mac (100,000 messages, best of 7 runs):
+Writing every line costs one system call per message, and that's most of the time of a file log call. Here's the time per message for a file sink with the default format, on an Apple Silicon Mac (100,000 messages, best of 7 runs):
 
 | Sink | Time per message | A killed process loses... |
 |------|------------------|---------------------------|
-| `logger.add("app.log")` | 2.9 µs | nothing |
+| `logger.add("app.log")` | 0.9 µs | up to 8 KB of lines |
+| `logger.add("app.log", buffering=1)` | 2.5 µs | nothing |
 | `logger.add("app.log", buffering=65536)` | 0.9 µs | up to 64 KiB of lines |
 | `logger.add("app.log", enqueue=True)` | 0.9 µs (in the calling thread) | the last ~100 ms of lines |
 
-With either option, `logger.complete()` writes what's pending, and so do `logger.remove()` and a normal exit, even when you don't call them. A process that ends without cleanup (`SIGTERM`, `os._exit()`, a crash) loses what is still in memory. That's the trade-off.
+/// tip
+
+With `buffering=1`, the line is in the operating system's hands when the call returns, which is enough to survive the process dying. Surviving a power loss or a kernel crash would need an `fsync()` per line, which Logust doesn't do (neither do loguru and `logging`).
+
+///
 
 /// note | Technical Details
 
-`buffering` follows `open()`'s rules for a text file: `1` (the default) writes each line, a larger number is the buffer size in bytes, and a negative number means the default size of 8192 bytes. `0` (unbuffered) is not allowed for text files in `open()`, and raises `ValueError` here too. A line is never split between two writes, and a line longer than the buffer is written directly.
+`buffering` follows `open()`'s rules for a text file: `1` writes each line, a larger number is the buffer size in bytes, and a negative number means the default size of 8192 bytes. `0` (unbuffered) is not allowed for text files in `open()`, and raises `ValueError` here too. Without `buffering`, a file without rotation has an 8 KB buffer, and a rotating file writes each line. A line is never split between two writes, and a line longer than the buffer is written directly.
 
-With `enqueue=True`, `buffering` is ignored: the background thread already batches the writes.
+With `enqueue=True`, `buffering` is ignored: the background thread batches the writes on its own.
 
 ///
 
@@ -262,7 +267,7 @@ The `encoding` argument exists for compatibility with loguru. It accepts any spe
 
 ## Writing in the background { #writing-in-the-background }
 
-By default, each logging call writes its line to the file before it returns. For very high-throughput applications, Logust can do the writing in a background thread with `enqueue=True`, which batches many lines in one write:
+By default, each logging call writes to the file buffer before it returns. For very high-throughput applications, or when a slow disk must not slow down your code, Logust can do the writing in a background thread with `enqueue=True`:
 
 ```python
 logger.add("app.log", enqueue=True)
@@ -274,6 +279,7 @@ That's covered in [Async Writes](../advanced/async-writes.md).
 
 * `logger.add("app.log")` writes every message to `app.log`, appending to it, in UTF-8. Missing directories are created.
 * Each file has its own `level` and `format`. `set_level()` doesn't affect files.
-* Each line is in the file as soon as the logging call returns, so it survives a crash or a kill. `buffering=N` and `enqueue=True` batch the writes, about 3x faster, and `logger.complete()` (or a normal exit) writes what they hold.
+* File writes are buffered. `logger.complete()`, `logger.remove()` and a normal exit write what's pending, even with filters or callable sinks.
+* A killed process loses the unwritten lines: use `buffering=1` (one write per line, like loguru) or call `logger.complete()` at shutdown.
 * `mode="w"` starts a fresh file on every run, `delay=True` creates the file only when the first message arrives.
 * Files grow forever, unless you rotate them. That's the topic of the next chapter: [Rotation, Retention and Compression](rotation-retention.md).

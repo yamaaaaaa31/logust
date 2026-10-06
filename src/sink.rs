@@ -48,7 +48,7 @@ const TB: u64 = GB * 1024;
 #[cfg(unix)]
 static ATFORK_REGISTRATION: OnceLock<Result<(), i32>> = OnceLock::new();
 
-/// Every live `enqueue=True` sink and sync `buffering=N` sink: drained at
+/// Every live `enqueue=True` sink and buffered sync sink: drained at
 /// interpreter exit by [`flush_file_sinks_at_exit`]; the `enqueue=True` ones are
 /// also paused around `fork()` (Unix).
 static FLUSHED_SINK_REGISTRY: LazyLock<StdMutex<Vec<Weak<FileSinkInner>>>> =
@@ -193,10 +193,15 @@ pub struct FileSinkConfig {
     /// Defer creating/opening the file until the first message is written
     /// (loguru `delay=True`).
     pub delay: bool,
-    /// `None`: a sync sink writes each line to the file before the logging
-    /// call returns (`buffering=1`, the default). `Some(n)`: it keeps up to
-    /// `n` bytes in memory and writes them when the buffer is full, on
-    /// `complete()`, `remove()` and at exit. Ignored with `enqueue=True`.
+    /// `buffering=1`: a sync sink writes each line to the file before the
+    /// logging call returns, so it survives SIGTERM, `os._exit()` or a crash.
+    pub line_buffered: bool,
+    /// `buffering=N`: a sync sink keeps up to `n` bytes in memory and writes
+    /// them when the buffer is full, on `complete()`, `remove()` and at exit.
+    ///
+    /// The default (neither set) is an 8 KB buffer like `Some(8192)` for a
+    /// sink without rotation, and one write per line for a rotating sink.
+    /// Both are ignored with `enqueue=True`.
     pub buffer_size: Option<usize>,
 }
 
@@ -212,6 +217,7 @@ impl Default for FileSinkConfig {
             enqueue: false,
             truncate: false,
             delay: false,
+            line_buffered: false,
             buffer_size: None,
         }
     }
@@ -801,7 +807,8 @@ impl FileSink {
             truncate_on_open: AtomicBool::new(truncate_on_open),
         });
 
-        if inner.config.enqueue || inner.config.buffer_size.is_some() {
+        // Everything but `buffering=1` can hold lines in memory.
+        if inner.config.enqueue || !inner.config.line_buffered {
             register_flushed_sink(&inner);
         }
 
@@ -1025,21 +1032,20 @@ impl FileSinkInner {
                         .writer
                         .as_mut()
                         .ok_or_else(|| io::Error::other("sync backend writer missing"))?;
-                    // By default each line is flushed, so a logged line is in
-                    // the file (and survives SIGTERM, `os._exit()` or a crash)
-                    // once the call returns. `buffering=N` and `enqueue=True`
-                    // are the batched alternatives.
-                    let buffered = self.config.buffer_size.is_some();
-                    match (coordinate_rotation, buffered) {
-                        (true, false) => writer.write_line(&self.config.path, &message)?,
-                        (true, true) => {
-                            writer.write_line_buffered_sync(&self.config.path, &message)?
+                    // Rotating sinks write each line under the rotation lock
+                    // unless `buffering=N` asks for a buffer; other sinks
+                    // buffer unless `buffering=1` asks for one write per line.
+                    if coordinate_rotation {
+                        if self.config.buffer_size.is_some() {
+                            writer.write_line_buffered_sync(&self.config.path, &message)?;
+                        } else {
+                            writer.write_line(&self.config.path, &message)?;
                         }
-                        (false, false) => {
-                            writer.write_line_unlocked(&message)?;
+                    } else {
+                        writer.write_line_unlocked(&message)?;
+                        if self.config.line_buffered {
                             writer.flush_without_lock()?;
                         }
-                        (false, true) => writer.write_line_unlocked(&message)?,
                     }
                     None
                 }
@@ -1831,16 +1837,15 @@ fn register_flushed_sink(sink: &Arc<FileSinkInner>) {
 }
 
 /// Drain every live `enqueue=True` sink (wait until its writer thread has
-/// written and flushed everything queued so far) and flush every sync
-/// `buffering=N` sink.
+/// written and flushed everything queued so far) and flush every buffered
+/// sync sink.
 ///
 /// Registered with Python's `atexit` at import. Interpreter teardown is not a
 /// reliable place for this: a filter or callable sink that closes a reference
 /// cycle back to the logger (a `lambda` defined in `__main__` refers to that
 /// module's globals, which hold the logger) keeps the handlers alive past
-/// finalization, so their `Drop` never runs. Sync sinks with the default
-/// `buffering=1` need nothing here: every write is flushed before the logging
-/// call returns.
+/// finalization, so their `Drop` never runs. `buffering=1` sinks need nothing
+/// here: every write is flushed before the logging call returns.
 pub fn flush_file_sinks_at_exit() {
     let sinks: Vec<Arc<FileSinkInner>> = {
         let mut registry = FLUSHED_SINK_REGISTRY

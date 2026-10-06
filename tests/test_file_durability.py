@@ -1,8 +1,10 @@
 """File sinks must not lose logged lines.
 
-* A synchronous file sink writes each line to the file before the logging call
-  returns, so it is visible to ``tail -f`` and survives SIGTERM, ``os._exit()``
-  or a crash without ``complete()``.
+* By default a sync file sink keeps lines in an 8 KB buffer (a rotating sink
+  writes each line); ``complete()``, ``remove()`` and a normal exit write it.
+* ``buffering=1`` writes each line to the file before the logging call returns,
+  so it is visible to ``tail -f`` and survives SIGTERM, ``os._exit()`` or a
+  crash without ``complete()``.
 * An ``enqueue=True`` sink reaches the file within ~100 ms, even under a steady
   trickle of messages, and is drained at normal exit.
 * Normal-exit flushing does not depend on the logger being freed during
@@ -37,7 +39,48 @@ def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8") if path.exists() else ""
 
 
-class TestSyncSinkWritesThrough:
+class TestDefaultIsBuffered:
+    def test_lines_wait_for_complete(self, session_logger: Logger, tmp_path: Path) -> None:
+        log_file = tmp_path / "app.log"
+        handler_id = session_logger.add(log_file, format="{message}")
+        try:
+            session_logger.info("first")
+            assert _read(log_file) == ""
+            session_logger.complete()
+            assert _read(log_file) == "first\n"
+        finally:
+            session_logger.remove(handler_id)
+
+    def test_rotating_sink_still_writes_each_line(
+        self, session_logger: Logger, tmp_path: Path
+    ) -> None:
+        log_file = tmp_path / "app.log"
+        handler_id = session_logger.add(log_file, format="{message}", rotation="10 MB")
+        try:
+            session_logger.info("first")
+            assert _read(log_file) == "first\n"
+        finally:
+            session_logger.remove(handler_id)
+
+    def test_os_exit_loses_the_buffer(self, tmp_path: Path) -> None:
+        # The documented trade-off of the default; buffering=1 avoids it.
+        log_file = tmp_path / "app.log"
+        result = _run(
+            """
+            import os, sys
+            logger.add(sys.argv[1], format="{message}")
+            logger.info("buffered")
+            os._exit(0)
+            """,
+            log_file,
+        )
+        assert result.returncode == 0, result.stderr
+        assert _read(log_file) == ""
+
+
+class TestLineBuffering:
+    """``buffering=1``: each line is in the file when the logging call returns."""
+
     @pytest.mark.parametrize(
         "options",
         [{}, {"rotation": "10 MB"}, {"filter": lambda r: True}],
@@ -47,7 +90,7 @@ class TestSyncSinkWritesThrough:
         self, session_logger: Logger, tmp_path: Path, options: dict[str, object]
     ) -> None:
         log_file = tmp_path / "app.log"
-        handler_id = session_logger.add(log_file, format="{message}", **options)  # type: ignore[arg-type]
+        handler_id = session_logger.add(log_file, format="{message}", buffering=1, **options)  # type: ignore[arg-type]
         try:
             session_logger.info("first")
             assert _read(log_file) == "first\n"
@@ -61,7 +104,7 @@ class TestSyncSinkWritesThrough:
         result = _run(
             """
             import os, sys
-            logger.add(sys.argv[1], format="{message}")
+            logger.add(sys.argv[1], format="{message}", buffering=1)
             logger.info("before exit")
             os._exit(0)
             """,
@@ -78,7 +121,7 @@ class TestSyncSinkWritesThrough:
         result = _run(
             """
             import os, signal, sys
-            logger.add(sys.argv[1], format="{message}")
+            logger.add(sys.argv[1], format="{message}", buffering=1)
             logger.info("shutting down")
             os.kill(os.getpid(), signal.SIGTERM)
             """,
@@ -247,15 +290,6 @@ class TestBuffering:
         )
         assert result.returncode == 0, result.stderr
         assert _read(log_file) == ""
-
-    def test_one_is_the_default(self, session_logger: Logger, tmp_path: Path) -> None:
-        log_file = tmp_path / "app.log"
-        handler_id = session_logger.add(log_file, format="{message}", buffering=1)
-        try:
-            session_logger.info("now")
-            assert _read(log_file) == "now\n"
-        finally:
-            session_logger.remove(handler_id)
 
     def test_ignored_with_enqueue(self, session_logger: Logger, tmp_path: Path) -> None:
         log_file = tmp_path / "app.log"

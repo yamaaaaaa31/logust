@@ -28,18 +28,18 @@ A fast, Rust-powered Python logging library inspired by [loguru](https://github.
 
 ## Benchmarks
 
-A recent release-build run of the included throughput suite (`benchmarks/bench_throughput.py`, 10,000 messages) produced the following snapshot:
+Release-build runs of the included throughput suite (`benchmarks/bench_throughput.py`, 10,000 messages) produced the following snapshot:
 
 | Scenario | logging | loguru | logust |
 |----------|---------|--------|--------|
-| File write (sync) | 69.68 ms | 81.39 ms | **22.86 ms** |
-| File write (sync, `buffering=65536`) | N/A | 53.54 ms | **7.55 ms** |
-| Formatted messages | 70.12 ms | 85.13 ms | **24.22 ms** |
-| JSON serialize | N/A | 167.82 ms | **25.43 ms** |
-| With context (sync) | N/A | 90.16 ms | **24.04 ms** |
-| File write (async + complete) | N/A | 448.00 ms | **6.87 ms** |
+| File write (sync) | 81.58 ms | 90.61 ms | **8.32 ms** |
+| File write (sync, one write per line) | 83.42 ms | 89.44 ms | **29.75 ms** |
+| Formatted messages | 82.34 ms | 106.49 ms | **8.80 ms** |
+| JSON serialize | N/A | 188.64 ms | **9.12 ms** |
+| With context (sync) | N/A | 88.73 ms | **7.12 ms** |
+| File write (async + complete) | N/A | 437.38 ms | **7.09 ms** |
 
-In the sync scenarios, all three libraries write each line to the file before the logging call returns, so logged lines survive a crash or a kill. With `buffering=65536` (lines batched in memory) or `enqueue=True` (batched in a background thread), `logust` finished in about 7 ms.
+Medians of three runs. `logust` buffers file writes by default; the "one write per line" row uses `buffering=1`, which writes each line before the logging call returns like `logging` and `loguru` do, so every logged line survives a kill.
 
 See `benchmarks/README.md` for reproduction steps and the [Benchmarks](https://yamaaaaaa31.github.io/logust/latest/about/benchmarks/) page in the docs.
 

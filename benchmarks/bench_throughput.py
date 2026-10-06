@@ -144,35 +144,36 @@ def benchmark_file_write() -> dict[str, float]:
     return results
 
 
-BUFFERING = 65536
+def benchmark_file_write_line_buffered() -> dict[str, float]:
+    """Benchmark sync file writes with one write per line (``buffering=1``).
 
-
-def benchmark_file_write_buffered() -> dict[str, float]:
-    """Benchmark sync file writes with a 64 KiB buffer instead of one write per line.
-
-    The standard ``logging.FileHandler`` always flushes each record, so only
-    loguru (which passes ``buffering`` to ``open()``) and logust are measured.
+    That's what ``logging.FileHandler`` and loguru (line-buffered files) do by
+    default, so this is the like-for-like comparison: each line is in the file
+    when the logging call returns. logust buffers 8 KB by default.
     """
-    results: dict[str, float] = {"logging": float("nan")}
+    results = {}
 
     with tempfile.TemporaryDirectory() as tmpdir:
         tmppath = Path(tmpdir)
 
-        try:
-            from loguru import logger as loguru_logger
+        py_logger = setup_python_logging(tmppath / "logging.log")
+        start = time.perf_counter()
+        for i in range(N):
+            py_logger.info("File message %d", i)
+        for handler in py_logger.handlers:
+            handler.flush()
+        results["logging"] = time.perf_counter() - start
 
-            loguru_logger.remove()
-            loguru_logger.add(str(tmppath / "loguru.log"), level="DEBUG", buffering=BUFFERING)
+        loguru_logger = setup_loguru(tmppath / "loguru.log")
+        if loguru_logger:
             start = time.perf_counter()
             for i in range(N):
                 loguru_logger.info("File message {}", i)
             loguru_logger.complete()
-            loguru_logger.remove()  # closes (and flushes) the file
             results["loguru"] = time.perf_counter() - start
-        except ImportError:
-            pass
+            loguru_logger.remove()
 
-        logust_logger = setup_logust(tmppath / "logust.log", buffering=BUFFERING)
+        logust_logger = setup_logust(tmppath / "logust.log", buffering=1)
         start = time.perf_counter()
         for i in range(N):
             logust_logger.info(f"File message {i}")
@@ -634,13 +635,13 @@ def run_all_benchmarks() -> None:
         results["callable_sink"] = benchmark_callable_sink_formatted_only()
         print(" done")
 
-        print(f"  [10/10] File write (sync, buffering={BUFFERING})...", end="", flush=True)
-        results["file_buffered"] = benchmark_file_write_buffered()
+        print("  [10/10] File write (sync, one write per line)...", end="", flush=True)
+        results["file_line"] = benchmark_file_write_line_buffered()
         print(" done")
 
     # Print all results
     print_results("File write (sync)", results["file"])
-    print_results(f"File write (sync, buffering={BUFFERING})", results["file_buffered"])
+    print_results("File write (sync, one write per line)", results["file_line"])
     print_results("Formatted", results["formatted"])
     print_results("JSON serialize", results["json"])
     print_results("With context (sync)", results["context"])
@@ -696,10 +697,10 @@ class TestBenchmark:
         assert "logust" in results
         assert results["logust"] > 0
 
-    def test_file_write_buffered(self) -> None:
-        """Benchmark buffered file writing."""
-        results = benchmark_file_write_buffered()
-        print_results("File write (buffered)", results)
+    def test_file_write_line_buffered(self) -> None:
+        """Benchmark file writing with one write per line."""
+        results = benchmark_file_write_line_buffered()
+        print_results("File write (one write per line)", results)
         assert "logust" in results
         assert results["logust"] > 0
 

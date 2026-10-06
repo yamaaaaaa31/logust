@@ -133,7 +133,7 @@ Adds a handler and returns its ID.
 | `catch` | `bool | None` | `None` | Sink errors. `None`: drop silently. `True`: print a report to stderr. `False`: raise from the logging call. See [Sink Errors](../advanced/sink-errors.md). |
 | `backtrace` | `bool` | `False` | Logged tracebacks also show the frames above the catch point. |
 | `diagnose` | `bool` | `False` | Logged tracebacks also show variable values (can leak secrets). See [Tracebacks](../advanced/tracebacks.md). |
-| `buffering` | `int | None` | `None` | Files only, as in `open()`. `None` or `1`: write each line before the logging call returns. `N > 1`: keep up to `N` bytes in memory, written when the buffer is full, on `complete()`, `remove()` and at normal exit. Negative: 8192 bytes. `0` raises `ValueError`. Ignored with `enqueue=True`. See [When it's written](../tutorial/file-output.md#make-sure-its-written). |
+| `buffering` | `int | None` | `None` | Files only, as in `open()`. `None`: an 8 KB buffer (a file with `rotation` writes each line). `1`: write each line before the logging call returns, like loguru, so it survives a kill. `N > 1`: a buffer of `N` bytes. Negative: 8192 bytes. `0` raises `ValueError`. Buffers are written when full, on `complete()`, `remove()` and at normal exit. Ignored with `enqueue=True`. See [When it's written](../tutorial/file-output.md#make-sure-its-written). |
 
 Raises:
 
@@ -162,7 +162,7 @@ Removes the handler with that ID, or **all** handlers (the console handler inclu
 logger.complete() -> None
 ```
 
-Waits until the messages queued by `enqueue=True` file sinks are written and flushed, and writes what `buffering=N` file sinks hold in memory. Sync file sinks with the default `buffering` write each line before the logging call returns, so they have nothing pending. Logust does the same at normal interpreter exit; call it yourself before reading your log files or before an exit that skips cleanup. See [When it's written](../tutorial/file-output.md#make-sure-its-written).
+Writes what sync file sinks hold in their buffer, and waits until the messages queued by `enqueue=True` file sinks are written and flushed. Sinks with `buffering=1` have nothing pending. Logust does the same at normal interpreter exit; call it yourself before reading your log files or before an exit that skips cleanup. See [When it's written](../tutorial/file-output.md#make-sure-its-written).
 
 ### Level control { #level-control }
 

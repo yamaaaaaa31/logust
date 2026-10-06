@@ -91,8 +91,9 @@ class PyLogger:
         ``"gz"``, ``"bz2"``, ``"zip"``, ``"tar"``, ``"tar.gz"``, ``"tar.bz2"``.
         ``mode`` is ``"a"`` (default) or ``"w"``. ``catch``: ``None`` drops
         write errors, ``True`` reports them to stderr, ``False`` raises.
-        ``buffering``: ``1`` (default) writes each line, ``N > 1`` buffers up
-        to ``N`` bytes, negative means 8192, ``0`` raises ``ValueError``.
+        ``buffering``: ``None`` (default) buffers 8 KB (each line with
+        rotation), ``1`` writes each line, ``N > 1`` buffers up to ``N``
+        bytes, negative means 8192, ``0`` raises ``ValueError``.
         """
         ...
 
@@ -482,7 +483,7 @@ def level_details(level: str) -> tuple[int, str] | None:
     ...
 
 def _flush_file_sinks_at_exit() -> None:
-    """Drain ``enqueue=True`` and flush ``buffering=N`` file sinks (``atexit``, at import)."""
+    """Drain ``enqueue=True`` and flush buffered file sinks (``atexit``, at import)."""
     ...
 
 def record_time_fields() -> tuple[datetime.datetime, str, datetime.timedelta]:

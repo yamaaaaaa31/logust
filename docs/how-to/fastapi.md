@@ -317,9 +317,12 @@ You can find the full event contract and more examples in [Canonical Events](../
 
 When Uvicorn receives `SIGTERM` (the signal Docker and Kubernetes send to stop a container), it shuts the app down gracefully and then ends the process with that same signal, which skips Python's normal exit steps (`atexit` handlers included).
 
-With the default sync file sinks, that's fine: each line is written to the file before the logging call returns, see [When it's written](../tutorial/file-output.md#make-sure-its-written). But messages still waiting in the queue of an [`enqueue=True`](../advanced/async-writes.md) sink would be **lost**.
+File sinks buffer their writes, and the buffer is written at a normal exit, which this skips. So the last messages written to files, like Uvicorn's own shutdown messages, can be **lost**. See [When it's written](../tutorial/file-output.md#make-sure-its-written).
 
-So call [`logger.complete()`](../advanced/async-writes.md#complete-wait-for-the-writes) when the app shuts down, in the `lifespan`. It waits until the queued messages are written, and it costs nothing with sync sinks, so the shutdown stays safe if you switch to `enqueue=True` later:
+There are two ways to keep them:
+
+* Add the file sinks with `buffering=1`: each line is written before the logging call returns, so nothing is pending when the signal comes, as with loguru.
+* Or call [`logger.complete()`](../tutorial/file-output.md#make-sure-its-written) when the app shuts down, in the `lifespan`. It writes what file sinks hold, and waits for the queue of [`enqueue=True`](../advanced/async-writes.md) sinks:
 
 ```python
 @asynccontextmanager
@@ -331,7 +334,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 ```
 
-You will see it in the complete example below.
+You will see it in the complete example below. Lines logged after the `lifespan` ends (Uvicorn logs a few) are only safe with `buffering=1`.
 
 ## Complete example { #complete-example }
 
@@ -374,4 +377,4 @@ $ uvicorn main:app
 * Every request gets an ID: `get_request_id()` in your code, `extra["request_id"]` in every record.
 * Sensitive keys in bodies and query parameters are masked as `"***"` by default.
 * `canonical=True` logs one structured `http.request` event per request; add fields with `add_event_fields()` and sample with `sample_rate`, `slow_ms` or a `TailSampler`.
-* Call `logger.complete()` on shutdown so the queue of `enqueue=True` sinks is written before Uvicorn ends the process. Sync file sinks never lose a logged line.
+* Uvicorn ends the process with `SIGTERM`, which skips the exit-time flush: use `buffering=1` for file sinks, or call `logger.complete()` on shutdown, so file logs are not lost.

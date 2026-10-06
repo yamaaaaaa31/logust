@@ -67,7 +67,7 @@ Call `logger.complete()`:
 
 /// info
 
-Sync file sinks (the default) don't need any of this: each logging call writes its line to the file before it returns, see [When it's written](../tutorial/file-output.md#make-sure-its-written). `logger.complete()` is harmless for them, so you can call it at shutdown whatever your sinks are. The same advice applies to sync sinks with `buffering=N`, which keep lines in memory until their buffer is full.
+Sync file sinks (the default) also keep a small **in-memory buffer** (8 KB), to avoid one system call per message, and `logger.complete()` writes it too. So the advice above is good for every file sink, not only with `enqueue=True`. Use `buffering=1` for a sync sink that writes each line before the logging call returns, see [When it's written](../tutorial/file-output.md#make-sure-its-written).
 
 ///
 
@@ -77,34 +77,34 @@ A few details that are good to know:
 
 * Each `enqueue=True` sink has its own background **writer thread**.
 * The writer batches lines, and every line reaches the file at most **100 ms** after it was logged, even when messages keep coming. So `tail -f app.log` keeps up without `complete()`.
-* That batching is the trade-off: if the process is killed, the messages of the last ~100 ms, and anything still in the queue, are lost. Sync sinks don't have that window.
+* That batching is the trade-off: if the process is killed, the messages of the last ~100 ms, and anything still in the queue, are lost. Only a sync sink with `buffering=1` doesn't have such a window.
 * The queue holds up to **10,000** messages. If it's full, because the disk can't keep up, the logging call **waits** for room instead of dropping messages.
 * If the writer fails to write (disk full, permissions...), the error is printed to stderr, whatever the [`catch=` setting](sink-errors.md) is. With a queue, there's no logging call left to raise it from.
 
 ## Sync or async? { #sync-or-async }
 
-Logust's sync writes are already fast: the formatting and writing happen in Rust, and most of the time goes to the one `write()` system call per message that keeps each line safe. `enqueue=True` batches those system calls in a background thread, so it's faster still, but above all it's about **not blocking**.
+Logust's sync writes are already fast: the formatting and writing happen in Rust, and the writes are buffered. So you don't need `enqueue=True` to go fast. It's about **not blocking**.
 
 | | `enqueue=False` (default) | `enqueue=True` |
 |-|---------------------------|----------------|
 | Who writes | The calling thread | A background thread |
 | A slow disk... | ...slows down the logging call | ...is absorbed by the queue |
 | Errors | Can be [reported or raised](sink-errors.md) by the logging call | Printed to stderr by the writer thread |
-| Process killed (`SIGTERM`, `os._exit()`, crash) | Every logged line is in the file (up to `N` bytes lost with `buffering=N`) | The last ~100 ms of messages can be lost |
+| Process killed (`SIGTERM`, `os._exit()`, crash) | Up to 8 KB of lines can be lost, nothing with `buffering=1` | The last ~100 ms of messages can be lost |
 | Good for | Most apps, scripts, CLIs | Web servers, high-throughput services, slow or network storage |
 
-Here's the time spent in the **main thread** for 10,000 messages, in one run of the benchmark suite ([`benchmarks/bench_throughput.py`](https://github.com/yamaaaaaa31/logust/tree/main/benchmarks)):
+Here's the time spent in the **main thread** for 10,000 messages, as the median of three runs of the benchmark suite ([`benchmarks/bench_throughput.py`](https://github.com/yamaaaaaa31/logust/tree/main/benchmarks)):
 
 | Library | Sync | Async |
 |---------|------|-------|
-| loguru | 92.72 ms | 378.00 ms |
-| logust | 26.17 ms | 8.76 ms |
+| loguru | 86.60 ms | 370.86 ms |
+| logust | 8.25 ms | 9.06 ms |
 
-In that run, loguru's `enqueue=True` path was slower than its sync path, while Logust's async path took about a third of its sync time. Your numbers will depend on your machine and disk, see [Benchmarks](../about/benchmarks.md) to reproduce them.
+In that run, loguru's `enqueue=True` path was slower than its sync path, while Logust's async path stayed close to its sync latency. Your numbers will depend on your machine and disk, see [Benchmarks](../about/benchmarks.md) to reproduce them.
 
 /// tip
 
-Use `enqueue=True` when a **stalled disk must never stall your requests**. For a script or a CLI, the default is simpler, and errors surface where they happen. If you only want fewer system calls, `buffering=65536` batches the writes in the calling thread, see [Faster: buffering or a background thread](../tutorial/file-output.md#buffering). With `enqueue=True`, `buffering` is ignored.
+Use `enqueue=True` when a **stalled disk must never stall your requests**. For a script or a CLI, the default is simpler, and errors surface where they happen. With `enqueue=True`, `buffering` is ignored.
 
 ///
 
@@ -116,6 +116,6 @@ A process created with `fork()` never starts a writer thread: `enqueue=True` sin
 
 * `logger.add("app.log", enqueue=True)` writes in a background thread.
 * `logger.complete()` waits until all pending messages are written. Call it at shutdown and before reading your logs. Normal exits drain the queue on their own, killed processes don't.
-* Messages reach the file within ~100 ms. Sync sinks write each line before the call returns.
+* Messages reach the file within ~100 ms. A sync sink with `buffering=1` writes each line before the call returns.
 * The queue holds 10,000 messages, and waits instead of dropping when it's full.
-* `enqueue=True` is for not blocking and batching writes, Logust's sync writes are already fast.
+* `enqueue=True` is for not blocking, Logust's sync writes are already fast.

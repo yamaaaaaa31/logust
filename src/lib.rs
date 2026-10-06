@@ -545,7 +545,7 @@ impl PyLogger {
         buffering: Option<i64>,
     ) -> PyResult<u64> {
         let compression = extract_compression(compression)?;
-        let buffer_size = extract_buffer_size(buffering)?;
+        let (line_buffered, buffer_size) = extract_buffering(buffering)?;
         let truncate = extract_truncate(mode)?;
         let level = level.unwrap_or(LogLevel::Debug);
         let serialize = serialize.unwrap_or(false);
@@ -590,6 +590,7 @@ impl PyLogger {
             enqueue: enqueue.unwrap_or(false),
             truncate,
             delay: delay.unwrap_or(false),
+            line_buffered,
             buffer_size,
         };
 
@@ -2317,10 +2318,15 @@ fn apply_color_markup<'a>(text: &'a str, colorize: bool, base: &str) -> std::bor
 /// Largest accepted `buffering=` value (the buffer is allocated up front).
 const MAX_BUFFERING: i64 = 1 << 30;
 
-/// `buffering=` with `open()`'s meaning for a text file: `1` (or `None`) writes
-/// each line, `n > 1` buffers up to `n` bytes, a negative value means the
-/// default buffer size (`io.DEFAULT_BUFFER_SIZE`, 8192 bytes), and `0`
-/// (unbuffered, binary files only) is rejected.
+/// `buffering=` with `open()`'s meaning for a text file, as
+/// `(line_buffered, buffer_size)`: `1` writes each line, `n > 1` buffers up to
+/// `n` bytes, a negative value means the default buffer size
+/// (`io.DEFAULT_BUFFER_SIZE`, 8192 bytes), and `0` (unbuffered, binary files
+/// only) is rejected. `None` keeps the sink's default (see `FileSinkConfig`).
+fn extract_buffering(buffering: Option<i64>) -> PyResult<(bool, Option<usize>)> {
+    Ok((buffering == Some(1), extract_buffer_size(buffering)?))
+}
+
 fn extract_buffer_size(buffering: Option<i64>) -> PyResult<Option<usize>> {
     match buffering {
         None | Some(1) => Ok(None),
@@ -2336,7 +2342,7 @@ fn extract_buffer_size(buffering: Option<i64>) -> PyResult<Option<usize>> {
     }
 }
 
-/// Drain `enqueue=True` and flush `buffering=N` file sinks; `logust` registers
+/// Drain `enqueue=True` and flush buffered file sinks; `logust` registers
 /// this with `atexit`.
 #[pyfunction]
 fn _flush_file_sinks_at_exit() {

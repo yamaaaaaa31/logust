@@ -21,6 +21,7 @@ def report(values):
 
 report([4, 8, 15])
 
+logger.complete()
 print("--- debug.log ---")
 with open("debug.log") as f:
     print(f.read(), end="")

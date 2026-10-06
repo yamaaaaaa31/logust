@@ -184,9 +184,9 @@ class HandlerConfig(TypedDict, total=False):
                   Only valid for file sinks.
         delay: Create the file when the first message is written.
                Only valid for file sinks.
-        buffering: 1 (default) writes each line before the logging call
-                   returns, N > 1 buffers up to N bytes. Only valid for
-                   file sinks.
+        buffering: 1 writes each line before the logging call returns,
+                   N > 1 buffers up to N bytes (default: an 8 KB buffer).
+                   Only valid for file sinks.
         catch: Sink error policy: None drops errors silently (default),
                True reports them to stderr, False raises them.
         backtrace: Show frames above the catch point in logged tracebacks.

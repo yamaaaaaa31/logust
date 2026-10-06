@@ -88,7 +88,7 @@ __version__ = "0.5.0"
 
 logger = Logger(_rust_logger)
 
-# Drain ``enqueue=True`` and flush ``buffering=N`` file sinks at normal exit.
+# Drain ``enqueue=True`` and flush buffered file sinks at normal exit.
 # Registered at import, so it runs after any ``atexit`` handler the application
 # registers later (which may still log). Not left to interpreter teardown: a
 # filter or callable sink that refers back to the logger forms a reference
