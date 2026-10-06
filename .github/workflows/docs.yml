@@ -39,12 +39,12 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-mkdocs-material-mike
+          key: ${{ runner.os }}-pip-mkdocs-material-redirects-mike
           restore-keys: |
             ${{ runner.os }}-pip-
 
       - name: Install dependencies
-        run: pip install mkdocs-material mkdocstrings[python] mkdocs-minify-plugin mike
+        run: pip install mkdocs-material mkdocs-redirects mkdocs-minify-plugin mike
 
       - name: Resolve version
         id: version

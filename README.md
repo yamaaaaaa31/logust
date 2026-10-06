@@ -40,7 +40,7 @@ A recent release-build run of the included throughput suite (`benchmarks/bench_t
 
 In the same run, `logust` stayed in the 14-17 ms range for JSON serialization, context-bound logging, and async file writes, while `loguru` took roughly 2.6-3.1 s for those scenarios.
 
-See `benchmarks/README.md` for reproduction steps and `docs/comparison.md` for the full comparison.
+See `benchmarks/README.md` for reproduction steps and the [Benchmarks](https://yamaaaaaa31.github.io/logust/latest/about/benchmarks/) page in the docs.
 
 ## Installation
 
@@ -520,7 +520,7 @@ numeric, boolean, list, dict, and null extra values as native JSON types. Incomi
 `uuid4`-based request ID.
 `sample_rate` must be between `0.0` and `1.0`, and `slow_ms` must be non-negative.
 
-See [docs/guide/canonical-events.md](docs/guide/canonical-events.md) and
+See [the Canonical Events guide](https://yamaaaaaa31.github.io/logust/latest/advanced/canonical-events/) and
 [examples/08_fastapi_integration.py](examples/08_fastapi_integration.py) for the
 full contract and a runnable FastAPI app.
 

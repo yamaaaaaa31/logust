@@ -55,4 +55,4 @@ Mixing raw callbacks or filters changes what gets measured.
 
 ## Results
 
-See [Comparison](../docs/comparison.md) for latest benchmark results.
+See [Benchmarks](../docs/about/benchmarks.md) for latest benchmark results.

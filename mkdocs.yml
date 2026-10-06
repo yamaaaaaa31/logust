@@ -10,114 +10,164 @@ copyright: Copyright (c) 2025 yamaaaaaa31
 theme:
   name: material
   language: en
-  font:
-    text: Roboto
-    code: Roboto Mono
   palette:
+    - media: (prefers-color-scheme)
+      toggle:
+        icon: material/lightbulb-auto
+        name: Switch to light mode
     - media: "(prefers-color-scheme: light)"
       scheme: default
       primary: deep purple
-      accent: purple
+      accent: amber
       toggle:
-        icon: material/brightness-7
+        icon: material/lightbulb
         name: Switch to dark mode
     - media: "(prefers-color-scheme: dark)"
       scheme: slate
       primary: deep purple
-      accent: purple
+      accent: amber
       toggle:
-        icon: material/brightness-4
-        name: Switch to light mode
+        icon: material/lightbulb-outline
+        name: Switch to system preference
   features:
+    - content.code.annotate
+    - content.code.copy
+    - content.footnote.tooltips
+    - content.tabs.link
+    - content.tooltips
+    - content.action.edit
+    - navigation.footer
+    - navigation.indexes
     - navigation.instant
-    - navigation.tracking
+    - navigation.instant.prefetch
+    - navigation.instant.progress
+    - navigation.path
     - navigation.tabs
     - navigation.tabs.sticky
-    - navigation.sections
-    - navigation.expand
-    - navigation.path
-    - navigation.indexes
-    - toc.follow
     - navigation.top
-    - toc.integrate
-    - search.suggest
+    - navigation.tracking
     - search.highlight
     - search.share
-    - header.autohide
-    - content.code.copy
-    - content.code.annotate
-    - content.tabs.link
-    - content.footnote.tooltips
-    - content.action.edit
+    - search.suggest
+    - toc.follow
   icon:
-    repo: fontawesome/brands/github
+    repo: octicons/mark-github-24
     edit: material/pencil
-    view: material/eye
   logo: assets/logo.svg
-  favicon: assets/logo.svg
+  favicon: assets/favicon.svg
 
 nav:
-  - Home: index.md
-  - Getting Started:
-      - Installation: getting-started/installation.md
-      - Quick Start: getting-started/quick-start.md
-  - Guide:
-      - Log Levels: guide/levels.md
-      - File Output: guide/file-output.md
-      - Formatting: guide/formatting.md
-      - Context Binding: guide/context.md
-      - Exception Handling: guide/exceptions.md
-      - Integrations: guide/integrations.md
-      - Canonical Events: guide/canonical-events.md
-  - API Reference: api.md
-  - Comparison: comparison.md
+  - Logust: index.md
+  - features.md
+  - Learn:
+      - learn/index.md
+      - Tutorial - User Guide:
+          - tutorial/index.md
+          - tutorial/first-steps.md
+          - tutorial/log-levels.md
+          - tutorial/message-arguments.md
+          - tutorial/sinks.md
+          - tutorial/file-output.md
+          - tutorial/rotation-retention.md
+          - tutorial/formatting.md
+          - tutorial/json-output.md
+          - tutorial/context.md
+          - tutorial/exceptions.md
+          - tutorial/filters.md
+      - Advanced User Guide:
+          - advanced/index.md
+          - advanced/custom-levels.md
+          - advanced/records-and-patch.md
+          - advanced/opt.md
+          - advanced/callbacks.md
+          - advanced/library-logging.md
+          - advanced/tracebacks.md
+          - advanced/async-writes.md
+          - advanced/sink-errors.md
+          - advanced/threads-and-processes.md
+          - advanced/performance.md
+          - advanced/parsing.md
+          - advanced/canonical-events.md
+      - How To - Recipes:
+          - how-to/index.md
+          - how-to/intercept-standard-logging.md
+          - how-to/fastapi.md
+          - how-to/timing-decorators.md
+          - how-to/progress-bars.md
+          - how-to/migrate-from-loguru.md
+          - how-to/migrate-from-logging.md
+  - Reference: reference/index.md
+  - About:
+      - about/index.md
+      - about/alternatives.md
+      - about/benchmarks.md
+  - release-notes.md
 
 markdown_extensions:
-  - abbr
-  - pymdownx.arithmatex:
-      generic: true
-  - pymdownx.highlight:
-      anchor_linenums: true
-      line_spans: __span
-      pygments_lang_class: true
-  - pymdownx.betterem:
-      smart_enable: all
-  - pymdownx.caret
-  - pymdownx.emoji
-  - pymdownx.inlinehilite
-  - pymdownx.keys
-  - pymdownx.mark
-  - pymdownx.smartsymbols
-  - pymdownx.snippets
-  - pymdownx.superfences
-  - pymdownx.tabbed:
-      alternate_style: true
-  - admonition
-  - def_list
-  - pymdownx.details
-  - footnotes
-  - attr_list
-  - md_in_html
-  - pymdownx.tasklist:
-      custom_checkbox: true
-  - pymdownx.tilde
-  - tables
-  - toc:
-      permalink: true
-      permalink_title: Anchor link to this section
+  abbr:
+  attr_list:
+  def_list:
+  footnotes:
+  md_in_html:
+  tables:
+  toc:
+    permalink: true
+  pymdownx.betterem:
+    smart_enable: all
+  pymdownx.caret:
+  pymdownx.emoji:
+    emoji_index: !!python/name:material.extensions.emoji.twemoji
+    emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  pymdownx.highlight:
+    anchor_linenums: true
+    line_spans: __span
+    linenums_style: pymdownx-inline
+    pygments_lang_class: true
+  pymdownx.inlinehilite:
+  pymdownx.keys:
+  pymdownx.mark:
+  pymdownx.snippets:
+    base_path: ["."]
+    check_paths: true
+  pymdownx.superfences:
+    custom_fences:
+      - name: mermaid
+        class: mermaid
+        format: !!python/name:pymdownx.superfences.fence_code_format
+  pymdownx.tilde:
+  pymdownx.blocks.admonition:
+    types:
+      - note
+      - attention
+      - caution
+      - danger
+      - error
+      - tip
+      - hint
+      - warning
+      - info
+      - check
+  pymdownx.blocks.details:
+  pymdownx.blocks.tab:
+    alternate_style: true
 
 plugins:
-  - search:
-      separator: '[\\s\\-,:!=\\[\\]()\"`/]+|\\.(?!\\d)|&[lg]t;|(?!\\b)(?=[A-Z][a-z])'
+  - search
+  - redirects:
+      redirect_maps:
+        getting-started/installation.md: tutorial/index.md
+        getting-started/quick-start.md: tutorial/first-steps.md
+        guide/levels.md: tutorial/log-levels.md
+        guide/file-output.md: tutorial/file-output.md
+        guide/formatting.md: tutorial/formatting.md
+        guide/context.md: tutorial/context.md
+        guide/exceptions.md: tutorial/exceptions.md
+        guide/integrations.md: how-to/index.md
+        guide/canonical-events.md: advanced/canonical-events.md
+        api.md: reference/index.md
+        comparison.md: about/alternatives.md
   - minify:
       minify_html: true
-  - mkdocstrings:
-      handlers:
-        python:
-          options:
-            show_source: false
-            show_root_heading: true
-            heading_level: 2
 
 extra:
   generator: false
@@ -125,10 +175,15 @@ extra:
     provider: mike
     default: latest
   social:
-    - icon: fontawesome/brands/github
+    - icon: octicons/mark-github-24
       link: https://github.com/yamaaaaaa31/logust
     - icon: fontawesome/brands/python
       link: https://pypi.org/project/logust/
 
 extra_css:
-  - stylesheets/extra.css
+  - css/termynal.css
+  - css/custom.css
+
+extra_javascript:
+  - js/termynal.js
+  - js/custom.js
