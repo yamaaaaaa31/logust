@@ -2,7 +2,7 @@
 
 Live displays like <a href="https://rich.readthedocs.io/en/stable/progress.html" class="external-link" target="_blank">`rich.progress`</a> and <a href="https://tqdm.github.io" class="external-link" target="_blank">`tqdm`</a> redraw the progress bar in place, on the last lines of the terminal.
 
-Logust's default console handler writes straight to the process stdout. The progress bar library doesn't know about those lines, so they land in the middle of the bar, and you get a mess of half-drawn bars and log lines. 😱
+Logust's default console handler writes straight to the process stderr. The progress bar library doesn't know about those lines, so they land in the middle of the bar, and you get a mess of half-drawn bars and log lines. 😱
 
 The fix: replace the default handler with a **callable sink** that prints **through the progress bar's own API**. The library then clears the bar, prints your log line, and redraws the bar below it.
 
@@ -32,7 +32,7 @@ Processing ━━━━━━━━━━━━━━━━━━━━━━━
 
 Let's see the pieces:
 
-* `logger.remove()` removes the default console handler, so nothing writes to stdout behind rich's back.
+* `logger.remove()` removes the default console handler, so nothing writes to the terminal behind rich's back.
 * The sink is added **inside** `with Progress()`, because it needs the `progress` object.
 * `colorize=True` gives the line its level colors and renders the `<green>...</green>` [markup](../tutorial/formatting.md#colors-in-messages), as on the console. Callable sinks have no colors by default.
 * `Text.from_ansi()` turns the ANSI color codes into a rich `Text`. If you pass the plain string instead, rich parses it as **rich markup**, which mangles the ANSI codes.

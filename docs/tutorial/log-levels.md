@@ -202,19 +202,19 @@ Console enabled? False
 
 Here's what happened:
 
-* `logger.disable()` removed the console handler, so `"Nobody sees this"` went nowhere.
-* `logger.is_enabled()` tells you if there is a console handler.
-* `logger.enable(level="WARNING")` added the default console handler back, with `WARNING` as its minimum level. Without `level`, it starts again at `DEBUG`.
+* `logger.disable()` set the console handler aside, so `"Nobody sees this"` went nowhere.
+* `logger.is_enabled()` tells you if there is an active console handler.
+* `logger.enable(level="WARNING")` brought the console handler back, with `WARNING` as its minimum level. Without `level`, it keeps the level it had.
 
 This is handy in tests, or in a command line tool with a `--quiet` flag. Handlers that write to files keep working while the console is off.
 
-/// warning
+/// note | Technical Details
 
-`disable()` removes **every** console handler, including the ones you added for `sys.stdout` or `sys.stderr` with your own format. `enable()` then brings back the **default** handler, not yours.
+`disable()` switches off **every** console handler: the default one, and the ones you added for `sys.stdout` or `sys.stderr`. `enable()` brings back exactly those handlers, with their own format, filter and ID.
 
-If you need to switch a custom console handler on and off, keep its ID and use `remove()` and `add()`, as shown in [Handlers and Sinks](sinks.md).
+If there is no console handler to bring back (for example after `logger.remove()`), `enable()` adds the default handler, at `DEBUG` unless you pass a `level`.
 
-`enable(level=...)` only sets the level when it adds the handler back. If the console is already on, use `set_level()`.
+`enable(level=...)` sets the level of the console handlers even when the console is already on, like `set_level()`.
 
 ///
 

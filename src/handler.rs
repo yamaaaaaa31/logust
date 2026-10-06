@@ -969,13 +969,82 @@ pub struct ConsoleHandler {
     pub use_stderr: bool,
 }
 
+/// A non-empty environment variable (Python's truthy `os.getenv(name)`).
+fn env_is_set(name: &str) -> bool {
+    std::env::var_os(name).is_some_and(|v| !v.is_empty())
+}
+
+/// Whether running inside an IPython kernel whose `sys.stderr` is an
+/// `ipykernel` stream, which renders ANSI colors (loguru colorizes there).
+fn stderr_is_ipykernel_stream(py: Python<'_>) -> bool {
+    let check = || -> PyResult<bool> {
+        let builtins = py.import("builtins")?;
+        if !builtins
+            .getattr("__IPYTHON__")
+            .and_then(|v| v.is_truthy())
+            .unwrap_or(false)
+        {
+            return Ok(false);
+        }
+        let sys = py.import("sys")?;
+        let Some(iostream) = sys.getattr("modules")?.get_item("ipykernel.iostream").ok() else {
+            return Ok(false);
+        };
+        let out_stream = iostream.getattr("OutStream")?;
+        sys.getattr("stderr")?.is_instance(&out_stream)
+    };
+    check().unwrap_or(false)
+}
+
+/// Color decision for the default console handler (process stderr), made once
+/// when the handler is created. Same rules as `logger.add(sys.stderr)`, which
+/// ports loguru's `should_colorize`: `NO_COLOR`, `FORCE_COLOR`, Jupyter, known
+/// CI services, PyCharm, `TERM=dumb`, `TERM` on Windows, then `isatty`.
+pub fn stderr_should_colorize(py: Python<'_>) -> bool {
+    use std::io::IsTerminal;
+
+    if env_is_set("NO_COLOR") {
+        return false;
+    }
+    if env_is_set("FORCE_COLOR") {
+        return true;
+    }
+    if stderr_is_ipykernel_stream(py) {
+        return true;
+    }
+    if std::env::var_os("CI").is_some()
+        && [
+            "TRAVIS",
+            "CIRCLECI",
+            "APPVEYOR",
+            "GITLAB_CI",
+            "GITHUB_ACTIONS",
+        ]
+        .iter()
+        .any(|ci| std::env::var_os(ci).is_some())
+    {
+        return true;
+    }
+    if std::env::var_os("PYCHARM_HOSTED").is_some() {
+        return true;
+    }
+    match std::env::var_os("TERM") {
+        Some(term) if term == "dumb" => return false,
+        Some(_) if cfg!(windows) => return true,
+        _ => {}
+    }
+    io::stderr().is_terminal()
+}
+
 impl ConsoleHandler {
-    pub fn new(level: LogLevel) -> Self {
+    /// The default console handler: default format on stderr, as in loguru,
+    /// colored when [`stderr_should_colorize`] says so.
+    pub fn new(py: Python<'_>, level: LogLevel) -> Self {
         ConsoleHandler {
             level,
             format: FormatConfig::default(),
-            colorize: true,
-            use_stderr: false,
+            colorize: stderr_should_colorize(py),
+            use_stderr: true,
         }
     }
 

@@ -1918,7 +1918,10 @@ class Logger:
           submodules (``mylib.*``) after ``disable("mylib")``, as in loguru.
           ``enable("")`` removes every module rule.
         - ``enable()``, ``enable(LogLevel.Info)``, ``enable("INFO")`` or
-          ``enable(level="INFO")`` re-enables console output (logust behavior).
+          ``enable(level="INFO")`` re-enables console output (logust behavior):
+          the console handlers ``disable()`` switched off come back as they
+          were, or the default handler is added if there is none. A level
+          becomes the minimum level of every console handler.
           A built-in level name that ``disable(name)`` made a module rule for
           (a module called ``info``, say) re-enables that module instead.
 
@@ -1929,7 +1932,7 @@ class Logger:
 
         Args:
             name: Module name, built-in level, or None.
-            level: Minimum console level when re-enabling console output.
+            level: Minimum level for the console handlers.
         """
         if isinstance(name, str) and (
             name.lower() not in _LEVEL_VALUES or self._activation.has_rule(name)
@@ -1952,7 +1955,9 @@ class Logger:
           submodules (``mylib.*``), as in loguru. A more specific
           ``enable("mylib.sub")`` takes precedence. ``disable("")`` disables
           every module.
-        - ``disable()`` removes the console handler (logust behavior).
+        - ``disable()`` switches off every console handler, the default one
+          and those added for ``sys.stdout`` / ``sys.stderr``, until
+          ``enable()`` (logust behavior).
 
         Args:
             name: Module name, or None to disable console output.
