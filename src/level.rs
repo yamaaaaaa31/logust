@@ -482,10 +482,11 @@ mod tests {
 
     #[test]
     fn test_reregistering_with_a_new_no_drops_the_old_number() {
-        register_level(LevelInfo::new("RENUMBERED".into(), 35, None, None));
-        register_level(LevelInfo::new("RENUMBERED".into(), 36, None, None));
-        assert!(get_level_by_no(35).is_none());
-        assert_eq!(get_level_by_no(36).unwrap().name, "RENUMBERED");
+        // Numbers no other test registers: tests share the global registry.
+        register_level(LevelInfo::new("RENUMBERED".into(), 71, None, None));
+        register_level(LevelInfo::new("RENUMBERED".into(), 72, None, None));
+        assert!(get_level_by_no(71).is_none());
+        assert_eq!(get_level_by_no(72).unwrap().name, "RENUMBERED");
     }
 
     #[test]

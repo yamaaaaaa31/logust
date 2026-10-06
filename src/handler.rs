@@ -946,8 +946,13 @@ fn report_python_error(py: Python<'_>, handler_id: u64, record_repr: &str, err: 
         )?;
         let kwargs = pyo3::types::PyDict::new(py);
         kwargs.set_item("file", &stderr)?;
-        py.import("traceback")?
-            .call_method("print_exception", (err.value(py),), Some(&kwargs))?;
+        // Pass the traceback explicitly: before Python 3.12, PyO3 keeps it
+        // outside the exception object, so `value.__traceback__` is unset.
+        py.import("traceback")?.call_method(
+            "print_exception",
+            (err.get_type(py), err.value(py), err.traceback(py)),
+            Some(&kwargs),
+        )?;
         stderr.call_method1("write", ("--- End of logging error ---\n",))?;
         if let Ok(flush) = stderr.getattr("flush") {
             flush.call0()?;
