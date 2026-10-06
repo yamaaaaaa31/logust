@@ -13,12 +13,16 @@ import io
 import sys
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, TextIO, cast
 
 import pytest
 
-from logust import CallerInfo, CollectOptions, Logger, LogLevel
+from logust import CallerInfo, CollectOptions, FilterType, Logger, LogLevel
 from logust._logust import PyLogger
+
+# The console handlers (Rust writes to the process's stdout / stderr)
+STDOUT = cast("TextIO", sys.__stdout__)
+STDERR = cast("TextIO", sys.__stderr__)
 
 MODULES = ["app", "app.db", "app.db.pool", "appx", "lib", "lib.http", "__main__"]
 LEVELS = ["TRACE", "DEBUG", "INFO", "WARNING", "ERROR"]
@@ -125,7 +129,7 @@ class TestStrFilter:
         assert stream.getvalue().splitlines() == expected_for_str(module_filter)
 
     def test_console_sink(self, logger: Logger, capfd: pytest.CaptureFixture[str]) -> None:
-        logger.add(sys.__stdout__, level="TRACE", format="{message}", filter="app.db")
+        logger.add(STDOUT, level="TRACE", format="{message}", filter="app.db")
         emit_all(logger)
         assert capfd.readouterr().out.splitlines() == expected_for_str("app.db")
 
@@ -222,7 +226,7 @@ SINKS: dict[str, Callable[[Path], Any]] = {
     "file": lambda tmp: tmp / "out.log",
     "stream": lambda _tmp: io.StringIO(),
     "callable": lambda _tmp: lambda _m: None,
-    "console": lambda _tmp: sys.__stderr__,
+    "console": lambda _tmp: STDERR,
 }
 
 
@@ -336,7 +340,7 @@ class TestRaisingFilter:
 
     def test_custom_level_path(self, logger: Logger, capfd: pytest.CaptureFixture[str]) -> None:
         logger.level("NOTICE", no=25)
-        logger.add(sys.__stdout__, format="{message}", filter=raising_filter, catch=True)
+        logger.add(STDOUT, format="{message}", filter=raising_filter, catch=True)
         logger.log("NOTICE", "custom")
         captured = capfd.readouterr()
         assert captured.out == ""
@@ -347,7 +351,9 @@ class TestRaisingFilter:
             def __bool__(self) -> bool:
                 raise RuntimeError("no truth value")
 
-        logger.add(io.StringIO(), filter=lambda _r: Bad(), catch=False)
+        # Returns an object whose truth value raises (not a bool, on purpose)
+        bad_filter = cast("FilterType", lambda _r: Bad())
+        logger.add(io.StringIO(), filter=bad_filter, catch=False)
         with pytest.raises(RuntimeError, match="no truth value"):
             logger.info("x")
 
@@ -355,7 +361,7 @@ class TestRaisingFilter:
 class TestMatchesLoguru:
     """Same records kept as loguru for the same filter."""
 
-    @pytest.mark.parametrize("flt", [c[0] for c in STR_CASES] + DICT_CASES, ids=repr)
+    @pytest.mark.parametrize("flt", [*(c[0] for c in STR_CASES), *DICT_CASES], ids=repr)
     def test_matches_loguru(self, logger: Logger, flt: Any) -> None:
         loguru = pytest.importorskip("loguru")
         theirs: list[str] = []
@@ -364,9 +370,9 @@ class TestMatchesLoguru:
         try:
             for module in MODULES:
                 for level in LEVELS:
-                    loguru.logger.patch(
-                        lambda r, n=module: r.update(name=n)  # type: ignore[call-arg,misc]
-                    ).log(level, f"{module} {level}")
+                    loguru.logger.patch(lambda r, n=module: r.update(name=n)).log(
+                        level, f"{module} {level}"
+                    )
         finally:
             loguru.logger.remove()
 

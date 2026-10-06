@@ -30,7 +30,7 @@ from ._template import (
     ParsedCallableTemplate,
 )
 from ._traceback import capture_exception, current_exc_info
-from ._types import Level
+from ._types import FilterType, Level
 
 _F = TypeVar("_F", bound=Callable[..., Any])
 
@@ -204,17 +204,12 @@ def _collect_options_from_format(format_str: str) -> CollectOptions:
     )
 
 
-# What ``add(filter=...)`` accepts: a module name, a dict of minimum level per
-# module, or a callable that receives the record dict.
-_FilterArg = str | dict[str | None, str | int | bool] | Callable[[dict[str, Any]], bool] | None
-
-
-def _is_native_filter(filter: _FilterArg) -> bool:
+def _is_native_filter(filter: FilterType) -> bool:
     """String and dict filters, checked in Rust on the caller's module name."""
     return isinstance(filter, (str, dict))
 
 
-def _check_filter(filter: _FilterArg) -> None:
+def _check_filter(filter: FilterType) -> None:
     """Reject what loguru rejects (str and dict contents are checked in Rust)."""
     if filter is None or _is_native_filter(filter):
         return
@@ -1995,7 +1990,7 @@ class Logger:
         retention: str | int | None = None,
         compression: bool | str = False,
         serialize: bool = False,
-        filter: _FilterArg = None,
+        filter: FilterType = None,
         enqueue: bool = False,
         colorize: bool | None = None,
         collect: CollectOptions | None = None,
@@ -2125,7 +2120,7 @@ class Logger:
         retention: str | int | None,
         compression: bool | str,
         serialize: bool,
-        filter: _FilterArg,
+        filter: FilterType,
         enqueue: bool,
         colorize: bool | None,
         collect: CollectOptions | None,
@@ -2244,7 +2239,7 @@ class Logger:
         return handler_id
 
     def _track_handler(
-        self, handler_id: int, collect: CollectOptions | None, filter: _FilterArg
+        self, handler_id: int, collect: CollectOptions | None, filter: FilterType
     ) -> None:
         """Record a file / console handler's CollectOptions and filter kind."""
         # Always track handler with CollectOptions (default to auto-detect if not specified)
@@ -2312,7 +2307,7 @@ class Logger:
         level: LogLevel | str | None = None,
         format: str | None = None,
         serialize: bool = False,
-        filter: _FilterArg = None,
+        filter: FilterType = None,
         colorize: bool = False,
         catch: bool | None = None,
     ) -> int:
@@ -2339,8 +2334,12 @@ class Logger:
 
         # String / dict filters are checked in Rust before the sink is called;
         # only a callable filter runs in the wrappers below.
-        native_filter = filter if isinstance(filter, (str, dict)) else None
-        py_filter = None if isinstance(filter, (str, dict)) else filter
+        native_filter: str | dict[str | None, str | int | bool] | None = None
+        py_filter: Callable[[dict[str, Any]], bool] | None = None
+        if isinstance(filter, (str, dict)):
+            native_filter = cast("Any", filter)  # ty sees a callable dict subclass here
+        else:
+            py_filter = filter
 
         resolved_level = _to_log_level(level) if level is not None else None
         default_format = "{time} | {level:<8} | {name}:{function}:{line} - {message}"

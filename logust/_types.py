@@ -7,7 +7,8 @@ log records, callbacks, and configuration dictionaries.
 from __future__ import annotations
 
 import datetime
-from typing import Any, NamedTuple, Protocol, TextIO, TypedDict
+from collections.abc import Callable
+from typing import Any, NamedTuple, Protocol, TextIO, TypeAlias, TypedDict
 
 from ._record import RecordElapsed, RecordFile, RecordLevelStr, RecordProcess, RecordThread
 
@@ -126,6 +127,18 @@ class FilterCallback(Protocol):
     def __call__(self, record: dict[str, Any]) -> bool: ...
 
 
+FilterType: TypeAlias = (
+    str | dict[str | None, str | int | bool] | Callable[[dict[str, Any]], bool] | None
+)
+"""What ``add(filter=...)`` accepts (loguru's forms).
+
+- ``str``: a module name; keeps records from it and its submodules.
+- ``dict``: a minimum level per module (level name, number, ``True`` for all,
+  ``False`` for none), ``""`` being the default.
+- A callable receiving the record dict and returning True to keep it.
+"""
+
+
 class PatcherCallback(Protocol):
     """Protocol for patcher callback functions.
 
@@ -173,7 +186,8 @@ class HandlerConfig(TypedDict, total=False):
                      ("gz", "bz2", "zip", "tar", "tar.gz", "tar.bz2").
                      Only valid for file sinks.
         serialize: Output as JSON instead of text format.
-        filter: Filter callback function.
+        filter: Module name, dict of minimum level per module, or filter
+                callback function (see ``FilterType``).
         enqueue: Enable async writes (default False).
                  Only valid for file sinks.
         colorize: Enable ANSI color codes for console sinks.
@@ -197,7 +211,7 @@ class HandlerConfig(TypedDict, total=False):
     retention: str | int
     compression: bool | str
     serialize: bool
-    filter: FilterCallback
+    filter: FilterType
     enqueue: bool
     colorize: bool
     mode: str
