@@ -16,6 +16,7 @@ use serde::{Serialize, Serializer};
 use serde_json::{Map, Number, Value};
 
 use crate::clock::local_now;
+use crate::filter::RecordFilter;
 use crate::format::{FormatConfig, TokenRequirements};
 use crate::level::{LevelInfo, LogLevel};
 use crate::sink::FileSink;
@@ -839,15 +840,64 @@ impl CatchMode {
 pub struct HandlerEntry {
     pub id: u64,
     pub handler: HandlerType,
-    /// Optional filter callable (Python lambda/function)
-    pub filter: Option<Py<PyAny>>,
-    /// Error policy; only consulted when `handle` fails.
+    /// Optional `filter=`: a Python callable, or a string / dict filter checked in Rust
+    pub filter: Option<RecordFilter>,
+    /// Error policy; consulted when `handle` fails or the filter raises.
     pub catch: CatchMode,
     /// Traceback variant this handler gets (bit 0: backtrace, bit 1: diagnose)
     pub exc_variant: u8,
 }
 
 impl HandlerEntry {
+    /// The Python filter callable, if any (the only filter that needs the GIL).
+    #[inline]
+    pub fn python_filter(&self) -> Option<&Py<PyAny>> {
+        self.filter.as_ref().and_then(RecordFilter::as_python)
+    }
+
+    /// Whether a string / dict filter lets `record` through (true without one).
+    #[inline]
+    pub fn native_filter_passes(&self, record: &LogRecord) -> bool {
+        match self.filter.as_ref().and_then(RecordFilter::as_native) {
+            Some(f) => f.passes(&record.caller.name, record.level_no()),
+            None => true,
+        }
+    }
+
+    /// Format requirements, plus the caller's module name for a string / dict filter.
+    pub fn requirements(&self) -> TokenRequirements {
+        let mut req = self.handler.requirements();
+        if matches!(self.filter, Some(RecordFilter::Native(_))) {
+            req.needs_caller = true;
+        }
+        req
+    }
+
+    /// Apply the catch policy to a filter that raised: the record is dropped
+    /// (like loguru), and the error is ignored, reported or raised.
+    #[cold]
+    pub fn on_filter_error(
+        &self,
+        py: Python<'_>,
+        err: PyErr,
+        record: &LogRecord,
+        first_error: &mut Option<PyErr>,
+    ) {
+        match self.catch {
+            CatchMode::Silent => {}
+            CatchMode::Report => {
+                // Same "Record was:" line as this handler's write-error reports
+                let record = format!("{} | {}", record.level_name(), record.message);
+                report_python_error(py, self.id, &record, &err);
+            }
+            CatchMode::Raise => {
+                if first_error.is_none() {
+                    *first_error = Some(err);
+                }
+            }
+        }
+    }
+
     /// Apply the catch policy to a failed emit. Only reached on the error path.
     #[cold]
     pub fn on_error(&self, err: io::Error, record: &LogRecord, first_error: &mut Option<PyErr>) {
@@ -876,6 +926,34 @@ impl HandlerEntry {
             }
         }
     }
+}
+
+/// Print loguru's "Logging error" report for a Python exception to
+/// `sys.stderr` (with the traceback), like the Python side does for callable
+/// sinks. Errors while reporting (no stderr, a closed stream) are dropped.
+#[cold]
+fn report_python_error(py: Python<'_>, handler_id: u64, record_repr: &str, err: &PyErr) {
+    let _ = (|| -> PyResult<()> {
+        let stderr = py.import("sys")?.getattr("stderr")?;
+        if stderr.is_none() {
+            return Ok(());
+        }
+        stderr.call_method1(
+            "write",
+            (format!(
+                "--- Logging error in Logust Handler #{handler_id} ---\nRecord was: {record_repr}\n"
+            ),),
+        )?;
+        let kwargs = pyo3::types::PyDict::new(py);
+        kwargs.set_item("file", &stderr)?;
+        py.import("traceback")?
+            .call_method("print_exception", (err.value(py),), Some(&kwargs))?;
+        stderr.call_method1("write", ("--- End of logging error ---\n",))?;
+        if let Ok(flush) = stderr.getattr("flush") {
+            flush.call0()?;
+        }
+        Ok(())
+    })();
 }
 
 /// Console handler for terminal output

@@ -3,7 +3,12 @@
 import datetime
 from collections.abc import Callable
 from contextvars import ContextVar, Token
-from typing import Any
+from typing import Any, TypeAlias
+
+_NativeFilter: TypeAlias = str | dict[str | None, str | int | bool] | None
+"""A module name or a dict of minimum level per module, checked in Rust."""
+
+_Filter: TypeAlias = _NativeFilter | Callable[[dict[str, Any]], bool]
 
 CONTEXT_VAR: ContextVar[dict[str, Any] | None]
 """The ``contextualize()`` values of the current thread or task (unset outside a block)."""
@@ -77,7 +82,7 @@ class PyLogger:
         retention: str | None = None,
         compression: bool | str | None = None,
         serialize: bool | None = None,
-        filter: Callable[[dict[str, Any]], bool] | None = None,
+        filter: _Filter = None,
         enqueue: bool | None = None,
         colorize: bool | None = None,
         mode: str | None = None,
@@ -90,6 +95,8 @@ class PyLogger:
         ``"gz"``, ``"bz2"``, ``"zip"``, ``"tar"``, ``"tar.gz"``, ``"tar.bz2"``.
         ``mode`` is ``"a"`` (default) or ``"w"``. ``catch``: ``None`` drops
         write errors, ``True`` reports them to stderr, ``False`` raises.
+        ``filter`` is a module name, a dict of minimum level per module (both
+        checked in Rust) or a callable that receives the record dict.
         """
         ...
 
@@ -99,7 +106,7 @@ class PyLogger:
         level: LogLevel | None = None,
         format: str | None = None,
         serialize: bool | None = None,
-        filter: Callable[[dict[str, Any]], bool] | None = None,
+        filter: _Filter = None,
         colorize: bool | None = None,
         catch: bool | None = None,
     ) -> int:
@@ -162,6 +169,7 @@ class PyLogger:
         file_path: bool = False,
         raise_errors: bool = False,
         extra_repr: bool = False,
+        filter: _NativeFilter = None,
     ) -> int:
         """Add a callback to receive log records.
 
@@ -177,6 +185,7 @@ class PyLogger:
         callback: Callable[[dict[str, Any]], None],
         level: LogLevel | None = None,
         raise_errors: bool = False,
+        filter: _NativeFilter = None,
     ) -> int:
         """Add a serialized callable sink with typed JSON extras."""
         ...
@@ -188,6 +197,7 @@ class PyLogger:
         extra_keys: tuple[str, ...],
         level: LogLevel | None = None,
         raise_errors: bool = False,
+        filter: _NativeFilter = None,
     ) -> int:
         """Add a formatted callable sink (minimal record dict for templates)."""
         ...
