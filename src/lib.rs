@@ -1,5 +1,6 @@
 mod clock;
 mod collect;
+mod filter;
 mod format;
 mod handler;
 mod level;
@@ -19,6 +20,7 @@ use pyo3::prelude::*;
 use pyo3::sync::PyOnceLock;
 use pyo3::types::{PyDict, PyString, PyTuple};
 
+pub use filter::{NativeFilter, RecordFilter};
 pub use format::{FormatConfig, LOGGER_START_TIME, TokenRequirements, format_elapsed};
 pub use handler::{
     CallerInfo, CatchMode, ConsoleHandler, ExtraMap, ExtraValue, FileHandler, HandlerEntry,
@@ -153,6 +155,9 @@ pub struct CallbackEntry {
     pub raise_errors: bool,
     /// Traceback variant this sink gets (bit 0: backtrace, bit 1: diagnose)
     pub exc_variant: u8,
+    /// String / dict `filter=` of a callable sink, checked before calling it
+    /// (a callable filter runs in the Python wrapper instead).
+    pub filter: Option<NativeFilter>,
 }
 
 impl CallbackEntry {
@@ -162,6 +167,19 @@ impl CallbackEntry {
         if self.raise_errors && first_error.is_none() {
             *first_error = Some(err);
         }
+    }
+}
+
+/// `filter=` of a file / console handler.
+fn record_filter_arg(filter: Option<&Bound<'_, PyAny>>) -> PyResult<Option<RecordFilter>> {
+    filter.map_or(Ok(None), RecordFilter::from_py)
+}
+
+/// `filter=` of a callable sink: only string / dict filters reach Rust.
+fn native_filter_arg(filter: Option<&Bound<'_, PyAny>>) -> PyResult<Option<NativeFilter>> {
+    match filter {
+        Some(f) if !f.is_none() => NativeFilter::from_py(f),
+        _ => Ok(None),
     }
 }
 
@@ -272,7 +290,7 @@ fn merge_token_requirements_for_emit_no(
     let mut combined = TokenRequirements::default();
     for entry in handlers.iter() {
         if emit_no >= entry.handler.level() as u32 {
-            combined = combined.merge(&entry.handler.requirements());
+            combined = combined.merge(&entry.requirements());
         }
     }
 
@@ -281,6 +299,8 @@ fn merge_token_requirements_for_emit_no(
         if emit_no < entry.level as u32 {
             continue;
         }
+        // String / dict filters read the caller's module name
+        combined.needs_caller |= entry.filter.is_some();
         match &entry.kind {
             CallbackKind::Raw { .. } | CallbackKind::Serialized => {
                 any_raw = true;
@@ -297,7 +317,7 @@ fn merge_token_requirements_for_emit_no(
 
     let has_filter = handlers
         .iter()
-        .any(|e| e.filter.is_some() && emit_no >= e.handler.level() as u32);
+        .any(|e| e.python_filter().is_some() && emit_no >= e.handler.level() as u32);
     if has_filter {
         combined = TokenRequirements::all();
     }
@@ -313,7 +333,7 @@ fn merge_handler_only_requirements_for_emit_no(
     let mut combined = TokenRequirements::default();
     for entry in handlers.iter() {
         if emit_no >= entry.handler.level() as u32 {
-            combined = combined.merge(&entry.handler.requirements());
+            combined = combined.merge(&entry.requirements());
         }
     }
     combined
@@ -536,13 +556,14 @@ impl PyLogger {
         retention: Option<String>,
         compression: Option<&Bound<'_, PyAny>>,
         serialize: Option<bool>,
-        filter: Option<Py<PyAny>>,
+        filter: Option<&Bound<'_, PyAny>>,
         enqueue: Option<bool>,
         colorize: Option<bool>,
         mode: Option<&str>,
         delay: Option<bool>,
         catch: Option<bool>,
     ) -> PyResult<u64> {
+        let filter = record_filter_arg(filter)?;
         let compression = extract_compression(compression)?;
         let truncate = extract_truncate(mode)?;
         let level = level.unwrap_or(LogLevel::Debug);
@@ -619,10 +640,11 @@ impl PyLogger {
         level: Option<LogLevel>,
         format: Option<String>,
         serialize: Option<bool>,
-        filter: Option<Py<PyAny>>,
+        filter: Option<&Bound<'_, PyAny>>,
         colorize: Option<bool>,
         catch: Option<bool>,
     ) -> PyResult<u64> {
+        let filter = record_filter_arg(filter)?;
         let level = level.unwrap_or(LogLevel::Debug);
         let serialize = serialize.unwrap_or(false);
         let colorize = colorize.unwrap_or(!serialize);
@@ -1113,7 +1135,7 @@ impl PyLogger {
     ///
     /// `file_path` adds the caller's source path as `file_path` to the dicts, and
     /// `extra_repr` the extra dict rendered for `{extra}` as `extra_repr`.
-    #[pyo3(signature = (callback, level=None, file_path=false, raise_errors=false, extra_repr=false))]
+    #[pyo3(signature = (callback, level=None, file_path=false, raise_errors=false, extra_repr=false, filter=None))]
     fn add_callback(
         &self,
         callback: Py<PyAny>,
@@ -1121,7 +1143,9 @@ impl PyLogger {
         file_path: bool,
         raise_errors: bool,
         extra_repr: bool,
-    ) -> u64 {
+        filter: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<u64> {
+        let filter = native_filter_arg(filter)?;
         let id = handler::next_handler_id();
         let entry = CallbackEntry {
             id,
@@ -1133,21 +1157,24 @@ impl PyLogger {
             },
             raise_errors,
             exc_variant: 0,
+            filter,
         };
         self.callbacks.write().push(entry);
         self.update_min_level_cache();
         self.update_requirements_cache();
-        id
+        Ok(id)
     }
 
     /// Add a serialized callable sink callback (full record dict with typed JSON extras).
-    #[pyo3(signature = (callback, level=None, raise_errors=false))]
+    #[pyo3(signature = (callback, level=None, raise_errors=false, filter=None))]
     fn add_serialized_callback(
         &self,
         callback: Py<PyAny>,
         level: Option<LogLevel>,
         raise_errors: bool,
-    ) -> u64 {
+        filter: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<u64> {
+        let filter = native_filter_arg(filter)?;
         let id = handler::next_handler_id();
         let entry = CallbackEntry {
             id,
@@ -1156,15 +1183,16 @@ impl PyLogger {
             kind: CallbackKind::Serialized,
             raise_errors,
             exc_variant: 0,
+            filter,
         };
         self.callbacks.write().push(entry);
         self.update_min_level_cache();
         self.update_requirements_cache();
-        id
+        Ok(id)
     }
 
     /// Add a formatted callable sink callback (minimal dict + Python `ParsedCallableTemplate`).
-    #[pyo3(signature = (callback, requirements, extra_keys, level=None, raise_errors=false))]
+    #[pyo3(signature = (callback, requirements, extra_keys, level=None, raise_errors=false, filter=None))]
     fn add_formatted_sink_callback(
         &self,
         callback: Py<PyAny>,
@@ -1172,7 +1200,9 @@ impl PyLogger {
         extra_keys: Bound<'_, PyTuple>,
         level: Option<LogLevel>,
         raise_errors: bool,
+        filter: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<u64> {
+        let filter = native_filter_arg(filter)?;
         let req = FormattedSinkRequirements::from_python_tuples(&requirements, &extra_keys)?;
         let id = handler::next_handler_id();
         let entry = CallbackEntry {
@@ -1182,6 +1212,7 @@ impl PyLogger {
             kind: CallbackKind::FormattedLight(req),
             raise_errors,
             exc_variant: 0,
+            filter,
         };
         self.callbacks.write().push(entry);
         self.update_min_level_cache();
@@ -1576,7 +1607,7 @@ impl PyLogger {
 
         // Merge requirements from all handlers (this is the handler-only requirements)
         for entry in handlers.iter() {
-            let req = entry.handler.requirements();
+            let req = entry.requirements();
             handler_only = handler_only.merge(&req);
         }
 
@@ -1704,7 +1735,7 @@ impl PyLogger {
         for e in handlers.iter() {
             if level >= e.handler.level() {
                 has_eligible_handler = true;
-                if e.filter.is_some() {
+                if e.python_filter().is_some() {
                     has_eligible_filtered_handler = true;
                 }
             }
@@ -1777,6 +1808,11 @@ impl PyLogger {
                     if level < entry.level {
                         continue;
                     }
+                    if let Some(f) = &entry.filter
+                        && !f.passes(&record.caller.name, record.level_no())
+                    {
+                        continue;
+                    }
                     let rec = record_for(&record, alt, entry.exc_variant);
                     // Sinks given a different traceback than the record's get their own dict
                     let own_dict = !std::ptr::eq(rec, &record);
@@ -1821,15 +1857,24 @@ impl PyLogger {
                     if level < entry.handler.level() {
                         continue;
                     }
-                    if let Some(ref filter) = entry.filter
+                    if !entry.native_filter_passes(&record) {
+                        continue;
+                    }
+                    if let Some(filter) = entry.python_filter()
                         && let Some(full) = shared_text_full.as_ref()
                     {
-                        let passes = filter
+                        // A filter that raises drops the record (like loguru);
+                        // the error follows the handler's catch policy.
+                        match filter
                             .call1(py, (full.clone(),))
                             .and_then(|result| result.is_truthy(py))
-                            .unwrap_or(true);
-                        if !passes {
-                            continue;
+                        {
+                            Ok(true) => {}
+                            Ok(false) => continue,
+                            Err(err) => {
+                                entry.on_filter_error(py, err, &record, &mut first_error);
+                                continue;
+                            }
                         }
                     }
                     let rec = record_for(&record, alt, entry.exc_variant);
@@ -1840,6 +1885,9 @@ impl PyLogger {
             });
         } else {
             for entry in handlers.iter() {
+                if !entry.native_filter_passes(&record) {
+                    continue;
+                }
                 let rec = record_for(&record, alt, entry.exc_variant);
                 if let Err(err) = entry.handler.handle(rec) {
                     entry.on_error(err, rec, &mut first_error);
@@ -2103,7 +2151,7 @@ impl PyLogger {
         for e in handlers.iter() {
             if level_no >= e.handler.level() as u32 {
                 has_eligible_handler = true;
-                if e.filter.is_some() {
+                if e.python_filter().is_some() {
                     has_eligible_filtered_handler = true;
                 }
             }
@@ -2186,6 +2234,11 @@ impl PyLogger {
                     if level_no < entry.level as u32 {
                         continue;
                     }
+                    if let Some(f) = &entry.filter
+                        && !f.passes(&record.caller.name, record.level_no())
+                    {
+                        continue;
+                    }
                     let rec = record_for(&record, alt, entry.exc_variant);
                     // Sinks given a different traceback than the record's get their own dict
                     let own_dict = !std::ptr::eq(rec, &record);
@@ -2229,15 +2282,24 @@ impl PyLogger {
                     if level_no < entry.handler.level() as u32 {
                         continue;
                     }
-                    if let Some(ref filter) = entry.filter
+                    if !entry.native_filter_passes(&record) {
+                        continue;
+                    }
+                    if let Some(filter) = entry.python_filter()
                         && let Some(full) = shared_text_full.as_ref()
                     {
-                        let passes = filter
+                        // A filter that raises drops the record (like loguru);
+                        // the error follows the handler's catch policy.
+                        match filter
                             .call1(py, (full.clone(),))
                             .and_then(|result| result.is_truthy(py))
-                            .unwrap_or(true);
-                        if !passes {
-                            continue;
+                        {
+                            Ok(true) => {}
+                            Ok(false) => continue,
+                            Err(err) => {
+                                entry.on_filter_error(py, err, &record, &mut first_error);
+                                continue;
+                            }
                         }
                     }
                     let rec = record_for(&record, alt, entry.exc_variant);
@@ -2248,6 +2310,9 @@ impl PyLogger {
             });
         } else {
             for entry in handlers.iter() {
+                if !entry.native_filter_passes(&record) {
+                    continue;
+                }
                 let rec = record_for(&record, alt, entry.exc_variant);
                 if let Err(err) = entry.handler.handle(rec) {
                     entry.on_error(err, rec, &mut first_error);

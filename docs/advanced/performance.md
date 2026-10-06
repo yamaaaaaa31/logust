@@ -33,7 +33,7 @@ This works for every kind of sink: files, the console, and callable sinks. For a
 
 The information is collected **once per message**, and shared by all the handlers. So if one handler needs the caller, every handler pays for it. To keep the fast path, all of your handlers need to skip the caller fields.
 
-Filters (`filter=`) and [callbacks](callbacks.md) receive the full record, so a handler with a filter, or a callback, also makes Logust collect everything.
+Filter functions (`filter=`) and [callbacks](callbacks.md) receive the full record, so a handler with a filter function, or a callback, also makes Logust collect everything. A [string or dict filter](../tutorial/filters.md#filter-by-module) only needs the module name, so it only turns on the caller lookup.
 
 ///
 
@@ -111,7 +111,7 @@ logger.add("full.log", collect=CollectOptions(caller=True, thread=True, process=
 ## Performance tips { #performance-tips }
 
 1. **Keep hot-path formats simple.** Skip `{name}`, `{function}`, `{line}` and `{file}` in formats where you don't need them, in **all** the handlers. That includes the default console handler: its format shows the caller, so call `logger.remove()` before adding your own handlers. Only the handlers that accept a message's level count, so an `ERROR`-only handler with `{line}` doesn't slow down your `INFO` messages.
-2. **Avoid filters and callbacks on hot paths.** They need the full record, so they turn the caller lookup back on.
+2. **Avoid filter functions and callbacks on hot paths.** They need the full record, so they turn the caller lookup back on. To filter by module, use a string or dict filter: it is checked in Rust, without a Python call.
 3. **Use `CollectOptions`** to turn off what you don't need, or to provide fixed values.
 4. **Skip work for hidden messages.** Use [`opt(lazy=True)`](opt.md#lazy-evaluation) or `logger.is_level_enabled()` to avoid computing values for messages that won't be written.
 5. **Use `enqueue=True`** when a slow disk must not block your code (see [Async Writes](async-writes.md)). It doesn't make Logust faster, it moves the I/O to another thread.
@@ -122,5 +122,5 @@ For numbers comparing Logust with loguru and the standard `logging` module, see 
 
 * Looking up the caller is the most expensive part of a log call.
 * Logust reads your formats and only collects what they use.
-* The information is collected once per message, for all handlers, and filters and callbacks need everything.
+* The information is collected once per message, for all handlers, and filter functions and callbacks need everything.
 * `CollectOptions` turns collection off, forces it on, or provides fixed values.

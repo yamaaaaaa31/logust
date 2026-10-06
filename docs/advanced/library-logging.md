@@ -91,6 +91,12 @@ You can also set the rules with `logger.configure()`. They are applied in order:
 logger.configure(activation=[("mylib", False), ("mylib.api", True)])
 ```
 
+/// tip
+
+These rules are for **every** sink. To keep a library's messages out of one sink only, or to keep only its warnings, use a [string or dict filter](../tutorial/filters.md#filter-by-module) on that sink instead, like `filter={"mylib": "WARNING"}`. It matches module names the same way.
+
+///
+
 /// note | Technical Details
 
 While no module is disabled, logging calls skip this check entirely. Once a rule exists, each message looks up its module in a cache, so the cost is one frame lookup and one dictionary lookup.
