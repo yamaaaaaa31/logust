@@ -46,7 +46,30 @@ with logger.contextualize(request_id="abc"):
 logger.info("Outside")
 ```
 
+The values are context-local, as in loguru: they live in a
+[`contextvars`](https://docs.python.org/3/library/contextvars.html) variable, so each thread
+and each asyncio task sees only the blocks it entered itself (or inherited from the task
+that started it), and concurrent requests never pick up each other's values.
+
+```python
+async def handle(request_id: str) -> None:
+    with logger.contextualize(request_id=request_id):
+        logger.info("start")           # request_id of this task only
+        await asyncio.sleep(0.1)
+        logger.info("done")            # still this task's request_id
+
+await asyncio.gather(handle("a"), handle("b"))
+```
+
+Inside the block, every logger sees the values: the logger the block was opened on, loggers
+created with `bind()`, and the module-level functions (`logust.info(...)`). The block yields
+the logger it was opened on, so `with logger.contextualize(...) as log:` works too.
+
 ### Nested contexts
+
+Nested blocks merge their values; a key set again is overridden until the inner block
+exits, and each block restores the previous values when it exits (also when an exception
+leaves it).
 
 ```python
 with logger.contextualize(user_id="123"):
@@ -57,6 +80,33 @@ with logger.contextualize(user_id="123"):
 
     logger.info("Only user_id")
 ```
+
+### Precedence
+
+Values from different sources merge into `extra` in loguru's order; later sources win:
+
+1. `contextualize()` values of the current thread or task
+2. `bind()` values of the logger (and `configure(extra=...)`)
+3. The message's own keyword arguments (`logger.info("msg", key=value)`)
+
+```python
+with logger.contextualize(user="ctx"):
+    logger.bind(user="bound").info("...")        # extra: {'user': 'bound'}
+    logger.info("...", user="kw")                # extra: {'user': 'kw'}
+```
+
+### Threads, tasks and generators
+
+- An asyncio task created inside a block inherits the values (asyncio copies the context
+  when it starts a task) and keeps them even after the block exits. Blocks it opens itself
+  do not affect its parent.
+- A new `threading.Thread` starts without the values unless Python copies the context for
+  it (`sys.flags.thread_inherit_context`, on by default on free-threaded builds). To carry
+  them over, run the thread's target with `contextvars.copy_context().run(...)`.
+- A generator runs in its caller's context, so a block left open across a `yield` stays
+  visible to the caller until the generator resumes and exits it, as with loguru.
+- A plain `logger.info("msg")` inside a block stays on the Rust fast path: the merged
+  context is cached per thread, so logging inside a block costs the same as outside.
 
 ## patch() - Dynamic modification
 
