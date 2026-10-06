@@ -28,17 +28,18 @@ A fast, Rust-powered Python logging library inspired by [loguru](https://github.
 
 ## Benchmarks
 
-A recent release-build run of the included throughput suite (`benchmarks/bench_throughput.py`, 10,000 messages) produced the following snapshot:
+Release-build runs of the included throughput suite (`benchmarks/bench_throughput.py`, 10,000 messages) produced the following snapshot:
 
 | Scenario | logging | loguru | logust |
 |----------|---------|--------|--------|
-| File write (sync) | 963.57 ms | 2676.74 ms | **15.93 ms** |
-| Formatted messages | 966.38 ms | 2710.67 ms | **15.65 ms** |
-| JSON serialize | N/A | 2717.99 ms | **14.91 ms** |
-| With context (sync) | N/A | 2600.08 ms | **14.29 ms** |
-| File write (async + complete) | N/A | 3019.49 ms | **16.50 ms** |
+| File write (sync) | 81.58 ms | 90.61 ms | **8.32 ms** |
+| File write (sync, one write per line) | 83.42 ms | 89.44 ms | **29.75 ms** |
+| Formatted messages | 82.34 ms | 106.49 ms | **8.80 ms** |
+| JSON serialize | N/A | 188.64 ms | **9.12 ms** |
+| With context (sync) | N/A | 88.73 ms | **7.12 ms** |
+| File write (async + complete) | N/A | 437.38 ms | **7.09 ms** |
 
-In the same run, `logust` stayed in the 14-17 ms range for JSON serialization, context-bound logging, and async file writes, while `loguru` took roughly 2.6-3.1 s for those scenarios.
+Medians of three runs. `logust` buffers file writes by default; the "one write per line" row uses `buffering=1`, which writes each line before the logging call returns like `logging` and `loguru` do, so every logged line survives a kill.
 
 See `benchmarks/README.md` for reproduction steps and the [Benchmarks](https://yamaaaaaa31.github.io/logust/latest/about/benchmarks/) page in the docs.
 

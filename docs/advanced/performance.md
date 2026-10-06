@@ -115,6 +115,7 @@ logger.add("full.log", collect=CollectOptions(caller=True, thread=True, process=
 3. **Use `CollectOptions`** to turn off what you don't need, or to provide fixed values.
 4. **Skip work for hidden messages.** Use [`opt(lazy=True)`](opt.md#lazy-evaluation) or `logger.is_level_enabled()` to avoid computing values for messages that won't be written.
 5. **Use `enqueue=True`** when a slow disk must not block your code (see [Async Writes](async-writes.md)). It doesn't make Logust faster, it moves the I/O to another thread.
+6. **Keep the default buffering on hot paths.** `buffering=1` (one `write()` system call per line, like loguru) makes every line survive a kill, but the system call is most of the time of a file log call: about 2.5 µs per message instead of 0.9 µs with the default format, on an Apple Silicon Mac. Use it where losing the last lines on a kill matters more. See [When it's written](../tutorial/file-output.md#make-sure-its-written).
 
 For numbers comparing Logust with loguru and the standard `logging` module, see [Benchmarks](../about/benchmarks.md).
 

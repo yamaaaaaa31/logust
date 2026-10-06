@@ -2,7 +2,7 @@
 
 How fast is Logust, compared to the standard `logging` module and loguru? Here are the numbers. 🚀
 
-They come from one recent run of the benchmark suite in the repository (`benchmarks/bench_throughput.py`), with a **release** build, on the maintainer's machine. Your numbers will be different, but the proportions should be similar. You can [run them yourself](#run-the-benchmarks).
+They are the medians of three runs of the benchmark suite in the repository (`benchmarks/bench_throughput.py`), with a **release** build, on an Apple Silicon Mac with CPython 3.14. Your numbers will be different, but the proportions should be similar. You can [run them yourself](#run-the-benchmarks).
 
 ## What is measured { #what-is-measured }
 
@@ -14,12 +14,13 @@ The libraries are configured to write the same kind of line to a file: time, lev
 
 | Scenario | logging | loguru | logust |
 |----------|---------|--------|--------|
-| File write (sync) | 963.57 ms | 2676.74 ms | **15.93 ms** |
-| Formatted messages | 966.38 ms | 2710.67 ms | **15.65 ms** |
-| JSON serialize | N/A | 2717.99 ms | **14.91 ms** |
-| With context (sync) | N/A | 2600.08 ms | **14.29 ms** |
+| File write (sync) | 81.58 ms | 90.61 ms | **8.32 ms** |
+| File write (sync, one write per line) | 83.42 ms | 89.44 ms | **29.75 ms** |
+| Formatted messages | 82.34 ms | 106.49 ms | **8.80 ms** |
+| JSON serialize | N/A | 188.64 ms | **9.12 ms** |
+| With context (sync) | N/A | 88.73 ms | **7.12 ms** |
 
-In this run, Logust stayed in the mid-teens of milliseconds for sync file writes, formatted messages, JSON serialization and bound context.
+Logust buffers file writes by default (8 KB), while loguru and `logging` write each line before the logging call returns. The "one write per line" row compares like with like: Logust with `buffering=1`, so that every logged line survives a kill. The `write()` system call per message is then most of Logust's time. See [When it's written](../tutorial/file-output.md#make-sure-its-written).
 
 `N/A`: the standard `logging` module has no built-in JSON output or context binding, so those scenarios are not measured for it.
 
@@ -29,9 +30,9 @@ With `enqueue=True`, the file writes happen in a background thread. See [Async W
 
 | Scenario | loguru | logust |
 |----------|--------|--------|
-| File write (async + complete) | 3019.49 ms | **16.50 ms** |
-| With context (async + complete) | 3062.94 ms | **16.99 ms** |
-| Async non-blocking (no wait) | 3158.39 ms | **16.18 ms** |
+| File write (async + complete) | 437.38 ms | **7.09 ms** |
+| With context (async + complete) | 402.73 ms | **7.15 ms** |
+| Async non-blocking (no wait) | 425.22 ms | **6.88 ms** |
 
 ## Sync vs async latency { #sync-vs-async-latency }
 
@@ -39,10 +40,10 @@ This one measures the time spent in the **main thread** only. That's the real be
 
 | Library | Sync | Async |
 |---------|------|-------|
-| loguru | 2704.37 ms | 3225.03 ms |
-| logust | 15.01 ms | 17.20 ms |
+| loguru | 86.60 ms | 370.86 ms |
+| logust | 8.25 ms | 9.06 ms |
 
-In this run, loguru's `enqueue=True` path was slower than its sync path, while Logust's async path stayed close to its sync latency.
+In these runs, loguru's `enqueue=True` path was slower than its sync path, while Logust's async path stayed close to its sync latency.
 
 ## Run the benchmarks { #run-the-benchmarks }
 

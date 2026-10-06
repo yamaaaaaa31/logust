@@ -92,6 +92,7 @@ class PyLogger:
         mode: str | None = None,
         delay: bool | None = None,
         catch: bool | None = None,
+        buffering: int | None = None,
     ) -> int:
         """Add a file handler and return its ID.
 
@@ -99,6 +100,9 @@ class PyLogger:
         ``"gz"``, ``"bz2"``, ``"zip"``, ``"tar"``, ``"tar.gz"``, ``"tar.bz2"``.
         ``mode`` is ``"a"`` (default) or ``"w"``. ``catch``: ``None`` drops
         write errors, ``True`` reports them to stderr, ``False`` raises.
+        ``buffering``: ``None`` (default) buffers 8 KB (each line with
+        rotation), ``1`` writes each line, ``N > 1`` buffers up to ``N``
+        bytes, negative means 8192, ``0`` raises ``ValueError``.
         ``filter`` is a module name, a dict of minimum level per module (both
         checked in Rust) or a callable that receives the record dict.
         """
@@ -493,6 +497,10 @@ def level_style(level: str) -> str:
 
 def level_details(level: str) -> tuple[int, str] | None:
     """(no, icon) of the named level (icon is "" if it has none), or None if unknown."""
+    ...
+
+def _flush_file_sinks_at_exit() -> None:
+    """Drain ``enqueue=True`` and flush buffered file sinks (``atexit``, at import)."""
     ...
 
 def record_time_fields() -> tuple[datetime.datetime, str, datetime.timedelta]:

@@ -57,7 +57,7 @@ def setup_loguru(log_file: Path | None = None) -> Any:
         return None
 
 
-def setup_logust(log_file: Path | None = None) -> Any:
+def setup_logust(log_file: Path | None = None, **options: Any) -> Any:
     """Set up logust logger."""
     from logust import Logger, LogLevel
     from logust._logust import PyLogger
@@ -67,7 +67,7 @@ def setup_logust(log_file: Path | None = None) -> Any:
     logust_logger.disable()  # Disable console
 
     if log_file:
-        logust_logger.add(str(log_file))  # Uses sync writes (default)
+        logust_logger.add(str(log_file), **options)  # Uses sync writes (default)
 
     return logust_logger
 
@@ -135,6 +135,45 @@ def benchmark_file_write() -> dict[str, float]:
         # logust
         log_file = tmppath / "logust.log"
         logust_logger = setup_logust(log_file)
+        start = time.perf_counter()
+        for i in range(N):
+            logust_logger.info(f"File message {i}")
+        logust_logger.complete()
+        results["logust"] = time.perf_counter() - start
+
+    return results
+
+
+def benchmark_file_write_line_buffered() -> dict[str, float]:
+    """Benchmark sync file writes with one write per line (``buffering=1``).
+
+    That's what ``logging.FileHandler`` and loguru (line-buffered files) do by
+    default, so this is the like-for-like comparison: each line is in the file
+    when the logging call returns. logust buffers 8 KB by default.
+    """
+    results = {}
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmppath = Path(tmpdir)
+
+        py_logger = setup_python_logging(tmppath / "logging.log")
+        start = time.perf_counter()
+        for i in range(N):
+            py_logger.info("File message %d", i)
+        for handler in py_logger.handlers:
+            handler.flush()
+        results["logging"] = time.perf_counter() - start
+
+        loguru_logger = setup_loguru(tmppath / "loguru.log")
+        if loguru_logger:
+            start = time.perf_counter()
+            for i in range(N):
+                loguru_logger.info("File message {}", i)
+            loguru_logger.complete()
+            results["loguru"] = time.perf_counter() - start
+            loguru_logger.remove()
+
+        logust_logger = setup_logust(tmppath / "logust.log", buffering=1)
         start = time.perf_counter()
         for i in range(N):
             logust_logger.info(f"File message {i}")
@@ -486,16 +525,16 @@ def format_relative(base: float, target: float) -> str:
     if ratio > 1:
         return f"{ratio:.1f}x faster"
     else:
-        return f"{1/ratio:.1f}x slower"
+        return f"{1 / ratio:.1f}x slower"
 
 
 def print_results(name: str, results: dict[str, float]) -> None:
     """Print benchmark results in a table format."""
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f" {name} ({N:,} logs)")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
     print(f"{'Library':<15} {'Time':>12} {'vs logust':>15}")
-    print(f"{'-'*42}")
+    print(f"{'-' * 42}")
 
     logust_time = results.get("logust", float("nan"))
 
@@ -512,13 +551,13 @@ def print_results(name: str, results: dict[str, float]) -> None:
 
 def print_latency_comparison(results: dict[str, dict[str, float]]) -> None:
     """Print sync vs async latency comparison."""
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f" Sync vs Async Latency ({N:,} logs)")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
     print(" This shows main thread time only (async doesn't wait for I/O)")
-    print(f"{'-'*60}")
+    print(f"{'-' * 60}")
     print(f"{'Library':<12} {'Sync':>12} {'Async':>12} {'Speedup':>12}")
-    print(f"{'-'*48}")
+    print(f"{'-' * 48}")
 
     for lib in ["loguru", "logust"]:
         sync_time = results["sync"].get(lib, float("nan"))
@@ -560,44 +599,49 @@ def run_all_benchmarks() -> None:
 
         results = {}
 
-        print("  [1/9] File write (sync)...", end="", flush=True)
+        print("  [1/10] File write (sync)...", end="", flush=True)
         results["file"] = benchmark_file_write()
         print(" done")
 
-        print("  [2/9] Formatted...", end="", flush=True)
+        print("  [2/10] Formatted...", end="", flush=True)
         results["formatted"] = benchmark_formatted()
         print(" done")
 
-        print("  [3/9] JSON serialize...", end="", flush=True)
+        print("  [3/10] JSON serialize...", end="", flush=True)
         results["json"] = benchmark_json_serialize()
         print(" done")
 
-        print("  [4/9] With context (sync)...", end="", flush=True)
+        print("  [4/10] With context (sync)...", end="", flush=True)
         results["context"] = benchmark_with_context()
         print(" done")
 
-        print("  [5/9] File write (async)...", end="", flush=True)
+        print("  [5/10] File write (async)...", end="", flush=True)
         results["async"] = benchmark_async_write()
         print(" done")
 
-        print("  [6/9] With context (async)...", end="", flush=True)
+        print("  [6/10] With context (async)...", end="", flush=True)
         results["async_context"] = benchmark_async_with_context()
         print(" done")
 
-        print("  [7/9] Async non-blocking...", end="", flush=True)
+        print("  [7/10] Async non-blocking...", end="", flush=True)
         results["nonblocking"] = benchmark_async_nonblocking()
         print(" done")
 
-        print("  [8/9] Sync vs Async latency...", end="", flush=True)
+        print("  [8/10] Sync vs Async latency...", end="", flush=True)
         results["latency"] = benchmark_sync_vs_async_latency()
         print(" done")
 
-        print("  [9/9] Callable sink `{message}` only...", end="", flush=True)
+        print("  [9/10] Callable sink `{message}` only...", end="", flush=True)
         results["callable_sink"] = benchmark_callable_sink_formatted_only()
+        print(" done")
+
+        print("  [10/10] File write (sync, one write per line)...", end="", flush=True)
+        results["file_line"] = benchmark_file_write_line_buffered()
         print(" done")
 
     # Print all results
     print_results("File write (sync)", results["file"])
+    print_results("File write (sync, one write per line)", results["file_line"])
     print_results("Formatted", results["formatted"])
     print_results("JSON serialize", results["json"])
     print_results("With context (sync)", results["context"])
@@ -650,6 +694,13 @@ class TestBenchmark:
         """Benchmark file writing."""
         results = benchmark_file_write()
         print_results("File write", results)
+        assert "logust" in results
+        assert results["logust"] > 0
+
+    def test_file_write_line_buffered(self) -> None:
+        """Benchmark file writing with one write per line."""
+        results = benchmark_file_write_line_buffered()
+        print_results("File write (one write per line)", results)
         assert "logust" in results
         assert results["logust"] > 0
 

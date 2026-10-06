@@ -565,7 +565,7 @@ impl PyLogger {
 
     /// Add a file handler
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (path, level=None, format=None, rotation=None, retention=None, compression=None, serialize=None, filter=None, enqueue=None, colorize=None, mode=None, delay=None, catch=None))]
+    #[pyo3(signature = (path, level=None, format=None, rotation=None, retention=None, compression=None, serialize=None, filter=None, enqueue=None, colorize=None, mode=None, delay=None, catch=None, buffering=None))]
     fn add(
         &self,
         path: String,
@@ -581,9 +581,11 @@ impl PyLogger {
         mode: Option<&str>,
         delay: Option<bool>,
         catch: Option<bool>,
+        buffering: Option<i64>,
     ) -> PyResult<u64> {
         let filter = record_filter_arg(filter)?;
         let compression = extract_compression(compression)?;
+        let (line_buffered, buffer_size) = extract_buffering(buffering)?;
         let truncate = extract_truncate(mode)?;
         let level = level.unwrap_or(LogLevel::Debug);
         let serialize = serialize.unwrap_or(false);
@@ -628,6 +630,8 @@ impl PyLogger {
             enqueue: enqueue.unwrap_or(false),
             truncate,
             delay: delay.unwrap_or(false),
+            line_buffered,
+            buffer_size,
         };
 
         let sink = FileSink::new(config)
@@ -2409,6 +2413,40 @@ fn apply_color_markup<'a>(text: &'a str, colorize: bool, base: &str) -> std::bor
     format::apply_color_markup_within(text, colorize, base)
 }
 
+/// Largest accepted `buffering=` value (the buffer is allocated up front).
+const MAX_BUFFERING: i64 = 1 << 30;
+
+/// `buffering=` with `open()`'s meaning for a text file, as
+/// `(line_buffered, buffer_size)`: `1` writes each line, `n > 1` buffers up to
+/// `n` bytes, a negative value means the default buffer size
+/// (`io.DEFAULT_BUFFER_SIZE`, 8192 bytes), and `0` (unbuffered, binary files
+/// only) is rejected. `None` keeps the sink's default (see `FileSinkConfig`).
+fn extract_buffering(buffering: Option<i64>) -> PyResult<(bool, Option<usize>)> {
+    Ok((buffering == Some(1), extract_buffer_size(buffering)?))
+}
+
+fn extract_buffer_size(buffering: Option<i64>) -> PyResult<Option<usize>> {
+    match buffering {
+        None | Some(1) => Ok(None),
+        Some(0) => Err(pyo3::exceptions::PyValueError::new_err(
+            "buffering=0 is not supported: log files are text files, which can't be \
+             unbuffered (as with open()); use buffering=1 to write each line",
+        )),
+        Some(n) if n < 0 => Ok(Some(8192)),
+        Some(n) if n > MAX_BUFFERING => Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "buffering={n} is too large (at most {MAX_BUFFERING} bytes)"
+        ))),
+        Some(n) => Ok(Some(n as usize)),
+    }
+}
+
+/// Drain `enqueue=True` and flush buffered file sinks; `logust` registers
+/// this with `atexit`.
+#[pyfunction]
+fn _flush_file_sinks_at_exit() {
+    sink::flush_file_sinks_at_exit();
+}
+
 /// Style `text` in the bold color of the level `level`.
 #[pyfunction]
 fn colorize_level(text: &str, level: &str) -> String {
@@ -2483,6 +2521,7 @@ fn _logust(py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     m.add_function(wrap_pyfunction!(apply_color_markup, m)?)?;
     m.add_function(wrap_pyfunction!(colorize_level, m)?)?;
+    m.add_function(wrap_pyfunction!(_flush_file_sinks_at_exit, m)?)?;
     m.add_function(wrap_pyfunction!(split_format_markup, m)?)?;
     m.add_function(wrap_pyfunction!(level_style, m)?)?;
     m.add_function(wrap_pyfunction!(level_details, m)?)?;

@@ -8,11 +8,12 @@ use std::os::unix::fs::MetadataExt;
 use std::os::windows::io::AsRawHandle;
 use std::path::{Path, PathBuf};
 #[cfg(unix)]
+use std::sync::OnceLock;
+#[cfg(unix)]
 use std::sync::TryLockError;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
-#[cfg(unix)]
-use std::sync::{LazyLock, OnceLock, Weak};
+use std::sync::{LazyLock, Weak};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -47,8 +48,10 @@ const TB: u64 = GB * 1024;
 #[cfg(unix)]
 static ATFORK_REGISTRATION: OnceLock<Result<(), i32>> = OnceLock::new();
 
-#[cfg(unix)]
-static ASYNC_SINK_REGISTRY: LazyLock<StdMutex<Vec<Weak<FileSinkInner>>>> =
+/// Every live `enqueue=True` sink and buffered sync sink: drained at
+/// interpreter exit by [`flush_file_sinks_at_exit`]; the `enqueue=True` ones are
+/// also paused around `fork()` (Unix).
+static FLUSHED_SINK_REGISTRY: LazyLock<StdMutex<Vec<Weak<FileSinkInner>>>> =
     LazyLock::new(|| StdMutex::new(Vec::new()));
 
 /// PID of the process that imported the extension. A different PID later means
@@ -190,6 +193,16 @@ pub struct FileSinkConfig {
     /// Defer creating/opening the file until the first message is written
     /// (loguru `delay=True`).
     pub delay: bool,
+    /// `buffering=1`: a sync sink writes each line to the file before the
+    /// logging call returns, so it survives SIGTERM, `os._exit()` or a crash.
+    pub line_buffered: bool,
+    /// `buffering=N`: a sync sink keeps up to `n` bytes in memory and writes
+    /// them when the buffer is full, on `complete()`, `remove()` and at exit.
+    ///
+    /// The default (neither set) is an 8 KB buffer like `Some(8192)` for a
+    /// sink without rotation, and one write per line for a rotating sink.
+    /// Both are ignored with `enqueue=True`.
+    pub buffer_size: Option<usize>,
 }
 
 impl Default for FileSinkConfig {
@@ -204,6 +217,8 @@ impl Default for FileSinkConfig {
             enqueue: false,
             truncate: false,
             delay: false,
+            line_buffered: false,
+            buffer_size: None,
         }
     }
 }
@@ -489,21 +504,35 @@ struct RotatingFileWriter {
 }
 
 impl RotatingFileWriter {
-    fn open(path: &Path, shared_identity: Option<Arc<SharedFileIdentity>>) -> io::Result<Self> {
+    fn open(
+        path: &Path,
+        shared_identity: Option<Arc<SharedFileIdentity>>,
+        buffer_size: Option<usize>,
+    ) -> io::Result<Self> {
         let file = FileSinkInner::open_log_file(path)?;
         let lock_file = FileSinkInner::open_rotation_lock_file(path)?;
-        Ok(Self::from_open_files(file, lock_file, shared_identity))
+        Ok(Self::from_open_files(
+            file,
+            lock_file,
+            shared_identity,
+            buffer_size,
+        ))
     }
 
     fn from_open_files(
         file: File,
         lock_file: File,
         shared_identity: Option<Arc<SharedFileIdentity>>,
+        buffer_size: Option<usize>,
     ) -> Self {
         let file_identity = FileIdentity::from_file(&file).ok();
+        let writer = match buffer_size {
+            Some(capacity) => BufWriter::with_capacity(capacity, file),
+            None => BufWriter::new(file),
+        };
 
         let writer = Self {
-            writer: BufWriter::new(file),
+            writer,
             lock_file: Arc::new(lock_file),
             file_identity,
             shared_identity,
@@ -518,10 +547,41 @@ impl RotatingFileWriter {
         self.writer.flush()
     }
 
-    /// Append `message` and a newline to the buffer (no fmt machinery)
+    /// True if `message` and its newline fit in the buffer's free space.
+    #[inline]
+    fn line_fits(&self, message: &str) -> bool {
+        self.writer.buffer().len() + message.len() < self.writer.capacity()
+    }
+
+    /// Append `message` and a newline to the buffer (no fmt machinery).
+    ///
+    /// A line is never split across two `write()` calls, so lines appended to
+    /// the same file by other processes can't land in the middle of it: the
+    /// buffer is written out first if the line doesn't fit, and a line larger
+    /// than the whole buffer goes to the file in a single write.
     fn write_line_unlocked(&mut self, message: &str) -> io::Result<()> {
+        if !self.line_fits(message) {
+            self.writer.flush()?;
+            if message.len() >= self.writer.capacity() {
+                let mut line = Vec::with_capacity(message.len() + 1);
+                line.extend_from_slice(message.as_bytes());
+                line.push(b'\n');
+                return self.writer.get_mut().write_all(&line);
+            }
+        }
         self.writer.write_all(message.as_bytes())?;
         self.writer.write_all(b"\n")
+    }
+
+    /// `buffering=N` with rotation: lines that fit go to the buffer without
+    /// touching the lock file; the buffer is written under the shared rotation
+    /// lock, after following a rotation done by another process.
+    fn write_line_buffered_sync(&mut self, path: &Path, message: &str) -> io::Result<()> {
+        if self.line_fits(message) {
+            return self.write_line_unlocked(message);
+        }
+        let _lock = self.acquire_shared_lock(path)?;
+        self.write_line_unlocked(message)
     }
 
     fn write_line_buffered(
@@ -581,9 +641,18 @@ impl RotatingFileWriter {
                 return Ok(false);
             }
 
-            self.writer.flush()?;
+            // Lines still buffered (`buffering=N`) go to the new file: the
+            // rotated one may already have been compressed and removed.
             let shared_identity = self.shared_identity.clone();
-            *self = Self::open(path, shared_identity)?;
+            let buffer_size = Some(self.writer.capacity());
+            let reopened = Self::open(path, shared_identity, buffer_size)?;
+            let previous = std::mem::replace(self, reopened);
+            let (_, pending) = previous.writer.into_parts();
+            if let Ok(pending) = pending
+                && !pending.is_empty()
+            {
+                self.writer.write_all(&pending)?;
+            }
             Ok(true)
         }
 
@@ -702,7 +771,7 @@ impl FileSink {
             WriterBackend::Sync(SyncWriterState { writer: None })
         } else {
             WriterBackend::Sync(SyncWriterState {
-                writer: Some(FileSinkInner::open_sync_writer(&path)?),
+                writer: Some(RotatingFileWriter::open(&path, None, config.buffer_size)?),
             })
         };
         let truncate_on_open = config.delay && config.truncate;
@@ -738,9 +807,9 @@ impl FileSink {
             truncate_on_open: AtomicBool::new(truncate_on_open),
         });
 
-        #[cfg(unix)]
-        if inner.config.enqueue {
-            register_async_sink(&inner);
+        // Everything but `buffering=1` can hold lines in memory.
+        if inner.config.enqueue || !inner.config.line_buffered {
+            register_flushed_sink(&inner);
         }
 
         Ok(FileSink { inner })
@@ -843,8 +912,8 @@ impl FileSinkInner {
         }
     }
 
-    fn open_sync_writer(path: &Path) -> io::Result<RotatingFileWriter> {
-        RotatingFileWriter::open(path, None)
+    fn open_sync_writer(&self) -> io::Result<RotatingFileWriter> {
+        RotatingFileWriter::open(&self.config.path, None, self.config.buffer_size)
     }
 
     fn create_async_writer_state(
@@ -852,7 +921,7 @@ impl FileSinkInner {
         coordinate_rotation: bool,
     ) -> io::Result<AsyncWriterState> {
         let file_identity = Arc::new(SharedFileIdentity::default());
-        let writer = RotatingFileWriter::open(path, Some(Arc::clone(&file_identity)))?;
+        let writer = RotatingFileWriter::open(path, Some(Arc::clone(&file_identity)), None)?;
         Ok(Self::spawn_async_writer(
             path.to_path_buf(),
             writer,
@@ -871,19 +940,32 @@ impl FileSinkInner {
 
         let writer_handle = thread::spawn(move || {
             let flush_interval = Duration::from_millis(ASYNC_FLUSH_INTERVAL_MS);
-            let mut last_flush = Instant::now();
+            // When the oldest line still sitting in the buffer was written;
+            // `None` while nothing is buffered. Every buffered line reaches the
+            // file at most `flush_interval` after it was written, whether the
+            // queue then goes idle (timeout) or keeps receiving lines.
+            let mut dirty_since: Option<Instant> = None;
             let mut batch_lock = None;
 
-            loop {
-                let timeout = if coordinate_rotation {
-                    flush_interval
-                        .checked_sub(last_flush.elapsed())
-                        .unwrap_or(Duration::ZERO)
+            let flush = |writer: &mut RotatingFileWriter,
+                         batch_lock: &mut Option<FileLockGuard>| {
+                if coordinate_rotation {
+                    let _ = writer.flush_buffered(&path, batch_lock);
                 } else {
-                    flush_interval
+                    let _ = writer.flush_without_lock();
+                }
+            };
+
+            loop {
+                let received = match dirty_since {
+                    Some(since) => {
+                        receiver.recv_timeout(flush_interval.saturating_sub(since.elapsed()))
+                    }
+                    // Nothing to flush: sleep until the next message.
+                    None => receiver.recv().map_err(|_| RecvTimeoutError::Disconnected),
                 };
 
-                match receiver.recv_timeout(timeout) {
+                match received {
                     Ok(WriterMessage::Write(msg)) => {
                         let result = if coordinate_rotation {
                             writer.write_line_buffered(&path, &msg, &mut batch_lock)
@@ -897,36 +979,23 @@ impl FileSinkInner {
                             let _ = writeln!(io::stderr(), "Failed to write to log: {}", err);
                         }
 
-                        if coordinate_rotation && last_flush.elapsed() >= flush_interval {
-                            let _ = writer.flush_buffered(&path, &mut batch_lock);
-                            last_flush = Instant::now();
+                        let since = *dirty_since.get_or_insert_with(Instant::now);
+                        if since.elapsed() >= flush_interval {
+                            flush(&mut writer, &mut batch_lock);
+                            dirty_since = None;
                         }
                     }
                     Ok(WriterMessage::Flush { ack }) => {
-                        if coordinate_rotation {
-                            let _ = writer.flush_buffered(&path, &mut batch_lock);
-                            last_flush = Instant::now();
-                        } else {
-                            let _ = writer.flush_without_lock();
-                        }
+                        flush(&mut writer, &mut batch_lock);
+                        dirty_since = None;
                         let _ = ack.send(());
                     }
                     Err(RecvTimeoutError::Timeout) => {
-                        if coordinate_rotation {
-                            if batch_lock.is_some() {
-                                let _ = writer.flush_buffered(&path, &mut batch_lock);
-                            }
-                            last_flush = Instant::now();
-                        } else {
-                            let _ = writer.flush_without_lock();
-                        }
+                        flush(&mut writer, &mut batch_lock);
+                        dirty_since = None;
                     }
                     Err(RecvTimeoutError::Disconnected) => {
-                        if coordinate_rotation {
-                            let _ = writer.flush_buffered(&path, &mut batch_lock);
-                        } else {
-                            let _ = writer.flush_without_lock();
-                        }
+                        flush(&mut writer, &mut batch_lock);
                         break;
                     }
                 }
@@ -963,10 +1032,20 @@ impl FileSinkInner {
                         .writer
                         .as_mut()
                         .ok_or_else(|| io::Error::other("sync backend writer missing"))?;
+                    // Rotating sinks write each line under the rotation lock
+                    // unless `buffering=N` asks for a buffer; other sinks
+                    // buffer unless `buffering=1` asks for one write per line.
                     if coordinate_rotation {
-                        writer.write_line(&self.config.path, &message)?;
+                        if self.config.buffer_size.is_some() {
+                            writer.write_line_buffered_sync(&self.config.path, &message)?;
+                        } else {
+                            writer.write_line(&self.config.path, &message)?;
+                        }
                     } else {
                         writer.write_line_unlocked(&message)?;
+                        if self.config.line_buffered {
+                            writer.flush_without_lock()?;
+                        }
                     }
                     None
                 }
@@ -1078,7 +1157,7 @@ impl FileSinkInner {
                     Self::stop_async_writer_locked(async_state, false);
                     self.apply_pending_truncate()?;
                     state.backend = WriterBackend::Sync(SyncWriterState {
-                        writer: Some(Self::open_sync_writer(&self.config.path)?),
+                        writer: Some(self.open_sync_writer()?),
                     });
                     self.creation_pid.store(current_pid, Ordering::Release);
                     self.sync_rotation_state_from_path();
@@ -1088,7 +1167,7 @@ impl FileSinkInner {
                         std::mem::forget(writer);
                     }
                     self.apply_pending_truncate()?;
-                    sync_state.writer = Some(Self::open_sync_writer(&self.config.path)?);
+                    sync_state.writer = Some(self.open_sync_writer()?);
                     self.creation_pid.store(current_pid, Ordering::Release);
                     self.sync_rotation_state_from_path();
                 }
@@ -1114,7 +1193,7 @@ impl FileSinkInner {
                     }
                 } else {
                     self.apply_pending_truncate()?;
-                    sync_state.writer = Some(Self::open_sync_writer(&self.config.path)?);
+                    sync_state.writer = Some(self.open_sync_writer()?);
                     self.creation_pid.store(current_pid, Ordering::Release);
                     self.sync_rotation_state_from_path();
                 }
@@ -1418,7 +1497,7 @@ impl FileSinkInner {
             }
             WriterBackend::Sync(sync_state) => {
                 self.apply_pending_truncate()?;
-                sync_state.writer = Some(Self::open_sync_writer(&self.config.path)?);
+                sync_state.writer = Some(self.open_sync_writer()?);
                 self.creation_pid
                     .store(std::process::id(), Ordering::Release);
                 self.sync_rotation_state_from_path();
@@ -1716,7 +1795,13 @@ impl Drop for FileSinkInner {
             }
             WriterBackend::Sync(sync_state) => {
                 if let Some(writer) = sync_state.writer.as_mut() {
-                    let _ = writer.flush_without_lock();
+                    // Buffered lines of a rotating sink follow a rotation done
+                    // by another process, as in `flush()`.
+                    let coordinate = Self::rotation_coordination_enabled_for_config(&self.config)
+                        || self.pending_rotation_active.load(Ordering::Acquire);
+                    if !(coordinate && writer.flush(&self.config.path).is_ok()) {
+                        let _ = writer.flush_without_lock();
+                    }
                 }
             }
         }
@@ -1743,13 +1828,45 @@ fn ensure_atfork_registered() -> io::Result<()> {
     }
 }
 
-#[cfg(unix)]
-fn register_async_sink(sink: &Arc<FileSinkInner>) {
-    let mut registry = ASYNC_SINK_REGISTRY
+fn register_flushed_sink(sink: &Arc<FileSinkInner>) {
+    let mut registry = FLUSHED_SINK_REGISTRY
         .lock()
         .unwrap_or_else(|e| e.into_inner());
     registry.retain(|weak| weak.upgrade().is_some());
     registry.push(Arc::downgrade(sink));
+}
+
+/// Drain every live `enqueue=True` sink (wait until its writer thread has
+/// written and flushed everything queued so far) and flush every buffered
+/// sync sink.
+///
+/// Registered with Python's `atexit` at import. Interpreter teardown is not a
+/// reliable place for this: a filter or callable sink that closes a reference
+/// cycle back to the logger (a `lambda` defined in `__main__` refers to that
+/// module's globals, which hold the logger) keeps the handlers alive past
+/// finalization, so their `Drop` never runs. `buffering=1` sinks need nothing
+/// here: every write is flushed before the logging call returns.
+pub fn flush_file_sinks_at_exit() {
+    let sinks: Vec<Arc<FileSinkInner>> = {
+        let mut registry = FLUSHED_SINK_REGISTRY
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        registry.retain(|weak| weak.strong_count() > 0);
+        registry.iter().filter_map(Weak::upgrade).collect()
+    };
+    // The registry lock is released before flushing: a flush waits for the
+    // writer thread, and `fork()` handlers take the registry lock.
+    let pid = std::process::id();
+    for sink in sinks {
+        // A fork() child never wrote through an inherited sink it has not
+        // rebuilt; flushing would only reopen the parent's file.
+        if sink.creation_pid.load(Ordering::Acquire) != pid {
+            continue;
+        }
+        if let Err(err) = sink.flush() {
+            let _ = writeln!(io::stderr(), "Failed to flush log file at exit: {}", err);
+        }
+    }
 }
 
 #[cfg(unix)]
@@ -1757,7 +1874,7 @@ extern "C" fn file_sink_atfork_prepare() {
     // Acquisition order: registry lock -> per-sink state lock.
     // atfork prepare must never block; if either lock cannot be obtained,
     // we skip pausing that sink and keep best-effort behavior.
-    let Some(mut registry) = try_lock_or_recover(&ASYNC_SINK_REGISTRY) else {
+    let Some(mut registry) = try_lock_or_recover(&FLUSHED_SINK_REGISTRY) else {
         return;
     };
     registry.retain(|weak| {
@@ -2282,6 +2399,61 @@ mod tests {
             "app",
             "log"
         ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_buffered_lines_follow_external_rotation() {
+        let dir = unique_temp_path("buffered-external-rotation");
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("app.log");
+        let rotated = dir.join("app.rotated.log");
+
+        let sink = FileSink::new(FileSinkConfig {
+            path: path.clone(),
+            max_size: Some(1 << 30),
+            buffer_size: Some(1024),
+            ..FileSinkConfig::default()
+        })
+        .unwrap();
+
+        sink.write("buffered").unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "");
+
+        // Another process rotates the file while the line is still buffered.
+        fs::rename(&path, &rotated).unwrap();
+        sink.flush().unwrap();
+
+        assert_eq!(fs::read_to_string(&rotated).unwrap(), "");
+        assert_eq!(fs::read_to_string(&path).unwrap(), "buffered\n");
+
+        drop(sink);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_unbuffered_line_larger_than_buffer_is_one_line() {
+        let dir = unique_temp_path("large-line");
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("app.log");
+
+        let sink = FileSink::new(FileSinkConfig {
+            path: path.clone(),
+            buffer_size: Some(8),
+            ..FileSinkConfig::default()
+        })
+        .unwrap();
+
+        sink.write("abc").unwrap();
+        sink.write("0123456789").unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "abc\n0123456789\n");
+        sink.write("tail").unwrap();
+        drop(sink);
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "abc\n0123456789\ntail\n"
+        );
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

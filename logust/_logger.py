@@ -2005,6 +2005,7 @@ class Logger:
         catch: bool | None = None,
         backtrace: bool = False,
         diagnose: bool = False,
+        buffering: int | None = None,
     ) -> int:
         """Add a handler (file, console, or callable sink).
 
@@ -2069,15 +2070,25 @@ class Logger:
             diagnose: Those tracebacks also show the values of the variables
                       used on each line. They can contain secrets, so this
                       is off by default (loguru's default is True).
+            buffering: As in ``open()``. By default (None), lines are
+                       kept in an 8 KB buffer, written when it is full, on
+                       ``complete()``, ``remove()`` and at normal exit (a
+                       sink with ``rotation`` writes each line). ``1``
+                       writes each line to the file before the logging call
+                       returns, so it survives a crash or a kill, like
+                       loguru. ``N > 1`` sets the buffer size in bytes, a
+                       negative value means 8192, ``0`` raises ValueError.
+                       Ignored with ``enqueue=True``, which batches writes
+                       on its own. File sinks only.
 
         Returns:
             Handler ID for later removal.
 
         Raises:
-            TypeError: If ``mode``, ``encoding`` or ``delay`` is given for a
-                non-file sink.
-            ValueError: If ``compression``, ``mode`` or ``encoding`` is not
-                supported.
+            TypeError: If ``mode``, ``encoding``, ``delay`` or ``buffering``
+                is given for a non-file sink.
+            ValueError: If ``compression``, ``mode``, ``encoding`` or
+                ``buffering`` is not supported.
 
         Examples:
             >>> logger.add("app.log")
@@ -2109,6 +2120,7 @@ class Logger:
             encoding=encoding,
             delay=delay,
             catch=catch,
+            buffering=buffering,
         )
         if backtrace or diagnose:
             # Read only when an exception is logged (see _traceback.capture_exception)
@@ -2133,6 +2145,7 @@ class Logger:
         encoding: str | None,
         delay: bool | None,
         catch: bool | None,
+        buffering: int | None = None,
     ) -> int:
         """Create the handler for ``add()`` and return its ID."""
         _check_filter(filter)
@@ -2155,7 +2168,7 @@ class Logger:
 
         is_file = not is_stream and not callable(sink)
         if not is_file:
-            file_only = {"mode": mode, "encoding": encoding, "delay": delay}
+            file_only = {"mode": mode, "encoding": encoding, "delay": delay, "buffering": buffering}
             for option, value in file_only.items():
                 if value is not None:
                     raise TypeError(f"add() got an unexpected keyword argument '{option}'")
@@ -2212,6 +2225,10 @@ class Logger:
 
         if encoding is not None:
             _check_utf8_encoding(encoding)
+        if buffering is not None and (
+            isinstance(buffering, bool) or not isinstance(buffering, int)
+        ):
+            raise TypeError(f"buffering must be an int, not {type(buffering).__name__}")
         if callable(compression):
             raise TypeError(
                 "callable compression is not supported; pass True or a format string "
@@ -2238,6 +2255,7 @@ class Logger:
             mode=mode,
             delay=delay,
             catch=catch,
+            buffering=buffering,
         )
         self._track_handler(handler_id, collect, filter)
         self._invalidate_requirements_cache()
@@ -2759,6 +2777,8 @@ class Logger:
                 - mode: "a" (default) or "w" (file sinks only)
                 - encoding: UTF-8 aliases only (file sinks only)
                 - delay: Create the file on the first message (file sinks only)
+                - buffering: 1 writes each line, N > 1 buffers N bytes
+                  (file sinks only)
                 - catch: None (drop), True (report to stderr) or False (raise)
                   for sink errors
                 - backtrace / diagnose: Traceback detail (default False)
@@ -2820,6 +2840,7 @@ class Logger:
                         encoding=handler_config.get("encoding"),
                         delay=handler_config.get("delay"),
                         catch=handler_config.get("catch"),
+                        buffering=handler_config.get("buffering"),
                         backtrace=handler_config.get("backtrace", False),
                         diagnose=handler_config.get("diagnose", False),
                     )
