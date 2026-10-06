@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from types import TracebackType
 from typing import TYPE_CHECKING, Any, TextIO, TypeVar, cast, overload
 
-from ._logust import LogLevel, PyLogger, record_time_fields
+from ._logust import CONTEXT_VAR, LogLevel, PyLogger, record_time_fields, set_context
 from ._parse import parse as _parse_file
 from ._record import RecordLevelStr, RecordProcess, RecordThread
 from ._template import (
@@ -33,6 +33,12 @@ from ._traceback import capture_exception, current_exc_info
 from ._types import Level
 
 _F = TypeVar("_F", bound=Callable[..., Any])
+
+# ``contextualize()`` values of the current thread/task (see ``Logger.contextualize``).
+# Created in Rust so ``PyLogger.log_fast`` reads the same variable; ``set_context``
+# is its ``set()`` and also tells Rust the variable is in use.
+_CONTEXT = CONTEXT_VAR
+_set_context = set_context
 
 
 @dataclass(frozen=True, slots=True)
@@ -1167,7 +1173,9 @@ class Logger:
         if not self._patchers:
             return message_str, exception, extra
 
-        base_extra = dict(self._context)
+        # ``contextualize()`` values go under the bound ones, as in loguru
+        context = _CONTEXT.get(None)
+        base_extra = {**context, **self._context} if context else dict(self._context)
         if extra:
             base_extra.update(extra)
         original_extra_keys = {str(key) for key in base_extra}
@@ -1226,6 +1234,20 @@ class Logger:
         _PATCH_LEVELS[level_name] = value
         return value
 
+    def _inner_for_call(self, extra: dict[str, Any] | None) -> PyLogger:
+        """The Rust logger one message logs through, given its extra kwargs.
+
+        Applies loguru's ``extra`` precedence: ``contextualize()`` values of the
+        current thread or task, then this logger's bound values (``bind()``,
+        ``configure(extra=...)``), then the message's own keyword arguments.
+        ``self._inner`` already carries the bound values, so outside any
+        ``contextualize()`` block this is a plain ``bind()`` of the kwargs.
+        """
+        context = _CONTEXT.get(None)
+        if not context:
+            return self._inner if extra is None else self._inner.bind(extra)
+        return self._inner.contextualized(context, extra)
+
     def _log_with_level(
         self,
         level_value: int,
@@ -1258,7 +1280,7 @@ class Logger:
         else:
             message = str(message)
 
-        inner = self._inner if extra_kwargs is None else self._inner.bind(extra_kwargs)
+        inner = self._inner_for_call(extra_kwargs)
 
         # Effective requirements considering CollectOptions: the per-emit cache
         # hit is the common case, a miss computes (and caches) them.
@@ -1700,7 +1722,7 @@ class Logger:
                 )
             else:
                 message = str(message)
-            inner = self._inner if extra_kw is None else self._inner.bind(extra_kw)
+            inner = self._inner_for_call(extra_kw)
             if exception is None:
                 inner.log(level, message)
             else:
@@ -1734,7 +1756,7 @@ class Logger:
         if needs is None:
             needs = self._compute_effective_requirements(resolved_emit)
         needs_caller, needs_thread, needs_process = needs
-        inner = self._inner if extra_kw is None else self._inner.bind(extra_kw)
+        inner = self._inner_for_call(extra_kw)
 
         if needs_caller is False and needs_thread is False and needs_process is False:
             if exception is None:
@@ -2451,29 +2473,40 @@ class Logger:
 
     @contextmanager
     def contextualize(self, **kwargs: Any) -> Generator[Logger, None, None]:
-        """Temporarily bind context values within a with block.
+        """Add context values to every message logged inside a ``with`` block.
+
+        The values live in a :mod:`contextvars` variable, as in loguru: they
+        are seen only by the current thread or asyncio task (and by tasks it
+        starts inside the block), by every logger, bound or not, including the
+        module-level ``logust.info(...)``. Nested blocks merge their values,
+        and each block restores the previous ones when it exits. ``bind()``
+        values and a message's own keyword arguments take precedence over
+        contextualized values with the same key.
 
         Args:
-            **kwargs: Key-value pairs to bind temporarily.
+            **kwargs: Key-value pairs to add to ``extra`` inside the block.
 
         Yields:
-            The logger with temporary context.
+            This logger (it reads the context on each call).
 
         Examples:
             >>> with logger.contextualize(request_id="abc"):
             ...     logger.info("Processing")  # includes request_id
             >>> logger.info("Done")  # no request_id
         """
-        bound = self.bind(**kwargs)
-        original = self._inner
-        original_context = self._context
-        self._inner = bound._inner
-        self._context = bound._context
+        previous = _CONTEXT.get(None)
+        # A new dict each time: the stored dicts are never mutated, so tasks
+        # that copied the context keep seeing the values they started with
+        token = _set_context({**previous, **kwargs} if previous else kwargs)
         try:
             yield self
         finally:
-            self._inner = original
-            self._context = original_context
+            try:
+                _CONTEXT.reset(token)
+            except ValueError:
+                # Exited in another context than it was entered in (e.g. a
+                # generator finalized by a different task): restore by value
+                _set_context(previous)
 
     @overload
     def catch(
