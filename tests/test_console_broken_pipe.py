@@ -203,14 +203,18 @@ class TestPythonStreamWrapper:
         assert first == "first\n"
         assert code == 0
         assert stderr.count("--- Logging error in Logust Handler #") == 1
-        assert "BrokenPipeError" in stderr
+        # Windows reports a closed pipe as OSError(EINVAL) from Python file writes
+        assert ("OSError" if sys.platform == "win32" else "BrokenPipeError") in stderr
         assert stderr.endswith("survived\n")
 
     def test_catch_false_raises(self) -> None:
         stderr, first, code = run_child(STREAM_WRAPPER_CHILD.format(catch="False"), close="stdout")
         assert first == "first\n"
         assert code == 0
-        assert stderr.splitlines() == ["raised BrokenPipeError", "survived"]
+        raised, survived = stderr.splitlines()
+        # Windows reports a closed pipe as OSError(EINVAL) from Python file writes
+        assert raised == ("raised OSError" if sys.platform == "win32" else "raised BrokenPipeError")
+        assert survived == "survived"
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="SIGPIPE does not exist on Windows")
