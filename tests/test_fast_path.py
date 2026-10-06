@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import threading
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
@@ -372,3 +373,75 @@ class TestRawRecords:
         pair = Pair(filter=keep)
         pair.run_either(lambda logger: logger.info("filtered"))
         assert len(seen) == 2 and seen[0] == seen[1]
+
+
+class TestSharedState:
+    """The fast-path table stays correct across loggers and threads."""
+
+    def test_second_wrapper_keeps_fixed_caller(self) -> None:
+        out: list[str] = []
+        logger = Logger(PyLogger(LogLevel.Trace))
+        logger.remove()
+        fixed = CallerInfo(name="fixed", function="fn", line=1, file="f.py")
+        logger.add(
+            out.append, format="{name}:{function}:{line}", collect=CollectOptions(caller=fixed)
+        )
+
+        other = Logger(logger._inner)
+        logger.info("after second wrapper")
+        other.add(lambda message: None, format="{message}")
+        logger.info("after the other wrapper added a sink")
+
+        assert out == ["fixed:fn:1", "fixed:fn:1"]
+
+    def test_negative_depth_takes_the_python_path(self) -> None:
+        out: list[str] = []
+        logger = Logger(PyLogger(LogLevel.Trace))
+        logger.remove()
+        logger.add(out.append, format="{message}")
+
+        logger.opt(depth=-5).info("negative")
+
+        assert out == ["negative"]
+
+    def test_concurrent_add_and_remove(self, tmp_path: Path) -> None:
+        # File sinks only: a callable sink running while another thread adds a
+        # handler can deadlock (the sink holds the handler lock and waits for
+        # the GIL, the adder holds the GIL), a separate pre-existing issue.
+        logger = Logger(PyLogger(LogLevel.Trace))
+        logger.remove()
+        caller_log = tmp_path / "caller.log"
+        logger.add(caller_log, format="{name}:{function}:{line}")
+        errors: list[BaseException] = []
+        stop = threading.Event()
+
+        def mutate(index: int) -> None:
+            try:
+                while not stop.is_set():
+                    handler_id = logger.add(tmp_path / f"extra{index}.log", format="{message}")
+                    logger.remove(handler_id)
+            except BaseException as exc:
+                errors.append(exc)
+
+        def emit() -> None:
+            try:
+                for _ in range(2000):
+                    logger.info("x")
+            except BaseException as exc:
+                errors.append(exc)
+
+        mutators = [threading.Thread(target=mutate, args=(index,)) for index in range(3)]
+        emitters = [threading.Thread(target=emit) for _ in range(3)]
+        for thread in emitters + mutators:
+            thread.start()
+        for thread in emitters:
+            thread.join()
+        stop.set()
+        for thread in mutators:
+            thread.join()
+        logger.complete()
+
+        assert errors == []
+        lines = caller_log.read_text(encoding="utf-8").splitlines()
+        assert len(lines) == 6000
+        assert all(line.startswith(f"{__name__}:emit:") for line in lines)

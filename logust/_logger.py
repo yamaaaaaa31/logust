@@ -6,6 +6,7 @@ import builtins
 import datetime
 import functools
 import inspect
+import itertools
 import os
 import re
 import string
@@ -121,15 +122,19 @@ def _collect_format_roots(format_string: str, consumed: set[str]) -> None:
             _collect_format_roots(format_spec, consumed)
 
 
-@functools.lru_cache(maxsize=1024)
-def _format_roots(format_string: str) -> frozenset[str]:
-    """Root kwarg names referenced by a format string.
-
-    Cached because messages are usually literals reused on every call.
-    """
+def _parse_format_roots(format_string: str) -> frozenset[str]:
+    """Root kwarg names referenced by a format string."""
     consumed: set[str] = set()
     _collect_format_roots(format_string, consumed)
     return frozenset(consumed)
+
+
+# Messages are usually short literals reused on every call. Longer ones (request
+# bodies, dumps) are parsed each time so the cache never pins large strings:
+# at most _FORMAT_ROOTS_CACHE_SIZE keys of _FORMAT_ROOTS_MAX_LEN characters.
+_FORMAT_ROOTS_MAX_LEN = 512
+_FORMAT_ROOTS_CACHE_SIZE = 1024
+_cached_format_roots = functools.lru_cache(maxsize=_FORMAT_ROOTS_CACHE_SIZE)(_parse_format_roots)
 
 
 def _split_kwargs_for_format(
@@ -151,7 +156,11 @@ def _split_kwargs_for_format(
     message_str = message if isinstance(message, str) else str(message)
     if not kwargs:
         return message_str.format(*args), {}
-    consumed = _format_roots(message_str)
+    consumed = (
+        _cached_format_roots(message_str)
+        if len(message_str) <= _FORMAT_ROOTS_MAX_LEN
+        else _parse_format_roots(message_str)
+    )
     formatted_message = message_str.format(*args, **kwargs)
     extra_kwargs = {key: value for key, value in kwargs.items() if key not in consumed}
     return formatted_message, extra_kwargs
@@ -517,8 +526,15 @@ _EMIT_NO_SUPERSET: int = 4_294_967_295
 # each in the ``PyLogger.set_fast_collect`` table).
 _FAST_LEVELS: tuple[int, ...] = (5, 10, 20, 25, 30, 40, 45, 50)
 _FAST_UNAVAILABLE = 8
-# Every level unavailable: ``log_fast`` returns False and the Python path runs
-_FAST_TABLE_DISABLED = 0xFFFF_FFFF_FFFF_FFFF
+# Owner ids for the ``fast_collect`` table, one per Logger family (a Logger and
+# the loggers derived from it), so two Loggers wrapping one PyLogger never use
+# each other's table. 0 is never handed out.
+_FAST_OWNERS = itertools.count(1)
+
+
+def _next_fast_owner() -> int:
+    owner = next(_FAST_OWNERS) & 0xFFFF
+    return owner or _next_fast_owner()
 
 
 def _coerce_emit_no_u32(emit_no: int) -> int:
@@ -560,6 +576,11 @@ class _ModuleActivation:
                 rules.sort(key=lambda rule: rule[0].count("."), reverse=True)
             self.rules = tuple(rules)
             self.cache = {}
+
+    def has_rule(self, name: str) -> bool:
+        """Whether ``enable(name)`` / ``disable(name)`` left a rule for ``name``."""
+        prefix = name + "." if name else ""
+        return any(rule_prefix == prefix for rule_prefix, _ in self.rules)
 
     def is_disabled(self, name: str) -> bool:
         """Return True if messages from module ``name`` are disabled."""
@@ -632,6 +653,14 @@ def _level_from_info(info: tuple[str, int, str, str | None]) -> Level:
     return Level(name, no, color, icon or "")
 
 
+def _exception_str(exc: BaseException) -> str:
+    """``str(exc)``, or loguru's placeholder when ``__str__`` itself raises."""
+    try:
+        return str(exc)
+    except Exception:
+        return "<exception str() failed>"
+
+
 class Catcher:
     """Context manager and decorator returned by ``Logger.catch()``.
 
@@ -692,8 +721,13 @@ class Catcher:
         tb_str = capture_exception(self._logger._inner, (exc_type, exc_value, tb))
         # Point the record at the ``with`` block, or at the caller of the decorated function
         depth = 2 if self._from_decorator else 1
-        self._logger.log(
-            self._level, f"{self._message}: {exc_value}", exception=tb_str, _depth=depth
+        # The exception text is data: never parse it as color markup
+        logger = self._logger._with_inner(self._logger._inner.with_colors(False))
+        logger.log(
+            self._level,
+            f"{self._message}: {_exception_str(exc_value)}",
+            exception=tb_str,
+            _depth=depth,
         )
         if self._onerror is not None:
             self._onerror(exc_value)
@@ -841,6 +875,8 @@ class Logger:
         ] = aggregated_options_box if aggregated_options_box is not None else [None]
         # False routes every call through the Python dispatch path (tests only)
         self._fast_path = True
+        # Identifies this Logger family's table in Rust (see _refresh_fast_collect)
+        self._fast_owner = _next_fast_owner()
         self._refresh_fast_collect()
 
     parse = staticmethod(_parse_file)
@@ -863,8 +899,10 @@ class Logger:
         table lives with the handler state shared by bound loggers, and Rust
         resets it whenever a handler or callback changes.
         """
+        # A new generation first: a refresh that started earlier, before this
+        # logger's bookkeeping changed, can no longer store its table.
+        generation = self._inner.invalidate_fast_collect()
         if not self._fast_path:
-            self._inner.set_fast_collect(_FAST_TABLE_DISABLED)
             return
         table = 0
         for slot, emit_no in enumerate(_FAST_LEVELS):
@@ -877,7 +915,7 @@ class Logger:
                     nibble = _FAST_UNAVAILABLE
                     break
             table |= nibble << (4 * slot)
-        self._inner.set_fast_collect(table)
+        self._inner.set_fast_collect(table, generation, self._fast_owner)
 
     def _get_aggregated_options(
         self,
@@ -923,7 +961,8 @@ class Logger:
 
         tracked_handler_count = 0
 
-        for handler_id, opts in self._collect_options.items():
+        # A copy: another thread may add or remove handlers meanwhile
+        for handler_id, opts in self._collect_options.copy().items():
             # Count tracked file handlers (not callbacks)
             if handler_id not in self._callback_ids:
                 tracked_handler_count += 1
@@ -1345,7 +1384,7 @@ class Logger:
             or exception is not None
             or self._patchers
             or self._activation.rules
-            or not self._inner.log_fast(5, message, _depth + 1)
+            or not self._inner.log_fast(5, message, _depth + 1, self._fast_owner)
         ):
             self._log_with_level(5, "trace", message, exception, _depth + 1, kwargs, args)
 
@@ -1366,7 +1405,7 @@ class Logger:
             or exception is not None
             or self._patchers
             or self._activation.rules
-            or not self._inner.log_fast(10, message, _depth + 1)
+            or not self._inner.log_fast(10, message, _depth + 1, self._fast_owner)
         ):
             self._log_with_level(10, "debug", message, exception, _depth + 1, kwargs, args)
 
@@ -1392,7 +1431,7 @@ class Logger:
             or exception is not None
             or self._patchers
             or self._activation.rules
-            or not self._inner.log_fast(20, message, _depth + 1)
+            or not self._inner.log_fast(20, message, _depth + 1, self._fast_owner)
         ):
             self._log_with_level(20, "info", message, exception, _depth + 1, kwargs, args)
 
@@ -1413,7 +1452,7 @@ class Logger:
             or exception is not None
             or self._patchers
             or self._activation.rules
-            or not self._inner.log_fast(25, message, _depth + 1)
+            or not self._inner.log_fast(25, message, _depth + 1, self._fast_owner)
         ):
             self._log_with_level(25, "success", message, exception, _depth + 1, kwargs, args)
 
@@ -1434,7 +1473,7 @@ class Logger:
             or exception is not None
             or self._patchers
             or self._activation.rules
-            or not self._inner.log_fast(30, message, _depth + 1)
+            or not self._inner.log_fast(30, message, _depth + 1, self._fast_owner)
         ):
             self._log_with_level(30, "warning", message, exception, _depth + 1, kwargs, args)
 
@@ -1455,7 +1494,7 @@ class Logger:
             or exception is not None
             or self._patchers
             or self._activation.rules
-            or not self._inner.log_fast(40, message, _depth + 1)
+            or not self._inner.log_fast(40, message, _depth + 1, self._fast_owner)
         ):
             self._log_with_level(40, "error", message, exception, _depth + 1, kwargs, args)
 
@@ -1476,7 +1515,7 @@ class Logger:
             or exception is not None
             or self._patchers
             or self._activation.rules
-            or not self._inner.log_fast(45, message, _depth + 1)
+            or not self._inner.log_fast(45, message, _depth + 1, self._fast_owner)
         ):
             self._log_with_level(45, "fail", message, exception, _depth + 1, kwargs, args)
 
@@ -1497,7 +1536,7 @@ class Logger:
             or exception is not None
             or self._patchers
             or self._activation.rules
-            or not self._inner.log_fast(50, message, _depth + 1)
+            or not self._inner.log_fast(50, message, _depth + 1, self._fast_owner)
         ):
             self._log_with_level(50, "critical", message, exception, _depth + 1, kwargs, args)
 
@@ -1570,6 +1609,10 @@ class Logger:
                 return _level_from_info(existing)
             no = existing[1]
         if existing is not None:
+            if no != existing[1] and name.lower() in _LEVEL_VALUES:
+                raise TypeError(
+                    f"Level '{existing[0]}' already exists, you can't update its severity no"
+                )
             if color is None and existing[2]:
                 color = existing[2]
             if icon is None:
@@ -1616,7 +1659,7 @@ class Logger:
                     or exception is not None
                     or self._patchers
                     or self._activation.rules
-                    or not self._inner.log_fast(level_value, message, _depth + 1)
+                    or not self._inner.log_fast(level_value, message, _depth + 1, self._fast_owner)
                 ):
                     self._log_with_level(
                         level_value,
@@ -1637,7 +1680,7 @@ class Logger:
                 or exception is not None
                 or self._patchers
                 or self._activation.rules
-                or not self._inner.log_fast(level, message, _depth + 1)
+                or not self._inner.log_fast(level, message, _depth + 1, self._fast_owner)
             ):
                 self._log_with_level(
                     level, _LEVEL_VALUE_MAP[level], message, exception, _depth + 1, kwargs, args
@@ -1824,6 +1867,8 @@ class Logger:
           ``enable("")`` removes every module rule.
         - ``enable()``, ``enable(LogLevel.Info)``, ``enable("INFO")`` or
           ``enable(level="INFO")`` re-enables console output (logust behavior).
+          A built-in level name that ``disable(name)`` made a module rule for
+          (a module called ``info``, say) re-enables that module instead.
 
         A string that is a built-in level name (case-insensitive: ``"trace"``,
         ``"debug"``, ``"info"``, ``"success"``, ``"warning"``, ``"error"``,
@@ -1834,7 +1879,9 @@ class Logger:
             name: Module name, built-in level, or None.
             level: Minimum console level when re-enabling console output.
         """
-        if isinstance(name, str) and name.lower() not in _LEVEL_VALUES:
+        if isinstance(name, str) and (
+            name.lower() not in _LEVEL_VALUES or self._activation.has_rule(name)
+        ):
             if level is not None:
                 raise TypeError("enable() got both a module name and a level")
             self._activation.change(name, True)
@@ -2379,6 +2426,7 @@ class Logger:
         new._requirements_cache_box = self._requirements_cache_box
         new._aggregated_options_box = self._aggregated_options_box
         new._fast_path = self._fast_path
+        new._fast_owner = self._fast_owner
         return new
 
     def bind(self, **kwargs: Any) -> Logger:

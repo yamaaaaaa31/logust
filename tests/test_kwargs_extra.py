@@ -247,3 +247,19 @@ def test_all_levels_support_kwargs_extra_smoke() -> None:
         assert record["level"] == level
         assert record["message"] == f"{value} {value}"
         assert record["extra"] == {"marker": value}
+
+
+def test_long_messages_are_not_kept_by_the_format_cache() -> None:
+    """Keyword-formatted messages are cached by text; long ones must not be pinned."""
+    from logust._logger import _FORMAT_ROOTS_MAX_LEN, _cached_format_roots
+
+    logger = Logger(PyLogger(LogLevel.Trace))
+    logger.remove()
+    logger.add(lambda message: None, format="{message}")
+    _cached_format_roots.cache_clear()
+
+    for index in range(20):
+        logger.info("x" * (_FORMAT_ROOTS_MAX_LEN + 1) + str(index), request_id=index)
+    logger.info("short {user}", user="bob", request_id=1)
+
+    assert _cached_format_roots.cache_info().currsize == 1

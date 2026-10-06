@@ -312,3 +312,33 @@ class TestInterceptHandler:
         finally:
             std.removeHandler(handler)
         assert _messages(messages) == ["shown"]
+
+
+def test_enable_undoes_disable_for_a_module_named_like_a_level() -> None:
+    logger = Logger(PyLogger(LogLevel.Trace))
+    logger.disable("info")
+    assert logger._activation.rules == (("info.", False),)
+
+    logger.enable("info")
+
+    assert logger._activation.rules == ()
+
+
+def test_lazy_log_skips_args_for_a_disabled_module() -> None:
+    logger = Logger(PyLogger(LogLevel.Trace))
+    logger.remove()
+    out: list[str] = []
+    logger.add(out.append, format="{message}")
+    calls: list[int] = []
+
+    def expensive() -> str:
+        calls.append(1)
+        return "value"
+
+    logger.disable(__name__)
+    logger.opt(lazy=True).log("INFO", "x {}", expensive)
+    logger.enable(__name__)
+    logger.opt(lazy=True).log("INFO", "y {}", expensive)
+
+    assert calls == [1]
+    assert out == ["y value"]

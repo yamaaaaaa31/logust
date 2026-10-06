@@ -293,3 +293,26 @@ class TestLevelLookupAndUpdate:
 
         with pytest.raises(ValueError, match="does not exist"):
             logger.configure(levels=[{"name": "NO_SUCH_LEVEL", "color": "red"}])
+
+
+class TestLevelNumbers:
+    def test_builtin_level_number_cannot_change(self) -> None:
+        logger = Logger(PyLogger(LogLevel.Trace))
+
+        with pytest.raises(TypeError, match="can't update its severity no"):
+            logger.level("INFO", no=35)
+        assert logger.level("INFO").no == 20
+
+    def test_renumbered_custom_level_releases_its_old_number(self) -> None:
+        logger = Logger(PyLogger(LogLevel.Trace))
+        logger.remove()
+        out: list[str] = []
+        logger.add(out.append, format="{level}|{level.no}|{message}")
+
+        logger.level("RENUMBER_ME", no=37)
+        logger.level("RENUMBER_ME", no=38)
+        logger.log(38, "new number")
+
+        assert out == ["RENUMBER_ME|38|new number"]
+        with pytest.raises(ValueError):
+            logger.log(37, "old number")

@@ -148,8 +148,16 @@ class OptLogger:
         Examples:
             >>> logger.opt(lazy=True).log("NOTICE", "Result: {}", expensive_func)
         """
-        # For lazy evaluation with custom levels, we can't easily check
-        # the level in advance, so we format and delegate to the logger
+        if self._lazy:
+            logger = self._logger
+            # Skip lazy args for a filtered-out level or a disabled module, like
+            # the level methods do (user frame: +1 for this method, + depth)
+            emit_no = logger._inner.try_resolve_emit_level_no(level)
+            if emit_no is not None and emit_no < logger._inner.min_level:
+                return
+            activation = logger._activation
+            if activation.rules and activation.caller_disabled(self._depth + 1):
+                return
         exc = kwargs.pop("exception", None) or self._get_exception()
         args = self._resolve_args(args)
         message, args, kwargs = self._uncaptured(message, args, kwargs)
