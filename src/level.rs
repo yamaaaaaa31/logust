@@ -4,7 +4,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, RwLockReadGuard, RwLockWriteGuard};
 
 use colored::Color;
+use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
+use pyo3::types::{PyBool, PyInt, PyString};
 
 struct RwLock<T>(std::sync::RwLock<T>);
 
@@ -23,7 +25,7 @@ impl<T> RwLock<T> {
 }
 
 /// Log level enum with numeric ordering for filtering
-#[pyclass(eq, eq_int, from_py_object)]
+#[pyclass(eq, eq_int, ord, from_py_object)]
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash, Default)]
 pub enum LogLevel {
     Trace = 5,
@@ -291,6 +293,38 @@ pub fn get_level_info(name: &str) -> Option<Arc<LevelInfo>> {
     }
 
     builtin_level(&upper).map(builtin_level_info)
+}
+
+/// Resolve the `level=` threshold of a handler, callback or `set_level()` to
+/// its numeric value, as loguru does: a `LogLevel`, a level name (built-in or
+/// registered with `logger.level()`, case-insensitive) or an int >= 0.
+/// Records pass when their `no` is at least this value.
+pub fn level_threshold(level: &Bound<'_, PyAny>) -> PyResult<u32> {
+    if let Ok(level) = level.extract::<LogLevel>() {
+        return Ok(level as u32);
+    }
+    if let Ok(name) = level.cast::<PyString>() {
+        let name = name.to_str()?;
+        return get_level_info(name)
+            .map(|info| info.no)
+            .ok_or_else(|| PyValueError::new_err(format!("Level '{name}' does not exist")));
+    }
+    if level.is_instance_of::<PyInt>() && !level.is_instance_of::<PyBool>() {
+        if let Ok(no) = level.extract::<u32>() {
+            return Ok(no);
+        }
+        if level.lt(0)? {
+            return Err(PyValueError::new_err(format!(
+                "Invalid level value, it should be a positive integer, not: {level}"
+            )));
+        }
+        // Above any `no` a level can have: nothing passes
+        return Ok(u32::MAX);
+    }
+    Err(PyTypeError::new_err(format!(
+        "Invalid level, it should be an integer, a string or a LogLevel, not: '{}'",
+        level.get_type().name()?
+    )))
 }
 
 /// Built-in level for an upper-case level name

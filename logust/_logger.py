@@ -479,13 +479,6 @@ class _PatchRecord(dict[str, Any]):
         return (dict, (dict(dict.items(self)),))
 
 
-def _to_log_level(level: LogLevel | str) -> LogLevel:
-    """Convert string level name to LogLevel enum."""
-    if isinstance(level, str):
-        return getattr(LogLevel, level.capitalize())  # type: ignore[no-any-return]
-    return level
-
-
 def _check_utf8_encoding(encoding: str) -> None:
     """Accept any alias of UTF-8; file sinks are always written as UTF-8 by Rust."""
     import codecs
@@ -1677,7 +1670,7 @@ class Logger:
 
     def log(
         self,
-        level: str | int,
+        level: str | int | LogLevel,
         message: str,
         *args: Any,
         exception: str | None = None,
@@ -1687,7 +1680,7 @@ class Logger:
         """Log at any level (built-in or custom).
 
         Args:
-            level: Level name (str) or numeric value (int).
+            level: Level name (str), numeric value (int) or ``LogLevel``.
             message: Log message. Formatted with ``str.format(*args, **kwargs)``
                 only when positional or keyword arguments are given.
             *args: Positional format arguments.
@@ -1737,6 +1730,11 @@ class Logger:
                 self._log_with_level(
                     level, _LEVEL_VALUE_MAP[level], message, exception, _depth + 1, kwargs, args
                 )
+            return
+
+        if isinstance(level, LogLevel):
+            # Off the str / int fast paths above: log at the level's value
+            self.log(level.value, message, *args, exception=exception, _depth=_depth + 1, **kwargs)
             return
 
         resolved_emit = self._inner.try_resolve_emit_level_no(level)
@@ -1886,16 +1884,25 @@ class Logger:
                 process_id=process_id,
             )
 
-    def set_level(self, level: LogLevel | str) -> None:
-        """Set minimum log level for console output."""
-        self._inner.set_level(_to_log_level(level))
+    def set_level(self, level: LogLevel | str | int) -> None:
+        """Set the minimum level of the console handlers.
+
+        ``level`` is a level name (built-in or registered with ``level()``,
+        case-insensitive), a ``LogLevel`` or an int >= 0. Records pass when
+        their ``no`` is at least that value.
+        """
+        self._inner.set_level(level)
         self._invalidate_requirements_cache()
 
-    def get_level(self) -> LogLevel:
-        """Get current minimum log level."""
+    def get_level(self) -> LogLevel | int:
+        """Get the minimum level of the console handlers.
+
+        A ``LogLevel`` when it is a built-in level's value, otherwise the number
+        (a custom level or an int passed to ``set_level()``).
+        """
         return self._inner.get_level()
 
-    def is_level_enabled(self, level: LogLevel | str) -> bool:
+    def is_level_enabled(self, level: LogLevel | str | int) -> bool:
         """Check if any handler would accept messages at the given level.
 
         Args:
@@ -1904,13 +1911,13 @@ class Logger:
         Returns:
             True if at least one handler would process messages at this level.
         """
-        return self._inner.is_level_enabled(_to_log_level(level))
+        return self._inner.is_level_enabled(level)
 
     def enable(
         self,
-        name: str | LogLevel | None = None,
+        name: str | int | LogLevel | None = None,
         *,
-        level: LogLevel | str | None = None,
+        level: LogLevel | str | int | None = None,
     ) -> None:
         """Enable messages from a module, or re-enable console logging.
 
@@ -1928,11 +1935,12 @@ class Logger:
         A string that is a built-in level name (case-insensitive: ``"trace"``,
         ``"debug"``, ``"info"``, ``"success"``, ``"warning"``, ``"error"``,
         ``"fail"``, ``"critical"``) is treated as a level; any other string is
-        a module name.
+        a module name. Pass a custom level as ``level=`` (``enable(level="NOTICE")``).
 
         Args:
-            name: Module name, built-in level, or None.
-            level: Minimum level for the console handlers.
+            name: Module name, built-in level (name, ``LogLevel`` or int), or None.
+            level: Minimum level for the console handlers: a level name (built-in
+                or custom), a ``LogLevel`` or an int >= 0.
         """
         if isinstance(name, str) and (
             name.lower() not in _LEVEL_VALUES or self._activation.has_rule(name)
@@ -1945,7 +1953,7 @@ class Logger:
             if level is not None:
                 raise TypeError("enable() got multiple values for the level")
             level = name
-        self._inner.enable(_to_log_level(level) if level is not None else None)
+        self._inner.enable(level)
         self._invalidate_requirements_cache()
 
     def disable(self, name: str | None = None) -> None:
@@ -1989,7 +1997,7 @@ class Logger:
         self,
         sink: str | os.PathLike[str] | TextIO | Callable[[str], Any],
         *,
-        level: LogLevel | str | None = None,
+        level: LogLevel | str | int | None = None,
         format: str | None = None,
         rotation: str | datetime.timedelta | datetime.time | None = None,
         retention: str | int | None = None,
@@ -2015,7 +2023,11 @@ class Logger:
                   callable that receives formatted log messages. A stream is
                   bound when add() is called; a later swap of sys.stdout is not
                   observed.
-            level: Minimum log level for this handler.
+            level: Minimum level for this handler: a level name (built-in or
+                   registered with ``level()``, case-insensitive), a ``LogLevel``
+                   or an int >= 0. Records pass when their ``no`` is at least
+                   that value. An unknown name or a negative int raises
+                   ValueError.
             format: Custom format string (e.g., "{time} | {level} | {message}").
             rotation: Rotation strategy ("daily", "hourly", "500 MB", etc.)
                       Also accepts ``timedelta(days=1)`` / ``timedelta(hours=1)``
@@ -2131,7 +2143,7 @@ class Logger:
         self,
         sink: str | os.PathLike[str] | TextIO | Callable[[str], Any],
         *,
-        level: LogLevel | str | None,
+        level: LogLevel | str | int | None,
         format: str | None,
         rotation: str | datetime.timedelta | datetime.time | None,
         retention: str | int | None,
@@ -2206,10 +2218,9 @@ class Logger:
 
         if is_console:
             stream_name = "stdout" if sink is sys.__stdout__ else "stderr"
-            resolved_level = _to_log_level(level) if level is not None else None
             handler_id = self._inner.add_console(
                 stream=stream_name,
-                level=resolved_level,
+                level=level,
                 format=format,
                 serialize=serialize,
                 filter=filter,
@@ -2235,15 +2246,13 @@ class Logger:
                 '("gz", "bz2", "zip", "tar", "tar.gz", "tar.bz2")'
             )
 
-        resolved_level = _to_log_level(level) if level is not None else None
-
         retention_str = None
         if retention is not None:
             retention_str = str(retention) if isinstance(retention, int) else retention
 
         handler_id = self._inner.add(
             sink_str,
-            level=resolved_level,
+            level=level,
             format=format,
             rotation=rotation,
             retention=retention_str,
@@ -2327,7 +2336,7 @@ class Logger:
         self,
         sink: Callable[[str], Any],
         *,
-        level: LogLevel | str | None = None,
+        level: LogLevel | str | int | None = None,
         format: str | None = None,
         serialize: bool = False,
         filter: FilterType = None,
@@ -2364,7 +2373,6 @@ class Logger:
         else:
             py_filter = filter
 
-        resolved_level = _to_log_level(level) if level is not None else None
         default_format = "{time} | {level:<8} | {name}:{function}:{line} - {message}"
         template_str = format or default_format
 
@@ -2452,7 +2460,7 @@ class Logger:
                 wrapper,
                 flags,
                 extra_keys,
-                resolved_level,
+                level,
                 raise_errors=raise_errors,
                 filter=native_filter,
             )
@@ -2460,12 +2468,12 @@ class Logger:
         # extras; only filterless serialized sinks get the typed JSON dict.
         elif serialize and py_filter is None:
             handler_id = self._inner.add_serialized_callback(
-                wrapper, resolved_level, raise_errors=raise_errors, filter=native_filter
+                wrapper, level, raise_errors=raise_errors, filter=native_filter
             )
         else:
             handler_id = self._inner.add_callback(
                 wrapper,
-                resolved_level,
+                level,
                 file_path=not serialize and parsed_template.needs_file_path,
                 raise_errors=raise_errors,
                 extra_repr=not serialize and parsed_template.needs_extra_repr,
@@ -2678,7 +2686,7 @@ class Logger:
         )
 
     def add_callback(
-        self, callback: Callable[[dict[str, Any]], None], level: LogLevel | str | None = None
+        self, callback: Callable[[dict[str, Any]], None], level: LogLevel | str | int | None = None
     ) -> int:
         """Add a callback to receive log records.
 
@@ -2696,8 +2704,7 @@ class Logger:
             >>> logger.info("Hello")  # Triggers callback
             >>> logger.remove_callback(callback_id)
         """
-        resolved_level = _to_log_level(level) if level is not None else None
-        callback_id = self._inner.add_callback(callback, resolved_level)
+        callback_id = self._inner.add_callback(callback, level)
         # Track with default CollectOptions (auto-detect) so callbacks get full records
         self._collect_options[callback_id] = CollectOptions()
         # Track as raw callback (receives raw records, needs full records)

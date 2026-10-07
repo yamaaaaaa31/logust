@@ -80,7 +80,7 @@ from ._types import (
 if TYPE_CHECKING:
 
     def enable(
-        name: str | LogLevel | None = None, *, level: LogLevel | str | None = None
+        name: str | int | LogLevel | None = None, *, level: LogLevel | str | int | None = None
     ) -> None: ...
     def disable(name: str | None = None) -> None: ...
 

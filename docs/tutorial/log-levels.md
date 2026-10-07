@@ -80,7 +80,7 @@ $ python main.py
 
 The `DEBUG` and `INFO` messages are gone.
 
-Level names are **case-insensitive**, so `"WARNING"`, `"warning"` and `"Warning"` all work.
+Level names are **case-insensitive**, so `"WARNING"`, `"warning"` and `"Warning"` all work. You can also pass a number, like `set_level(30)`, or the name of a [custom level](../advanced/custom-levels.md#filtering-by-a-custom-level) you registered. Messages at that number or above are shown.
 
 ### Use `LogLevel` { #use-loglevel }
 
@@ -112,7 +112,7 @@ Handlers that write to files or to Python functions keep the level you gave them
 
 ## Check the current level { #check-the-current-level }
 
-`get_level()` returns the current console level as a `LogLevel`, with a `name` and a numeric `value`.
+`get_level()` returns the current console level as a `LogLevel`, with a `name` and a numeric `value`. If the level is not a built-in one (a custom level, or a number like `23`), you get the number, an `int`, instead.
 
 `is_level_enabled()` tells you if a message at a given level would be logged by **at least one** handler:
 
@@ -227,7 +227,7 @@ If there is no console handler to bring back (for example after `logger.remove()
 ## Recap { #recap }
 
 * There are eight built-in levels: `TRACE`, `DEBUG`, `INFO`, `SUCCESS`, `WARNING`, `ERROR`, `FAIL` and `CRITICAL`, each with its own method.
-* `set_level("WARNING")` or `set_level(LogLevel.Warning)` sets the minimum level of the console.
+* `set_level("WARNING")`, `set_level(LogLevel.Warning)` or `set_level(30)` sets the minimum level of the console. Custom level names work too.
 * `get_level()` returns the current console level, `is_level_enabled()` tells you if a level would be logged anywhere.
 * Use `is_level_enabled()` to skip expensive work for messages nobody will see.
 * `logger.log(level, message)` logs at a level chosen at runtime.
