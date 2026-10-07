@@ -73,7 +73,7 @@ logger.log(level, message, *args, exception=None, **kwargs)
 | `*args` | `Any` | Positional `str.format()` arguments. |
 | `exception` | `str | None` | Traceback text to attach to the record. |
 | `**kwargs` | `Any` | Keyword `str.format()` arguments. Those not used by a placeholder are added to `extra`. |
-| `level` | `str | int` | `log()` only. A level name (case-insensitive) or number. |
+| `level` | `str | int | LogLevel` | `log()` only. A level name (case-insensitive), number or `LogLevel`. |
 
 * With no `args` and no `kwargs`, the message is logged as it is (braces are not interpreted).
 * `exception()` logs at `ERROR` with the traceback of the exception being handled. Outside an `except` block, it logs a plain `ERROR` message.
@@ -118,7 +118,7 @@ Adds a handler and returns its ID.
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `sink` | `str | os.PathLike | TextIO | Callable[[str], Any]` | | A file path, a stream (any object with `write()`, like `sys.stdout` or `io.StringIO`), or a callable that receives the formatted message (without a trailing newline). A stream is bound when `add()` is called. |
-| `level` | `LogLevel | str | None` | `None` | Minimum level. A built-in level name or `LogLevel`. |
+| `level` | `LogLevel | str | int | None` | `None` | Minimum level: a level name, built-in or [custom](../advanced/custom-levels.md) (case-insensitive), a number `>= 0`, or a `LogLevel`. A record passes when its number is at least this one. `None` means `DEBUG`. |
 | `format` | `str | None` | `None` | Format string. `None` uses `"{time} | {level:<8} | {name}:{function}:{line} - {message}"`. See [Formatting](../tutorial/formatting.md). |
 | `rotation` | `str | timedelta | time | None` | `None` | Files only. `"500 MB"`, `"daily"` / `"1 day"`, `"hourly"` / `"1 hour"`, `timedelta(days=1)`, `timedelta(hours=1)`, `time(0, 0)`. Boundaries are local wall-clock times. Other values raise. See [Rotation](../tutorial/rotation-retention.md). |
 | `retention` | `str | int | None` | `None` | Files only. `"10 days"`, or a number of files. Other strings raise `ValueError`. See [Retention](../tutorial/rotation-retention.md#retention). |
@@ -138,8 +138,8 @@ Adds a handler and returns its ID.
 
 Raises:
 
-* `TypeError`: `mode`, `encoding`, `delay` or `buffering` for a non-file sink; a `buffering` that is not an `int`; an `async def` sink; an unknown keyword argument; a `rotation` or `retention` of another type; a `filter` that is not a string, dict or callable, or a dict with a non-string key or a value that is not a level name, number or `bool`.
-* `ValueError`: an unsupported `compression`, `mode`, `encoding`, `rotation` or `retention` value (for example `rotation="1 week"`), or `buffering=0`; a `filter` dict with an unknown level name or a negative number; the built-in `filter()` function as `filter`.
+* `TypeError`: `mode`, `encoding`, `delay` or `buffering` for a non-file sink; a `buffering` that is not an `int`; an `async def` sink; an unknown keyword argument; a `rotation` or `retention` of another type; a `level` that is not a string, `int` or `LogLevel`; a `filter` that is not a string, dict or callable, or a dict with a non-string key or a value that is not a level name, number or `bool`.
+* `ValueError`: an unsupported `compression`, `mode`, `encoding`, `rotation` or `retention` value (for example `rotation="1 week"`), or `buffering=0`; a `level` name that is not registered (`Level 'NOPE' does not exist`) or a negative `level`; a `filter` dict with an unknown level name or a negative number; the built-in `filter()` function as `filter`.
 
 ```python
 import sys
@@ -168,10 +168,10 @@ Writes what sync file sinks hold in their buffer, and waits until the messages q
 ### Level control { #level-control }
 
 ```python
-logger.set_level(level: LogLevel | str) -> None
-logger.get_level() -> LogLevel
-logger.is_level_enabled(level: LogLevel | str) -> bool
-logger.enable(name: str | LogLevel | None = None, *, level: LogLevel | str | None = None) -> None
+logger.set_level(level: LogLevel | str | int) -> None
+logger.get_level() -> LogLevel | int
+logger.is_level_enabled(level: LogLevel | str | int) -> bool
+logger.enable(name: str | int | LogLevel | None = None, *, level: LogLevel | str | int | None = None) -> None
 logger.disable(name: str | None = None) -> None
 logger.is_enabled() -> bool
 ```
@@ -179,13 +179,13 @@ logger.is_enabled() -> bool
 | Method | Description |
 |--------|-------------|
 | `set_level(level)` | Sets the minimum level of the **console** handler. |
-| `get_level()` | Returns the console handler's minimum level. |
+| `get_level()` | Returns the console handler's minimum level: a `LogLevel`, or an `int` when it is not a built-in level's number (a custom level, say). |
 | `is_level_enabled(level)` | `True` if at least one handler accepts that level. |
-| `enable()` / `enable(level)` | Turns the console handlers back on: the ones `disable()` switched off, or the default handler if there are none. With a level, it also sets the level of every console handler. `level` can be passed positionally (a built-in level name or `LogLevel`) or as `level=`. |
+| `enable()` / `enable(level)` | Turns the console handlers back on: the ones `disable()` switched off, or the default handler if there are none. With a level, it also sets the level of every console handler. `level` can be passed positionally (a built-in level name, a number or a `LogLevel`) or as `level=` (any level, custom ones included). |
 | `disable()` | Switches off every console handler (the default one and the `sys.stdout` / `sys.stderr` ones) until `enable()`. |
 | `is_enabled()` | `True` if the console handler is on. |
 
-`set_level()`, `is_level_enabled()` and `level=` take built-in levels only. See [Log Levels](../tutorial/log-levels.md).
+`set_level()`, `is_level_enabled()` and every `level=` take a level name (built-in or custom, case-insensitive), a number `>= 0` or a `LogLevel`, as [`add()`](#add) does, with the same errors. See [Log Levels](../tutorial/log-levels.md) and [Custom Levels](../advanced/custom-levels.md#filtering-by-a-custom-level).
 
 ### Module activation { #module-activation }
 
@@ -315,7 +315,7 @@ See [Per-message Options with opt()](../advanced/opt.md).
 ### Callbacks { #callbacks }
 
 ```python
-logger.add_callback(callback: Callable[[dict], None], level: LogLevel | str | None = None) -> int
+logger.add_callback(callback: Callable[[dict], None], level: LogLevel | str | int | None = None) -> int
 logger.remove_callback(callback_id: int) -> bool
 ```
 
@@ -379,7 +379,7 @@ from logust import LogLevel
 | `LogLevel.Fail` | 45 | `"FAIL"` |
 | `LogLevel.Critical` | 50 | `"CRITICAL"` |
 
-Members support `==`, `hash()` and `int()`. To compare severities, compare `.value` (`LogLevel.Info.value < LogLevel.Error.value`). Custom levels have no `LogLevel` member.
+Members support `==`, `<`, `<=`, `>`, `>=` (by severity: `LogLevel.Info < LogLevel.Error`), `hash()` and `int()`. Custom levels have no `LogLevel` member; use their name or number.
 
 ## Rotation { #rotation }
 
@@ -392,7 +392,7 @@ from logust import Rotation
 ## PyLogger { #pylogger }
 
 ```python
-PyLogger(level: LogLevel | None = None)
+PyLogger(level: LogLevel | str | int | None = None)
 ```
 
 The Rust core that a `Logger` wraps. You don't use it directly, except to create an **independent** logger with its own handlers, levels and console handler:
