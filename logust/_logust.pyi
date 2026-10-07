@@ -484,6 +484,14 @@ def colorize_level(text: str, level: str) -> str:
     """Style text in the bold color of the named level."""
     ...
 
+def check_format_template(template: str) -> None:
+    """Raise ValueError if a format template has an invalid field format spec.
+
+    Validates ``{field:spec}`` (Python's format-spec mini-language) and
+    ``{time:<spec>}`` exactly as ``add()`` does for file and console sinks.
+    """
+    ...
+
 def split_format_markup(template: str) -> list[tuple[str, str]]:
     """Split color markup out of a format template into (kind, value) pieces.
 
