@@ -100,12 +100,14 @@ Also, a loguru callable sink gets a `str` subclass with a `.record` attribute. A
 
 ## Format strings { #format-strings }
 
-loguru format strings work as they are, including `{time:YYYY-MM-DD}`, `{level.icon}`, `{thread.name}` and `{file.path}` (see [Format tokens](../tutorial/formatting.md#format-tokens)). The differences:
+loguru format strings work as they are, including `{time:YYYY-MM-DD}`, `{level.icon}`, `{thread.name}`, `{file.path}` and Python format specs such as loguru's default `{level: <8}`, `{line:05d}` or `{message:>20}` (see [Format tokens](../tutorial/formatting.md#format-tokens) and [Format specs](../tutorial/formatting.md#format-specs)). The differences:
 
 * **`{exception}`** places the traceback once, where you put it. loguru appends `"\n{exception}"` to every string format, so a loguru format that contains `{exception}` prints it twice.
 * **Plain `{time}`** gives `2026-10-06 12:00:00.123` on the console and in files (loguru: ISO 8601). Use `{time:}` for ISO 8601. In callable sinks, plain `{time}` gives ISO 8601 with microseconds.
 * **`{thread}` and `{process}`** give `name:id`, like `MainThread:8348778368` (loguru: the id). Use `{thread.id}` / `{process.id}` for the id.
 * The **`zz`** time token gives the UTC offset (`+09:00`) instead of a time zone abbreviation, except with `!UTC`.
+* **`{extra[key]:<spec>}`** formats the value's text, `str(value)`: string specs like `{extra[user]:<8}` work, but `{extra[count]:05d}` writes `42` unformatted (loguru: `00042`).
+* **An invalid format spec**, like `{message:d}`, raises `ValueError` in `logger.add()`. loguru raises it later, when a message is logged.
 * **`{extra}`** sorts the keys (loguru keeps the binding order), and writes values other than `str`, numbers, `bool`, `None`, lists, tuples and dicts with `str()` instead of `repr()`.
 
 ## Exceptions { #exceptions }

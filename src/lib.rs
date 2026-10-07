@@ -2,6 +2,7 @@ mod clock;
 mod collect;
 mod filter;
 mod format;
+mod format_spec;
 mod handler;
 mod level;
 mod record_compat;
@@ -2472,6 +2473,13 @@ fn split_format_markup(template: &str) -> Vec<(&'static str, String)> {
         .collect()
 }
 
+/// Raise ValueError if a format template has an invalid `{field:spec}` (or
+/// `{time:<spec>}`), as `add()` does for file and console sinks.
+#[pyfunction]
+fn check_format_template(template: &str) -> PyResult<()> {
+    format::check_template(template).map_err(pyo3::exceptions::PyValueError::new_err)
+}
+
 /// ANSI prefix that styles text like the level `level` (bold, level color).
 #[pyfunction]
 fn level_style(level: &str) -> String {
@@ -2523,6 +2531,7 @@ fn _logust(py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(colorize_level, m)?)?;
     m.add_function(wrap_pyfunction!(_flush_file_sinks_at_exit, m)?)?;
     m.add_function(wrap_pyfunction!(split_format_markup, m)?)?;
+    m.add_function(wrap_pyfunction!(check_format_template, m)?)?;
     m.add_function(wrap_pyfunction!(level_style, m)?)?;
     m.add_function(wrap_pyfunction!(level_details, m)?)?;
     m.add_function(wrap_pyfunction!(record_compat::record_time_fields, m)?)?;

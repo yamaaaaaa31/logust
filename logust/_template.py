@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any
 from ._logust import (
     TimeFormatter,
     apply_color_markup,
+    check_format_template,
     colorize_level,
     level_details,
     level_style,
@@ -83,6 +84,27 @@ _TOKEN_ALIASES: dict[str, str] = {"level.name": "level", "file.name": "file"}
 _TIME_SPEC_KEY = "time:spec"
 # Segment key of `{extra}` (the whole extra dict)
 _EXTRA_ALL_KEY = "extra:all"
+
+
+def _format_styled(styled: str, plain: str, spec: str) -> str:
+    """``format(plain, spec)`` with ``styled`` (``plain`` with ANSI codes) in
+    place of ``plain``: escape codes take no width.
+
+    Matches the Rust formatter: if the spec cuts ``plain`` (a precision), the
+    plain result is returned (a cut could split an escape code).
+    """
+    padded = format(plain, spec)
+    pad = len(padded) - len(plain)
+    if len(spec) > 1 and spec[1] in "<>^":
+        align = spec[1]
+    elif spec and spec[0] in "<>^":
+        align = spec[0]
+    else:
+        align = "<"
+    left = 0 if align == "<" else pad if align == ">" else pad // 2
+    if pad < 0 or padded[left : left + len(plain)] != plain:
+        return padded
+    return padded[:left] + styled + padded[left + len(plain) :]
 
 
 def _py_repr_extra(extra: Any) -> str:
@@ -175,6 +197,9 @@ class ParsedCallableTemplate:
             colorize: Style tokens and render message markup as ANSI codes.
         """
         self._colorize = colorize
+        # Raise ValueError for an invalid `{field:spec}` now (like file and
+        # console sinks) instead of rendering the value unformatted per record
+        check_format_template(template)
         self._segments: tuple[Segment, ...] = self._parse(template)
         # Pre-compute which tokens are needed for lazy evaluation
         self._needed_tokens: frozenset[str] = frozenset(
@@ -358,6 +383,8 @@ class ParsedCallableTemplate:
                 parts.append(seg.text)
             elif isinstance(seg, TokenSegment):
                 # TokenSegment - get value lazily
+                # The message before markup rendering, when it has ANSI codes
+                styled_from = None
                 if seg.is_extra:
                     value = extra.get(seg.extra_key, "")
                 else:
@@ -388,8 +415,11 @@ class ParsedCallableTemplate:
                         elif styles:
                             # Keep template styles alive across resets in the message markup
                             value = apply_color_markup(message, True, "".join(styles))
+                            styled_from = message
                         else:
                             value = apply_color_markup(message, self._colorize)
+                            if self._colorize:
+                                styled_from = message
                     # Fields added after the ones above: checked last so existing
                     # templates pay nothing for them
                     else:
@@ -397,7 +427,12 @@ class ParsedCallableTemplate:
 
                 if seg.spec:
                     try:
-                        text = format(value, seg.spec)
+                        if styled_from is not None:
+                            # The spec lays out the text without its escape codes
+                            plain = apply_color_markup(styled_from, False)
+                            text = _format_styled(value, plain, seg.spec)
+                        else:
+                            text = format(value, seg.spec)
                     except (ValueError, TypeError):
                         text = str(value)
                 else:
