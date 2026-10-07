@@ -187,22 +187,9 @@ logger.log("NOPE", "Unknown level")  # ValueError: Invalid log level
 
 ## Filtering by a custom level { #filtering-by-a-custom-level }
 
-The `level=` options (`logger.add(level=...)`, `logger.set_level()`, `logger.add_callback(level=...)`, `logger.is_level_enabled()`) accept **built-in** levels only.
+A custom level works as a threshold anywhere a level is: pass its name to `level=`, and the handler takes that level and everything above it:
 
-/// warning
-
-Passing a custom level name there currently fails with an `AttributeError`:
-
-```python
-logger.add(sys.stdout, level="NOTICE")
-# AttributeError: type object 'builtins.LogLevel' has no attribute 'Notice'
-```
-
-///
-
-To make a handler start at your custom level, use a [filter](../tutorial/filters.md) on the level number instead:
-
-```python hl_lines="11"
+```python hl_lines="8"
 --8<-- "docs_src/advanced_custom_levels/tutorial004.py"
 ```
 
@@ -218,9 +205,19 @@ WARNING  | The cache is cold
 
 </div>
 
-`record["level"].no` is the severity of the record, so `>= 23` keeps `NOTICE` and everything above it, and drops `INFO`.
+A record passes when its level number is at least the threshold's: `NOTICE` is 23, so the handler keeps `NOTICE` (23) and `WARNING` (30), and drops `INFO` (20).
 
-Built-in level names still work as a threshold for a handler, and custom levels are compared by number against them. With `level="SUCCESS"` a handler shows custom levels from 25 up.
+The same goes for every `level=` option: `logger.add(level=...)` for every kind of sink, `logger.set_level()`, `logger.enable(level=...)`, `logger.add_callback(level=...)`, `logger.is_level_enabled()` and the `"level"` key of `logger.configure(handlers=[...])`. Each one accepts:
+
+* A level name, built-in or custom, in any case: `"WARNING"`, `"notice"`.
+* A number, `0` or more: `level=23`. It doesn't have to be a registered level.
+* A `LogLevel` member: `level=LogLevel.Warning`.
+
+`logger.enable()` takes a custom level as a keyword only: `logger.enable(level="NOTICE")`. A positional name that is not a built-in level is a module name, so `logger.enable("NOTICE")` re-enables a module called `NOTICE`.
+
+The comparison is always by number, so built-in and custom levels mix freely. With `level="SUCCESS"` (25) a handler shows custom levels from 25 up, and with `level="NOTICE"` it shows `SUCCESS` too.
+
+Register a level before you use it as a threshold. A name that doesn't exist raises a `ValueError` (`Level 'NOPE' does not exist`), and so does a negative number. Any other type raises a `TypeError`.
 
 ## Levels in configure() { #levels-in-configure }
 
@@ -242,4 +239,4 @@ logger.configure(
 * `logger.level("INFO", color="blue")` updates a level, built-in ones included.
 * Log with `logger.log("NOTICE", ...)` or `logger.log(23, ...)`.
 * `{level.icon}`, `{level.name}` and `{level.no}` show the level in a format.
-* To start a handler at a custom level, filter on `record["level"].no`.
+* `level="NOTICE"` (or `level=23`) starts a handler at a custom level, and `logger.set_level("NOTICE")` does the same for the console.

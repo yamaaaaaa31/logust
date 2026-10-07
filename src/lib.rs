@@ -148,7 +148,7 @@ pub enum CallbackKind {
 pub struct CallbackEntry {
     pub id: u64,
     pub callback: Py<PyAny>,
-    pub level: LogLevel,
+    pub level: u32,
     pub kind: CallbackKind,
     /// Propagate exceptions raised by the callback to the logging call
     /// (callable sinks with `catch=False`). Otherwise they are dropped.
@@ -289,14 +289,14 @@ fn merge_token_requirements_for_emit_no(
 ) -> TokenRequirements {
     let mut combined = TokenRequirements::default();
     for entry in handlers.iter() {
-        if emit_no >= entry.handler.level() as u32 {
+        if emit_no >= entry.handler.level() {
             combined = combined.merge(&entry.requirements());
         }
     }
 
     let mut any_raw = false;
     for entry in callbacks.iter() {
-        if emit_no < entry.level as u32 {
+        if emit_no < entry.level {
             continue;
         }
         // String / dict filters read the caller's module name
@@ -317,7 +317,7 @@ fn merge_token_requirements_for_emit_no(
 
     let has_filter = handlers
         .iter()
-        .any(|e| e.python_filter().is_some() && emit_no >= e.handler.level() as u32);
+        .any(|e| e.python_filter().is_some() && emit_no >= e.handler.level());
     if has_filter {
         combined = TokenRequirements::all();
     }
@@ -332,7 +332,7 @@ fn merge_handler_only_requirements_for_emit_no(
 ) -> TokenRequirements {
     let mut combined = TokenRequirements::default();
     for entry in handlers.iter() {
-        if emit_no >= entry.handler.level() as u32 {
+        if emit_no >= entry.handler.level() {
             combined = combined.merge(&entry.requirements());
         }
     }
@@ -445,7 +445,7 @@ fn current_context(py: Python<'_>) -> PyResult<Option<Bound<'_, PyDict>>> {
 }
 
 /// The default console handler (stderr, colors auto-detected once here).
-fn default_console_entry(py: Python<'_>, level: LogLevel) -> HandlerEntry {
+fn default_console_entry(py: Python<'_>, level: u32) -> HandlerEntry {
     HandlerEntry {
         id: handler::next_handler_id(),
         handler: HandlerType::Console(ConsoleHandler::new(py, level)),
@@ -455,7 +455,20 @@ fn default_console_entry(py: Python<'_>, level: LogLevel) -> HandlerEntry {
     }
 }
 
-fn set_console_level(handlers: &mut [HandlerEntry], level: LogLevel) {
+/// What `get_level()` returns
+#[derive(IntoPyObject)]
+enum LevelOrNo {
+    Level(LogLevel),
+    No(u32),
+}
+
+/// Numeric threshold of a `level=` argument (see [`level::level_threshold`]),
+/// DEBUG when it is omitted.
+fn threshold_or_debug(level: Option<&Bound<'_, PyAny>>) -> PyResult<u32> {
+    level.map_or(Ok(LogLevel::Debug as u32), level::level_threshold)
+}
+
+fn set_console_level(handlers: &mut [HandlerEntry], level: u32) {
     for entry in handlers.iter_mut() {
         if let HandlerType::Console(ref mut h) = entry.handler {
             h.level = level;
@@ -538,7 +551,8 @@ thread_local! {
 impl PyLogger {
     #[new]
     #[pyo3(signature = (level=None))]
-    fn new(py: Python<'_>, level: Option<LogLevel>) -> Self {
+    fn new(py: Python<'_>, level: Option<&Bound<'_, PyAny>>) -> PyResult<Self> {
+        let console_level = threshold_or_debug(level)?;
         let logger = PyLogger {
             handlers: Arc::new(RwLock::new(Vec::new())),
             disabled_consoles: Arc::new(RwLock::new(Vec::new())),
@@ -552,7 +566,6 @@ impl PyLogger {
             message_markup: true,
         };
 
-        let console_level = level.unwrap_or_default();
         logger
             .handlers
             .write()
@@ -560,7 +573,7 @@ impl PyLogger {
         logger.update_min_level_cache();
         logger.update_requirements_cache();
 
-        logger
+        Ok(logger)
     }
 
     /// Add a file handler
@@ -569,7 +582,7 @@ impl PyLogger {
     fn add(
         &self,
         path: String,
-        level: Option<LogLevel>,
+        level: Option<&Bound<'_, PyAny>>,
         format: Option<String>,
         rotation: Option<String>,
         retention: Option<String>,
@@ -587,7 +600,7 @@ impl PyLogger {
         let compression = extract_compression(compression)?;
         let (line_buffered, buffer_size) = extract_buffering(buffering)?;
         let truncate = extract_truncate(mode)?;
-        let level = level.unwrap_or(LogLevel::Debug);
+        let level = threshold_or_debug(level)?;
         let serialize = serialize.unwrap_or(false);
         let format_config = FormatConfig::try_new(format, serialize)
             .map_err(pyo3::exceptions::PyValueError::new_err)?;
@@ -660,7 +673,7 @@ impl PyLogger {
     fn add_console(
         &self,
         stream: String,
-        level: Option<LogLevel>,
+        level: Option<&Bound<'_, PyAny>>,
         format: Option<String>,
         serialize: Option<bool>,
         filter: Option<&Bound<'_, PyAny>>,
@@ -668,7 +681,7 @@ impl PyLogger {
         catch: Option<bool>,
     ) -> PyResult<u64> {
         let filter = record_filter_arg(filter)?;
-        let level = level.unwrap_or(LogLevel::Debug);
+        let level = threshold_or_debug(level)?;
         let serialize = serialize.unwrap_or(false);
         let colorize = colorize.unwrap_or(!serialize);
         let format_config = FormatConfig::try_new(format, serialize)
@@ -823,7 +836,8 @@ impl PyLogger {
     }
 
     /// Set minimum log level for all console handlers
-    fn set_level(&self, level: LogLevel) {
+    fn set_level(&self, level: &Bound<'_, PyAny>) -> PyResult<()> {
+        let level = level::level_threshold(level)?;
         {
             let mut handlers = self.handlers.write();
             set_console_level(&mut handlers, level);
@@ -832,23 +846,27 @@ impl PyLogger {
         }
         self.update_min_level_cache();
         self.update_requirements_cache();
+        Ok(())
     }
 
-    /// Get current minimum log level (from first console handler)
-    fn get_level(&self) -> LogLevel {
+    /// Get current minimum log level (from first console handler): a
+    /// `LogLevel` when it is a built-in level's value, otherwise the number.
+    fn get_level(&self) -> LevelOrNo {
         let handlers = self.handlers.read();
-        for entry in handlers.iter() {
-            if let HandlerType::Console(ref h) = entry.handler {
-                return h.level;
-            }
-        }
-        LogLevel::Debug
+        let no = handlers
+            .iter()
+            .find_map(|entry| match entry.handler {
+                HandlerType::Console(ref h) => Some(h.level),
+                HandlerType::File(_) => None,
+            })
+            .unwrap_or(LogLevel::Debug as u32);
+        LogLevel::from_no(no).map_or(LevelOrNo::No(no), LevelOrNo::Level)
     }
 
     /// Check if any handler would accept messages at the given level (O(1) via `cached_min_level`).
-    fn is_level_enabled(&self, level: LogLevel) -> bool {
-        let m = self.cached_min_level.load(Ordering::Relaxed);
-        (level as u32) >= m
+    fn is_level_enabled(&self, level: &Bound<'_, PyAny>) -> PyResult<bool> {
+        let level = level::level_threshold(level)?;
+        Ok(level >= self.cached_min_level.load(Ordering::Relaxed))
     }
 
     /// Get the cached minimum log level across all handlers and callbacks
@@ -879,6 +897,8 @@ impl PyLogger {
             get_level_info(&lvl_name).map(|i| i.no)
         } else if let Ok(no) = level_arg.extract::<u32>() {
             get_level_by_no(no).map(|i| i.no)
+        } else if let Ok(level) = level_arg.extract::<LogLevel>() {
+            Some(level as u32)
         } else {
             None
         }
@@ -1128,7 +1148,8 @@ impl PyLogger {
     /// handler when there is no console handler at all. `level`, when given,
     /// becomes the minimum level of every console handler.
     #[pyo3(signature = (level=None))]
-    fn enable(&self, py: Python<'_>, level: Option<LogLevel>) {
+    fn enable(&self, py: Python<'_>, level: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+        let level = level.map(level::level_threshold).transpose()?;
         {
             let mut handlers = self.handlers.write();
             handlers.append(&mut self.disabled_consoles.write());
@@ -1138,13 +1159,17 @@ impl PyLogger {
                 .any(|e| matches!(e.handler, HandlerType::Console(_)));
 
             if !has_console {
-                handlers.push(default_console_entry(py, level.unwrap_or(LogLevel::Debug)));
+                handlers.push(default_console_entry(
+                    py,
+                    level.unwrap_or(LogLevel::Debug as u32),
+                ));
             } else if let Some(level) = level {
                 set_console_level(&mut handlers, level);
             }
         }
         self.update_min_level_cache();
         self.update_requirements_cache();
+        Ok(())
     }
 
     /// Check if console output is enabled
@@ -1176,7 +1201,7 @@ impl PyLogger {
     fn add_callback(
         &self,
         callback: Py<PyAny>,
-        level: Option<LogLevel>,
+        level: Option<&Bound<'_, PyAny>>,
         file_path: bool,
         raise_errors: bool,
         extra_repr: bool,
@@ -1187,7 +1212,7 @@ impl PyLogger {
         let entry = CallbackEntry {
             id,
             callback,
-            level: level.unwrap_or(LogLevel::Debug),
+            level: threshold_or_debug(level)?,
             kind: CallbackKind::Raw {
                 file_path,
                 extra_repr,
@@ -1207,7 +1232,7 @@ impl PyLogger {
     fn add_serialized_callback(
         &self,
         callback: Py<PyAny>,
-        level: Option<LogLevel>,
+        level: Option<&Bound<'_, PyAny>>,
         raise_errors: bool,
         filter: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<u64> {
@@ -1216,7 +1241,7 @@ impl PyLogger {
         let entry = CallbackEntry {
             id,
             callback,
-            level: level.unwrap_or(LogLevel::Debug),
+            level: threshold_or_debug(level)?,
             kind: CallbackKind::Serialized,
             raise_errors,
             exc_variant: 0,
@@ -1235,7 +1260,7 @@ impl PyLogger {
         callback: Py<PyAny>,
         requirements: Bound<'_, PyTuple>,
         extra_keys: Bound<'_, PyTuple>,
-        level: Option<LogLevel>,
+        level: Option<&Bound<'_, PyAny>>,
         raise_errors: bool,
         filter: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<u64> {
@@ -1245,7 +1270,7 @@ impl PyLogger {
         let entry = CallbackEntry {
             id,
             callback,
-            level: level.unwrap_or(LogLevel::Debug),
+            level: threshold_or_debug(level)?,
             kind: CallbackKind::FormattedLight(req),
             raise_errors,
             exc_variant: 0,
@@ -1612,15 +1637,11 @@ impl PyLogger {
 
         let min_handler = handlers
             .iter()
-            .map(|e| e.handler.level() as u32)
+            .map(|e| e.handler.level())
             .min()
             .unwrap_or(u32::MAX);
 
-        let min_callback = callbacks
-            .iter()
-            .map(|e| e.level as u32)
-            .min()
-            .unwrap_or(u32::MAX);
+        let min_callback = callbacks.iter().map(|e| e.level).min().unwrap_or(u32::MAX);
 
         self.cached_min_level
             .store(min_handler.min(min_callback), Ordering::Relaxed);
@@ -1758,26 +1779,27 @@ impl PyLogger {
         process_name: Option<String>,
         process_id: Option<u32>,
     ) -> PyResult<()> {
+        let level_no = level as u32;
         // Nothing takes this record: skip the locks (the common filtered-out path)
-        if (level as u32) < self.cached_min_level.load(Ordering::Relaxed) {
+        if level_no < self.cached_min_level.load(Ordering::Relaxed) {
             return Ok(());
         }
 
         let handlers = self.handlers.read();
-        let callbacks_guard = self.callbacks_for(level as u32);
+        let callbacks_guard = self.callbacks_for(level_no);
         let callbacks: &[CallbackEntry] = callbacks_guard.as_deref().map_or(&[], Vec::as_slice);
 
         let mut has_eligible_handler = false;
         let mut has_eligible_filtered_handler = false;
         for e in handlers.iter() {
-            if level >= e.handler.level() {
+            if level_no >= e.handler.level() {
                 has_eligible_handler = true;
                 if e.python_filter().is_some() {
                     has_eligible_filtered_handler = true;
                 }
             }
         }
-        let has_eligible_callback = callbacks.iter().any(|e| level >= e.level);
+        let has_eligible_callback = callbacks.iter().any(|e| level_no >= e.level);
 
         if !has_eligible_handler && !has_eligible_callback {
             return Ok(());
@@ -1818,7 +1840,7 @@ impl PyLogger {
                 let mut need_text_full_dict = has_eligible_filtered_handler;
                 let mut with_file_path = false;
                 for e in callbacks.iter() {
-                    if level >= e.level
+                    if level_no >= e.level
                         && let CallbackKind::Raw { file_path, .. } = e.kind
                     {
                         need_text_full_dict = true;
@@ -1827,7 +1849,7 @@ impl PyLogger {
                 }
                 let need_json_full_dict = callbacks
                     .iter()
-                    .any(|e| level >= e.level && matches!(&e.kind, CallbackKind::Serialized));
+                    .any(|e| level_no >= e.level && matches!(&e.kind, CallbackKind::Serialized));
 
                 let shared_text_full: Option<Bound<'_, PyDict>> = if need_text_full_dict {
                     // Filters and raw callbacks are the only consumers of this dict
@@ -1842,7 +1864,7 @@ impl PyLogger {
                 };
 
                 for entry in callbacks.iter() {
-                    if level < entry.level {
+                    if level_no < entry.level {
                         continue;
                     }
                     if let Some(f) = &entry.filter
@@ -1891,7 +1913,7 @@ impl PyLogger {
                 }
 
                 for entry in handlers.iter() {
-                    if level < entry.handler.level() {
+                    if level_no < entry.handler.level() {
                         continue;
                     }
                     if !entry.native_filter_passes(&record) {
@@ -2186,14 +2208,14 @@ impl PyLogger {
         let mut has_eligible_handler = false;
         let mut has_eligible_filtered_handler = false;
         for e in handlers.iter() {
-            if level_no >= e.handler.level() as u32 {
+            if level_no >= e.handler.level() {
                 has_eligible_handler = true;
                 if e.python_filter().is_some() {
                     has_eligible_filtered_handler = true;
                 }
             }
         }
-        let has_eligible_callback = callbacks.iter().any(|e| level_no >= e.level as u32);
+        let has_eligible_callback = callbacks.iter().any(|e| level_no >= e.level);
 
         if !has_eligible_handler && !has_eligible_callback {
             return Ok(());
@@ -2243,16 +2265,16 @@ impl PyLogger {
                 let mut need_text_full_dict = has_eligible_filtered_handler;
                 let mut with_file_path = false;
                 for e in callbacks.iter() {
-                    if level_no >= e.level as u32
+                    if level_no >= e.level
                         && let CallbackKind::Raw { file_path, .. } = e.kind
                     {
                         need_text_full_dict = true;
                         with_file_path |= file_path;
                     }
                 }
-                let need_json_full_dict = callbacks.iter().any(|e| {
-                    level_no >= e.level as u32 && matches!(&e.kind, CallbackKind::Serialized)
-                });
+                let need_json_full_dict = callbacks
+                    .iter()
+                    .any(|e| level_no >= e.level && matches!(&e.kind, CallbackKind::Serialized));
 
                 let level_name = level_info.name.as_str();
                 let shared_text_full: Option<Bound<'_, PyDict>> = if need_text_full_dict {
@@ -2268,7 +2290,7 @@ impl PyLogger {
                 };
 
                 for entry in callbacks.iter() {
-                    if level_no < entry.level as u32 {
+                    if level_no < entry.level {
                         continue;
                     }
                     if let Some(f) = &entry.filter
@@ -2316,7 +2338,7 @@ impl PyLogger {
                 }
 
                 for entry in handlers.iter() {
-                    if level_no < entry.handler.level() as u32 {
+                    if level_no < entry.handler.level() {
                         continue;
                     }
                     if !entry.native_filter_passes(&record) {
@@ -2528,7 +2550,7 @@ fn _logust(py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(record_compat::record_time_fields, m)?)?;
     m.add_class::<TimeFormatter>()?;
 
-    let default_logger = Py::new(py, PyLogger::new(py, None))?;
+    let default_logger = Py::new(py, PyLogger::new(py, None)?)?;
     m.add("logger", default_logger)?;
     m.add("CONTEXT_VAR", context_var(py)?)?;
     m.add_function(wrap_pyfunction!(set_context, m)?)?;

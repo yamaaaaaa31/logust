@@ -10,6 +10,7 @@ import datetime
 from collections.abc import Callable
 from typing import Any, NamedTuple, Protocol, TextIO, TypeAlias, TypedDict
 
+from ._logust import LogLevel
 from ._record import RecordElapsed, RecordFile, RecordLevelStr, RecordProcess, RecordThread
 
 
@@ -175,7 +176,8 @@ class HandlerConfig(TypedDict, total=False):
 
     Attributes:
         sink: File path or sys.stdout/sys.stderr for output (required).
-        level: Minimum log level (name or numeric value).
+        level: Minimum log level: a level name (built-in or custom), a
+               ``LogLevel`` or an int >= 0.
         format: Custom format string.
         rotation: Rotation strategy ("daily", "hourly", "500 MB", or a
                   ``datetime.timedelta`` / ``datetime.time``).
@@ -208,7 +210,7 @@ class HandlerConfig(TypedDict, total=False):
     """
 
     sink: str | TextIO
-    level: str | int
+    level: str | int | LogLevel
     format: str
     rotation: str | datetime.timedelta | datetime.time
     retention: str | int

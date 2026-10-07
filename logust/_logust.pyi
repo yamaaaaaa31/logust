@@ -69,7 +69,7 @@ class PyLogger:
     handler management, and output formatting.
     """
 
-    def __init__(self, level: LogLevel | None = None) -> None:
+    def __init__(self, level: LogLevel | str | int | None = None) -> None:
         """Create a new logger with a default console handler on stderr.
 
         Colors are detected once, here (TTY, NO_COLOR, FORCE_COLOR, CI,
@@ -80,7 +80,7 @@ class PyLogger:
     def add(
         self,
         path: str,
-        level: LogLevel | None = None,
+        level: LogLevel | str | int | None = None,
         format: str | None = None,
         rotation: str | None = None,
         retention: str | None = None,
@@ -111,7 +111,7 @@ class PyLogger:
     def add_console(
         self,
         stream: str,
-        level: LogLevel | None = None,
+        level: LogLevel | str | int | None = None,
         format: str | None = None,
         serialize: bool | None = None,
         filter: FilterType = None,
@@ -137,15 +137,15 @@ class PyLogger:
         """
         ...
 
-    def set_level(self, level: LogLevel) -> None:
+    def set_level(self, level: LogLevel | str | int) -> None:
         """Set minimum log level for all console handlers."""
         ...
 
-    def get_level(self) -> LogLevel:
+    def get_level(self) -> LogLevel | int:
         """Get current minimum log level."""
         ...
 
-    def is_level_enabled(self, level: LogLevel) -> bool:
+    def is_level_enabled(self, level: LogLevel | str | int) -> bool:
         """Check if any handler would accept messages at the given level."""
         ...
 
@@ -154,7 +154,7 @@ class PyLogger:
         """Get the cached minimum log level across all handlers and callbacks."""
         ...
 
-    def enable(self, level: LogLevel | None = None) -> None:
+    def enable(self, level: LogLevel | str | int | None = None) -> None:
         """Put back the console handlers ``disable()`` set aside, or add the default one.
 
         ``level``, when given, becomes the level of every console handler.
@@ -176,7 +176,7 @@ class PyLogger:
     def add_callback(
         self,
         callback: Callable[[dict[str, Any]], None],
-        level: LogLevel | None = None,
+        level: LogLevel | str | int | None = None,
         file_path: bool = False,
         raise_errors: bool = False,
         extra_repr: bool = False,
@@ -194,7 +194,7 @@ class PyLogger:
     def add_serialized_callback(
         self,
         callback: Callable[[dict[str, Any]], None],
-        level: LogLevel | None = None,
+        level: LogLevel | str | int | None = None,
         raise_errors: bool = False,
         filter: _NativeFilter = None,
     ) -> int:
@@ -206,7 +206,7 @@ class PyLogger:
         callback: Callable[[dict[str, Any]], None],
         requirements: tuple[bool, ...],
         extra_keys: tuple[str, ...],
-        level: LogLevel | None = None,
+        level: LogLevel | str | int | None = None,
         raise_errors: bool = False,
         filter: _NativeFilter = None,
     ) -> int:
@@ -258,7 +258,7 @@ class PyLogger:
         """Check if any handler format needs process info (excludes callbacks)."""
         ...
 
-    def try_resolve_emit_level_no(self, level_arg: str | int) -> int | None:
+    def try_resolve_emit_level_no(self, level_arg: str | int | LogLevel) -> int | None:
         """Resolve level name or numeric ``no`` to registered severity (``LevelInfo.no``)."""
         ...
 

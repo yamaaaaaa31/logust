@@ -9,6 +9,7 @@ from ._traceback import capture_exception, current_exc_info
 
 if TYPE_CHECKING:
     from ._logger import Logger
+    from ._logust import LogLevel
 
 
 class OptLogger:
@@ -136,11 +137,11 @@ class OptLogger:
         """Output CRITICAL level log message with options."""
         self._log("critical", message, *args, **kwargs)
 
-    def log(self, level: str | int, message: str, *args: Any, **kwargs: Any) -> None:
+    def log(self, level: str | int | LogLevel, message: str, *args: Any, **kwargs: Any) -> None:
         """Output log message at any level (built-in or custom) with options.
 
         Args:
-            level: Level name (str) or numeric value (int).
+            level: Level name (str), numeric value (int) or ``LogLevel``.
             message: Log message with optional format placeholders.
             *args: Format arguments (evaluated lazily if opt(lazy=True)).
             **kwargs: Additional arguments.
