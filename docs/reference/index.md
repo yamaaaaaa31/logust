@@ -119,7 +119,7 @@ Adds a handler and returns its ID.
 |-----------|------|---------|-------------|
 | `sink` | `str | os.PathLike | TextIO | Callable[[str], Any]` | | A file path, a stream (any object with `write()`, like `sys.stdout` or `io.StringIO`), or a callable that receives the formatted message (without a trailing newline). A stream is bound when `add()` is called. |
 | `level` | `LogLevel | str | None` | `None` | Minimum level. A built-in level name or `LogLevel`. |
-| `format` | `str | None` | `None` | Format string. `None` uses `"{time} | {level:<8} | {name}:{function}:{line} - {message}"`. See [Formatting](../tutorial/formatting.md). |
+| `format` | `str | None` | `None` | Format string. `None` uses `"{time} | {level:<8} | {name}:{function}:{line} - {message}"`. Tokens take Python [format specs](../tutorial/formatting.md#format-specs); an invalid one raises `ValueError`. See [Formatting](../tutorial/formatting.md). |
 | `rotation` | `str | timedelta | time | None` | `None` | Files only. `"500 MB"`, `"daily"` / `"1 day"`, `"hourly"` / `"1 hour"`, `timedelta(days=1)`, `timedelta(hours=1)`, `time(0, 0)`. Boundaries are local wall-clock times. Other values raise. See [Rotation](../tutorial/rotation-retention.md). |
 | `retention` | `str | int | None` | `None` | Files only. `"10 days"`, or a number of files. Other strings raise `ValueError`. See [Retention](../tutorial/rotation-retention.md#retention). |
 | `compression` | `bool | str` | `False` | Files only. `True` (gzip), `"gz"`, `"bz2"`, `"zip"`, `"tar"`, `"tar.gz"`, `"tar.bz2"`. |

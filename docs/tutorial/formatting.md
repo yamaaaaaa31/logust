@@ -87,7 +87,7 @@ Here are all the placeholders you can use in a format:
 | `{time}` | Timestamp | `2026-10-06 12:00:00.123` |
 | `{time:<spec>}` | Timestamp in a [custom format](#time-formatting) | `{time:HH:mm:ss}` → `12:00:00` |
 | `{level}`, `{level.name}` | Level name | `INFO` |
-| `{level:<8}`, `{level.name:<8}` | Level name padded to a width | `INFO    ` |
+| `{level:<8}`, `{level.name:<8}` | Level name padded to a width (any token takes a [format spec](#format-specs)) | `INFO    ` |
 | `{level.no}` | Numeric severity | `20` |
 | `{level.icon}` | Level icon | `ℹ️` |
 | `{message}` | The message | `Server started` |
@@ -148,13 +148,57 @@ Notice the `{level:<8}` in the example above. The `:<8` part is a **format spec*
 
 8 is the length of the longest built-in level name, `CRITICAL`.
 
-/// note
+### Format specs { #format-specs }
 
-In file and console sinks, `{level:<N}` (and `{level.name:<N}`) and `{time:<spec>}` are the only format specs that are applied. Other specs, like `{level: <8}`, `{line:05d}` or `{message:>10}`, are currently written out literally instead of being applied.
+Every token except `{time}` (which has [its own specs](#time-formatting)) and `{extra}` takes a spec from Python's [format-spec mini-language](https://docs.python.org/3/library/string.html#formatspec), the same one `format()` and f-strings use. The output is exactly what `format(value, spec)` gives in Python, in every kind of sink:
 
-Callable sinks format with Python's `str.format()`, so they accept any spec. If you want the same output everywhere, stick to `{level:<N}` and `{time:<spec>}`.
+```python hl_lines="8"
+--8<-- "docs_src/formatting/tutorial011.py"
+```
+
+<div class="termy">
+
+```console
+$ python main.py
+
+[  INFO   ] line 011 | ann   | Short message
+[ WARNING ] line 012 | bob   | A message that is much too lon
+[  ERROR  ] line 013 | zoë   | Disk full 💾
+```
+
+</div>
+
+A spec is `[[fill]align][sign][z][#][0][width][grouping][.precision][type]`. The most useful parts:
+
+| Spec | Meaning | Example | Output |
+|------|---------|---------|--------|
+| `<N`, `>N`, `^N` | Align left, right or center in `N` characters | `{level:>8}` | `    INFO` |
+| `<fill><align>N` | Pad with another character | `{level:*^10}` | `***INFO***` |
+| `.N` | Cut text to `N` characters | `{message:.10}` | `A message ` |
+| `0N`, `0Nd` | Pad a number with zeros | `{line:05d}` | `00042` |
+| `,`, `_` | Group thousands | `{thread.id:,}` | `8,348,778,368` |
+| `x`, `X`, `o`, `b` | Hexadecimal, octal, binary (`#` adds `0x`...) | `{line:#x}` | `0x2a` |
+| `+` | Always show the sign | `{level.no:+}` | `+20` |
+| `e`, `f`, `g`, `%` | As a float | `{line:.1f}` | `42.0` |
+
+`{line}`, `{level.no}`, `{thread.id}` and `{process.id}` are integers. All the other tokens are strings, including `{thread}` (`MainThread:8348778368`) and `{elapsed}` (`00:01:23.456`).
+
+loguru's default format pads the level with `{level: <8}`, an explicit space fill: it works too. Widths count characters (Unicode code points, like `len()`), so `é` and `💾` count as one. A wide character such as `日` also counts as one, even though a terminal shows it two columns wide.
+
+The spec is checked when you add the sink. A spec Python would reject raises `ValueError` right away, in `logger.add()`, with Python's message:
+
+```python
+logger.add("app.log", format="{message:d}")
+# ValueError: Unknown format code 'd' for object of type 'str' (format field '{message:d}')
+```
+
+/// note | `{extra[key]}` values
+
+A context value is formatted from its text, `str(value)`, as it is written without a spec. So string specs like `{extra[user]:<8}` or `{extra[path]:.20}` work for any value, but number specs don't: `{extra[count]:05d}` writes `42`, unformatted, where loguru writes `00042`. A spec that no value could accept, like `{extra[count]:abc}`, raises `ValueError` in `logger.add()`.
 
 ///
+
+With colors, padding is computed on the text without its color codes, so colored columns line up too. A `{message}` with [color markup](#colors) is padded on its visible text; if a precision cuts it, its colors are dropped.
 
 ### Time formatting { #time-formatting }
 
@@ -256,7 +300,7 @@ INFO | Anonymous visit | user=
 
 </div>
 
-When a record doesn't have the key, `{extra[user_id]}` is empty. No error, no crash, the line is still written.
+When a record doesn't have the key, `{extra[user_id]}` is empty. No error, no crash, the line is still written. With a [format spec](#format-specs), the empty value is still padded: `{extra[user_id]:<6}` keeps the column.
 
 ### All values with `{extra}` { #all-values-with-extra }
 
@@ -412,7 +456,8 @@ Exception messages logged by [`logger.catch()`](exceptions.md#the-catch-decorato
 * The default format is `{time} | {level:<8} | {name}:{function}:{line} - {message}`.
 * Pass `format=` to `logger.add()` to choose the layout of each sink.
 * Tokens cover the time, level, message, caller, thread, process, elapsed time, extra values and the exception.
-* `{level:<8}` aligns the level, and `{time:<spec>}` takes loguru's time tokens, `!UTC`, or a `strftime` format.
+* `{level:<8}` aligns the level. Every token takes a Python format spec (`{line:05d}`, `{message:>20}`...), with the same output in every sink, and an invalid spec raises `ValueError` in `logger.add()`.
+* `{time:<spec>}` takes loguru's time tokens, `!UTC`, or a `strftime` format.
 * `{extra[key]}` writes one context value, `{extra}` all of them.
 * `{exception}` places the traceback yourself.
 * `<red>`, `<bold>`, `<level>`... add colors. They are removed on sinks without colors, and `opt(colors=False)` keeps them as text.

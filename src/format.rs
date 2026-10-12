@@ -7,6 +7,7 @@ use chrono::{DateTime, Datelike, Local, Timelike};
 use colored::Color;
 use serde::Serialize;
 
+use crate::format_spec::{FormatSpec, ValueKind};
 use crate::handler::{ExtraMap, LogRecord, write_extra_repr};
 use crate::level::get_level_color;
 use crate::time_format::{TimeSpec, push_num};
@@ -272,47 +273,85 @@ pub enum FormatToken {
     StyleOpen(MarkupStyle),
     /// Closing color markup tag in the template
     StyleClose,
+    /// A field with a Python format spec (`{line:05d}`, `{message:>20}`, ...)
+    Spec(Box<SpecToken>),
+    /// `{extra[key]:<spec>}`
+    ExtraSpec(Box<ExtraSpecToken>),
+}
+
+/// A field rendered through a compiled Python format spec
+#[derive(Clone, Debug)]
+pub struct SpecToken {
+    /// The field's token without spec (`FormatToken::Line` for `{line:05d}`)
+    field: FormatToken,
+    spec: FormatSpec,
+}
+
+/// `{extra[key]:<spec>}`
+#[derive(Clone, Debug)]
+pub struct ExtraSpecToken {
+    key: String,
+    /// None if a string rejects the spec: the value is written as is, as a
+    /// callable sink does when `format(value, spec)` raises
+    spec: Option<FormatSpec>,
+}
+
+/// Kind of value a field holds, as Python's `format()` sees it
+fn field_kind(token: &FormatToken) -> ValueKind {
+    match token {
+        FormatToken::Line
+        | FormatToken::LevelNo
+        | FormatToken::ThreadId
+        | FormatToken::ProcessId => ValueKind::Int,
+        _ => ValueKind::Str,
+    }
 }
 
 /// Compute token requirements from parsed tokens
 fn compute_requirements(tokens: &[FormatToken]) -> TokenRequirements {
     let mut reqs = TokenRequirements::default();
     for token in tokens {
-        match token {
-            FormatToken::Name
-            | FormatToken::Module
-            | FormatToken::Function
-            | FormatToken::Line
-            | FormatToken::File
-            | FormatToken::FilePath => {
-                reqs.needs_caller = true;
-            }
-            FormatToken::Thread | FormatToken::ThreadName | FormatToken::ThreadId => {
-                reqs.needs_thread = true;
-            }
-            FormatToken::Process | FormatToken::ProcessName | FormatToken::ProcessId => {
-                reqs.needs_process = true;
-            }
-            // `{time:<spec>}` renders from the record's timestamp itself
-            FormatToken::Time => {
-                reqs.needs_time = true;
-            }
-            FormatToken::Level
-            | FormatToken::LevelWidth(_)
-            | FormatToken::LevelNo
-            | FormatToken::LevelIcon => {
-                reqs.needs_level = true;
-            }
-            FormatToken::Message => {
-                reqs.needs_message = true;
-            }
-            FormatToken::Elapsed => {
-                reqs.needs_elapsed = true;
-            }
-            _ => {}
-        }
+        add_requirements(token, &mut reqs);
     }
     reqs
+}
+
+/// Add what `token` needs to `reqs`
+fn add_requirements(token: &FormatToken, reqs: &mut TokenRequirements) {
+    match token {
+        FormatToken::Name
+        | FormatToken::Module
+        | FormatToken::Function
+        | FormatToken::Line
+        | FormatToken::File
+        | FormatToken::FilePath => {
+            reqs.needs_caller = true;
+        }
+        FormatToken::Thread | FormatToken::ThreadName | FormatToken::ThreadId => {
+            reqs.needs_thread = true;
+        }
+        FormatToken::Process | FormatToken::ProcessName | FormatToken::ProcessId => {
+            reqs.needs_process = true;
+        }
+        // `{time:<spec>}` renders from the record's timestamp itself
+        FormatToken::Time => {
+            reqs.needs_time = true;
+        }
+        FormatToken::Level
+        | FormatToken::LevelWidth(_)
+        | FormatToken::LevelNo
+        | FormatToken::LevelIcon => {
+            reqs.needs_level = true;
+        }
+        FormatToken::Message => {
+            reqs.needs_message = true;
+        }
+        FormatToken::Elapsed => {
+            reqs.needs_elapsed = true;
+        }
+        FormatToken::Spec(token) => add_requirements(&token.field, reqs),
+        _ => {}
+    }
 }
 
 /// Parse a template string into tokens.
@@ -357,6 +396,64 @@ fn field_token(placeholder: &str) -> Option<FormatToken> {
     })
 }
 
+/// Token for a `{field:spec}` placeholder with a Python format spec, if
+/// `field` is a known field (`{extra[key]:spec}` included).
+///
+/// Fails if the spec is invalid for the field's value, with Python's message.
+fn spec_token(placeholder: &str) -> Result<Option<FormatToken>, String> {
+    let invalid = |err: String| format!("{err} (format field '{{{placeholder}}}')");
+
+    // `extra[key]:spec`: the key ends at the first ']' (as in callable sinks)
+    if let Some(rest) = placeholder.strip_prefix("extra[")
+        && let Some(close) = rest.find(']')
+        && close > 0
+        && let Some(spec) = rest[close + 1..].strip_prefix(':')
+    {
+        let key = rest[..close].to_string();
+        if spec.is_empty() {
+            return Ok(Some(FormatToken::Extra(key)));
+        }
+        // Extra values render from their text (`str(value)`), as callable sinks
+        // see them. A spec a string rejects but an int accepts (`05d`) may suit
+        // the value in loguru, so it isn't an error: like a callable sink, the
+        // value is then written unformatted. A spec no value accepts is.
+        let spec = match FormatSpec::parse(spec, ValueKind::Str) {
+            Ok(spec) => Some(spec),
+            Err(err) => {
+                FormatSpec::parse(spec, ValueKind::Int).map_err(|_| invalid(err))?;
+                None
+            }
+        };
+        return Ok(Some(FormatToken::ExtraSpec(Box::new(ExtraSpecToken {
+            key,
+            spec,
+        }))));
+    }
+
+    let Some((name, spec)) = placeholder.split_once(':') else {
+        return Ok(None);
+    };
+    let Some(field) = field_token(name) else {
+        return Ok(None);
+    };
+    if matches!(field, FormatToken::ExtraAll) {
+        // `{extra:<spec>}` is not a field (callable sinks keep it literal too)
+        return Ok(None);
+    }
+    if spec.is_empty() {
+        // `format(value, "")` is `str(value)`
+        return Ok(Some(field));
+    }
+    let spec = FormatSpec::parse(spec, field_kind(&field)).map_err(invalid)?;
+    if matches!(field, FormatToken::Level)
+        && let Some(width) = spec.left_pad_width()
+    {
+        // `{level:<8}` / `{level: <8}`: the padded-level fast path
+        return Ok(Some(FormatToken::LevelWidth(width)));
+    }
+    Ok(Some(FormatToken::Spec(Box::new(SpecToken { field, spec }))))
+}
+
 /// Parse `{...}` placeholders in a markup-free piece of the template
 fn parse_placeholders(template: &str, tokens: &mut Vec<FormatToken>) -> Result<(), String> {
     let mut chars = template.chars().peekable();
@@ -382,20 +479,11 @@ fn parse_placeholders(template: &str, tokens: &mut Vec<FormatToken>) -> Result<(
             } else if let Some(spec) = placeholder.strip_prefix("time:") {
                 let spec = TimeSpec::parse(spec)?;
                 tokens.push(FormatToken::TimeFormatted(Box::new(spec)));
-            } else if let Some(width_str) = placeholder
-                .strip_prefix("level:<")
-                .or_else(|| placeholder.strip_prefix("level.name:<"))
-            {
-                if let Ok(width) = width_str.parse::<usize>() {
-                    tokens.push(FormatToken::LevelWidth(width));
-                } else {
-                    static_buf.push('{');
-                    static_buf.push_str(&placeholder);
-                    static_buf.push('}');
-                }
             } else if placeholder.starts_with("extra[") && placeholder.ends_with(']') {
                 let key = &placeholder[6..placeholder.len() - 1];
                 tokens.push(FormatToken::Extra(key.to_string()));
+            } else if let Some(token) = spec_token(&placeholder)? {
+                tokens.push(token);
             } else {
                 static_buf.push('{');
                 static_buf.push_str(&placeholder);
@@ -667,6 +755,120 @@ fn render_markup_token(
     }
 }
 
+/// Append an int field formatted with `spec` (plain if Python would raise for
+/// the value, e.g. `c` past the Unicode range)
+fn write_int_spec(out: &mut String, spec: &FormatSpec, value: u64) {
+    if !spec.write_uint(out, value) {
+        push_num(out, value, 0);
+    }
+}
+
+/// Render a `{field:spec}` token: the field's text (or number) laid out by the
+/// spec, inside the field's default style. Escape codes take no width.
+#[inline(never)]
+fn write_spec_field(
+    out: &mut String,
+    token: &SpecToken,
+    record: &LogRecord,
+    level_color: Color,
+    auto: bool,
+    colorize: bool,
+    styles: &[MarkupStyle],
+) {
+    let spec = &token.spec;
+    let text = |o: &mut String, text: &str| spec.write_str(o, text);
+    match token.field {
+        FormatToken::Message => {
+            write_spec_message(out, spec, record, level_color, colorize, styles)
+        }
+        FormatToken::Level => write_styled(out, auto, bold_color_prefix(level_color), |o| {
+            text(o, record.level_name())
+        }),
+        FormatToken::LevelNo => write_int_spec(out, spec, u64::from(record.level_no())),
+        FormatToken::LevelIcon => text(out, record.level_icon()),
+        FormatToken::Exception => text(out, record.exception.as_deref().unwrap_or("")),
+        FormatToken::Name | FormatToken::Module => {
+            write_styled(out, auto, CYAN, |o| text(o, &record.caller.name))
+        }
+        FormatToken::Function => {
+            write_styled(out, auto, CYAN, |o| text(o, &record.caller.function))
+        }
+        FormatToken::Line => write_styled(out, auto, CYAN, |o| {
+            write_int_spec(o, spec, u64::from(record.caller.line))
+        }),
+        FormatToken::File => write_styled(out, auto, CYAN, |o| text(o, record.caller.file_name())),
+        FormatToken::FilePath => write_styled(out, auto, CYAN, |o| text(o, &record.caller.file)),
+        FormatToken::Elapsed => write_styled(out, auto, DIM, |o| {
+            let mut elapsed = String::with_capacity(16);
+            write_elapsed(&LOGGER_START_TIME, &record.timestamp, &mut elapsed);
+            text(o, &elapsed)
+        }),
+        FormatToken::Thread => write_styled(out, auto, CYAN, |o| {
+            let mut thread = String::with_capacity(record.thread.name.len() + 21);
+            thread.push_str(&record.thread.name);
+            thread.push(':');
+            push_num(&mut thread, record.thread.id, 0);
+            text(o, &thread)
+        }),
+        FormatToken::ThreadName => write_styled(out, auto, CYAN, |o| text(o, &record.thread.name)),
+        FormatToken::ThreadId => write_styled(out, auto, CYAN, |o| {
+            write_int_spec(o, spec, record.thread.id)
+        }),
+        FormatToken::Process => write_styled(out, auto, CYAN, |o| {
+            let mut process = String::with_capacity(record.process.name.len() + 11);
+            process.push_str(&record.process.name);
+            process.push(':');
+            push_num(&mut process, u64::from(record.process.id), 0);
+            text(o, &process)
+        }),
+        FormatToken::ProcessName => {
+            write_styled(out, auto, CYAN, |o| text(o, &record.process.name))
+        }
+        FormatToken::ProcessId => write_styled(out, auto, CYAN, |o| {
+            write_int_spec(o, spec, u64::from(record.process.id))
+        }),
+        // Never built with a spec (`{time:...}` is a time format)
+        _ => {}
+    }
+}
+
+/// Render `{message:spec}`. With color markup in the message the spec lays out
+/// the plain text, and the colored text takes its place; a precision that cuts
+/// the text drops the message's colors (the cut can't split escape codes).
+fn write_spec_message(
+    out: &mut String,
+    spec: &FormatSpec,
+    record: &LogRecord,
+    level_color: Color,
+    colorize: bool,
+    styles: &[MarkupStyle],
+) {
+    let message = &record.message;
+    if !record.message_markup || !message.contains('<') {
+        spec.write_str(out, message);
+        return;
+    }
+    let plain = apply_color_markup(message, false);
+    if !colorize || spec.truncates(&plain) {
+        spec.write_str(out, &plain);
+        return;
+    }
+    let styled = if styles.is_empty() {
+        apply_color_markup(message, true)
+    } else {
+        // Keep template styles alive across resets in the message markup
+        let base = styles_prefix(styles, level_color);
+        Cow::Owned(apply_color_markup_within(message, true, &base).into_owned())
+    };
+    spec.write_str_around(out, &plain, &styled);
+}
+
+/// Validate the `{field:spec}` placeholders of a template (as `add()` does),
+/// with Python's `ValueError` message for an invalid spec
+pub fn check_template(template: &str) -> Result<(), String> {
+    parse_template(template).map(|_| ())
+}
+
 /// Format configuration for log output
 #[derive(Clone, Debug)]
 pub struct FormatConfig {
@@ -834,6 +1036,16 @@ impl FormatConfig {
                 }
                 FormatToken::FilePath => {
                     write_styled(out, auto, CYAN, |o| o.push_str(&record.caller.file))
+                }
+                FormatToken::Spec(token) => {
+                    write_spec_field(out, token, record, level_color, auto, colorize, &styles)
+                }
+                FormatToken::ExtraSpec(token) => {
+                    let text = record.extra.get(&token.key).map_or("", |v| v.as_str());
+                    match token.spec {
+                        Some(ref spec) => spec.write_str(out, text),
+                        None => out.push_str(text),
+                    }
                 }
                 FormatToken::StyleOpen(_) | FormatToken::StyleClose => {}
             }
@@ -1395,5 +1607,148 @@ mod tests {
         record.message_markup = false;
         assert_eq!(config.format_record(&record, false), "<red>x</red>");
         assert_eq!(config.format_record(&record, true), "<red>x</red>");
+    }
+
+    fn render(template: &str, record: &LogRecord, colorize: bool) -> String {
+        FormatConfig::new(Some(template.to_string()), false).format_record(record, colorize)
+    }
+
+    #[test]
+    fn test_spec_tokens_parsed_once() {
+        let tokens = parse_template("{line:05d}|{message:>9}|{extra[k]:<4}").unwrap();
+        assert!(matches!(&tokens[0], FormatToken::Spec(t) if matches!(t.field, FormatToken::Line)));
+        assert!(
+            matches!(&tokens[2], FormatToken::Spec(t) if matches!(t.field, FormatToken::Message))
+        );
+        assert!(
+            matches!(&tokens[4], FormatToken::ExtraSpec(t) if t.key == "k" && t.spec.is_some())
+        );
+        let reqs = compute_requirements(&tokens);
+        assert!(reqs.needs_caller && reqs.needs_message);
+        assert!(!reqs.needs_thread && !reqs.needs_time);
+    }
+
+    #[test]
+    fn test_loguru_level_spec_uses_fast_path() {
+        for template in ["{level: <8}", "{level:<8}", "{level.name: <8}"] {
+            let tokens = parse_template(template).unwrap();
+            assert!(
+                matches!(tokens[0], FormatToken::LevelWidth(8)),
+                "{template}"
+            );
+        }
+        let tokens = parse_template("{level:>8}").unwrap();
+        assert!(matches!(tokens[0], FormatToken::Spec(_)));
+    }
+
+    #[test]
+    fn test_empty_spec_is_plain_field() {
+        let tokens = parse_template("{line:}{extra[k]:}").unwrap();
+        assert!(matches!(tokens[0], FormatToken::Line));
+        assert!(matches!(&tokens[1], FormatToken::Extra(k) if k == "k"));
+    }
+
+    #[test]
+    fn test_spec_fields_render() {
+        let caller = CallerInfo::with_file("app".into(), "handler".into(), 42, "a.py".into());
+        let record = LogRecord::with_caller(
+            LogLevel::Warning,
+            "héllo😀".into(),
+            empty_context(),
+            None,
+            caller,
+        );
+        assert_eq!(render("[{level:>9}]", &record, false), "[  WARNING]");
+        assert_eq!(render("[{level:*^11}]", &record, false), "[**WARNING**]");
+        assert_eq!(
+            render("[{line:05d}|{line:#x}|{line:+}]", &record, false),
+            "[00042|0x2a|+42]"
+        );
+        assert_eq!(render("[{level.no:>4}]", &record, false), "[  30]");
+        assert_eq!(render("[{message:>9}]", &record, false), "[   héllo😀]");
+        assert_eq!(render("[{message:.3}]", &record, false), "[hél]");
+        assert_eq!(
+            render("[{name:<5}|{function:^9}]", &record, false),
+            "[app  | handler ]"
+        );
+        assert_eq!(render("[{exception:>3}]", &record, false), "[   ]");
+    }
+
+    #[test]
+    fn test_spec_padding_inside_field_style() {
+        let caller = CallerInfo::with_file("app".into(), "f".into(), 7, "a.py".into());
+        let record =
+            LogRecord::with_caller(LogLevel::Info, "m".into(), empty_context(), None, caller);
+        assert_eq!(render("{line:03}", &record, true), "\x1b[36m007\x1b[0m");
+        assert_eq!(
+            render("{level:>6}", &record, true),
+            "\x1b[1;32m  INFO\x1b[0m"
+        );
+        // Inside template markup only the markup's style applies (loguru's
+        // `<level>{level: <8}</level>`: the padding is inside the color)
+        assert_eq!(
+            render("<level>{level: <8}</level>|", &record, true),
+            "\x1b[1;32mINFO    \x1b[0m|"
+        );
+    }
+
+    #[test]
+    fn test_spec_message_markup_takes_no_width() {
+        let record = LogRecord::new(LogLevel::Info, "a<red>b</red>".into());
+        assert_eq!(render("[{message:>4}]", &record, false), "[  ab]");
+        assert_eq!(
+            render("[{message:>4}]", &record, true),
+            "[  a\x1b[31mb\x1b[0m]"
+        );
+        assert_eq!(
+            render("[{message:*^5}]", &record, true),
+            "[*a\x1b[31mb\x1b[0m**]"
+        );
+        // A precision that cuts the text drops the message's colors
+        assert_eq!(render("[{message:>3.1}]", &record, true), "[  a]");
+    }
+
+    #[test]
+    fn test_extra_spec_renders_text() {
+        let record = extra_record(&[
+            ("user", ExtraValue::from("ann")),
+            ("n", ExtraValue::non_str("7")),
+        ]);
+        assert_eq!(render("[{extra[user]:>5}]", &record, false), "[  ann]");
+        // Missing values are formatted as ""
+        assert_eq!(render("[{extra[nope]:>3}]", &record, false), "[   ]");
+        // A spec a string rejects writes the value as is, like a callable sink
+        assert_eq!(render("[{extra[n]:05d}]", &record, false), "[7]");
+    }
+
+    #[test]
+    fn test_invalid_spec_rejected() {
+        let err = FormatConfig::try_new(Some("{message:d}".into()), false).unwrap_err();
+        assert_eq!(
+            err,
+            "Unknown format code 'd' for object of type 'str' (format field '{message:d}')"
+        );
+        for template in [
+            "{level:=8}",
+            "{line:.2d}",
+            "{line:s}",
+            "{name:+}",
+            "{thread.id:,x}",
+            "{extra[k]:abc}",
+            "{extra[k]:,_}",
+        ] {
+            assert!(
+                FormatConfig::try_new(Some(template.into()), false).is_err(),
+                "{template}"
+            );
+        }
+        // Serialized sinks don't use the template
+        assert!(FormatConfig::try_new(Some("{message:d}".into()), true).is_ok());
+        // Unknown fields and `{extra:spec}` stay literal text
+        let record = LogRecord::new(LogLevel::Info, "m".into());
+        assert_eq!(
+            render("{nope:d} {extra:>3}", &record, false),
+            "{nope:d} {extra:>3}"
+        );
     }
 }
