@@ -337,6 +337,61 @@ class TestEnhancedRobustness:
         assert "ValueError: a" in enhanced[0]
         assert "KeyError: 'b'" in enhanced[0]
 
+    @pytest.mark.skipif(sys.version_info < (3, 11), reason="ExceptionGroup needs 3.11")
+    @pytest.mark.parametrize("variant", ["backtrace", "diagnose"])
+    def test_reraised_group_child_keeps_parent_without_recursing(
+        self, logger: Logger, variant: str
+    ) -> None:
+        messages: list[str] = []
+        logger.add(messages.append, format="{message}", **{variant: True})
+
+        try:
+            raise ExceptionGroup("batch", [ValueError("bad item")])  # noqa: F821
+        except ExceptionGroup as group:  # noqa: F821
+            try:
+                raise group.exceptions[0]
+            except ValueError:
+                logger.exception("item failed")
+
+        (text,) = messages
+        assert "ExceptionGroup: batch" in text
+        assert "ValueError: bad item" in text
+        assert text.count("ExceptionGroup: batch") == 1
+
+    @pytest.mark.skipif(sys.version_info < (3, 11), reason="ExceptionGroup needs 3.11")
+    def test_repeated_group_child_is_shown_in_each_branch(self, logger: Logger) -> None:
+        messages: list[str] = []
+        logger.add(messages.append, format="{message}", diagnose=True)
+        shared = ValueError("shared")
+        try:
+            raise ExceptionGroup("repeated", [shared, shared])  # noqa: F821
+        except Exception:
+            logger.exception("group")
+
+        (text,) = messages
+        assert text.count("ValueError: shared") == 2
+
+    @pytest.mark.skipif(sys.version_info < (3, 11), reason="ExceptionGroup needs 3.11")
+    def test_group_child_that_is_also_cause_keeps_each_traceback(self, logger: Logger) -> None:
+        messages: list[str] = []
+        logger.add(messages.append, format="{message}", diagnose=True)
+
+        def leaf_failure_marker() -> None:
+            raise ValueError("shared cause")
+
+        try:
+            leaf_failure_marker()
+        except ValueError as leaf:
+            group = ExceptionGroup("repeated cause", [leaf, leaf])  # noqa: F821
+            try:
+                raise group from leaf
+            except Exception:
+                logger.exception("group")
+
+        (text,) = messages
+        assert text.count(", in leaf_failure_marker") == 3
+        assert text.count("ValueError: shared cause") == 3
+
     def test_recursion_is_collapsed(self, logger: Logger) -> None:
         _, enhanced = self._sinks(logger)
 
@@ -377,3 +432,36 @@ class TestEnhancedRobustness:
             raise ValueError("<b>x</b>")
 
         assert plain[0].startswith("An error occurred: <b>x</b>\n")
+
+
+@pytest.mark.parametrize("suppression", ["level", "module"])
+@pytest.mark.parametrize("method", ["exception", "opt_error", "opt_log"])
+def test_suppressed_exception_does_not_format_traceback(
+    logger: Logger, suppression: str, method: str
+) -> None:
+    messages: list[str] = []
+    logger.add(
+        messages.append, format="{message}", level="CRITICAL" if suppression == "level" else 0
+    )
+    if suppression == "module":
+        logger.disable(__name__)
+
+    class ObservedError(Exception):
+        calls = 0
+
+        def __str__(self) -> str:
+            type(self).calls += 1
+            return "observed"
+
+    try:
+        raise ObservedError()
+    except ObservedError:
+        if method == "exception":
+            logger.exception("hidden")
+        elif method == "opt_error":
+            logger.opt(exception=True).error("hidden")
+        else:
+            logger.opt(exception=True).log("ERROR", "hidden")
+
+    assert ObservedError.calls == 0
+    assert messages == []

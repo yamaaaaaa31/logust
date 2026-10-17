@@ -105,7 +105,11 @@ def _frame_lines(frame: FrameType, lineno: int, diagnose: bool) -> list[str]:
 
 
 def _format_one(
-    exc: BaseException, tb: TracebackType | None, backtrace: bool, diagnose: bool
+    exc: BaseException,
+    tb: TracebackType | None,
+    backtrace: bool,
+    diagnose: bool,
+    seen: set[int],
 ) -> list[str]:
     """Frames and the exception line of one exception (no chain)."""
     frames: list[tuple[FrameType, int]] = []
@@ -151,7 +155,10 @@ def _format_one(
     members = getattr(exc, "exceptions", None) if _is_group(exc) else None
     for index, member in enumerate(members or (), 1):
         lines.append(f"  +---------------- {index} ----------------")
-        member_text = _format_chain(member, member.__traceback__, False, diagnose, set())
+        # A member's cause/context can point back to its containing group, for
+        # example when re-raising a child while handling the group. Keep the
+        # ancestors, but let siblings show the same exception independently.
+        member_text = _format_chain(member, member.__traceback__, False, diagnose, seen)
         lines.extend(f"    | {line}" for line in member_text.splitlines())
     return lines
 
@@ -169,7 +176,9 @@ def _format_chain(
     seen: set[int],
 ) -> str:
     """``exc`` preceded by its cause or context, as the plain traceback orders them."""
-    seen.add(id(exc))
+    if id(exc) in seen:
+        return _exception_only(exc)
+    seen = seen | {id(exc)}
     parts: list[str] = []
     cause, context = exc.__cause__, exc.__context__
     if cause is not None and id(cause) not in seen:
@@ -178,7 +187,7 @@ def _format_chain(
     elif context is not None and not exc.__suppress_context__ and id(context) not in seen:
         parts.append(_format_chain(context, context.__traceback__, False, diagnose, seen))
         parts.append("\nDuring handling of the above exception, another exception occurred:\n")
-    parts.append("\n".join(_format_one(exc, tb, backtrace, diagnose)))
+    parts.append("\n".join(_format_one(exc, tb, backtrace, diagnose, seen)))
     return "\n".join(parts)
 
 
