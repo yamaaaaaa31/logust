@@ -1189,6 +1189,9 @@ impl FileSinkInner {
             WriterBackend::Sync(sync_state) => {
                 if let Some(writer) = sync_state.writer.as_mut() {
                     if coordinate_rotation && writer.reopen_if_rotated(&self.config.path)? {
+                        // Reopening carries pending lines into the new buffer.
+                        // Make them visible before refreshing current_size.
+                        writer.flush(&self.config.path)?;
                         self.sync_rotation_state_from_path();
                     }
                 } else {
@@ -1425,19 +1428,10 @@ impl FileSinkInner {
         if let Some(max_size) = self.config.max_size {
             let current_size = self.current_size.load(Ordering::Relaxed);
             if current_size >= max_size {
-                match fs::metadata(&self.config.path) {
-                    Ok(metadata) => {
-                        let actual_size = metadata.len();
-                        self.current_size.store(actual_size, Ordering::Relaxed);
-                        if actual_size >= max_size {
-                            return true;
-                        }
-                    }
-                    Err(err) if err.kind() == io::ErrorKind::NotFound => {
-                        self.current_size.store(0, Ordering::Relaxed);
-                    }
-                    Err(_) => return true,
-                }
+                // This includes buffered/queued lines, which metadata cannot
+                // see yet. rotate_locked drains them, then refreshes the real
+                // size under the exclusive rotation lock before deciding.
+                return true;
             }
         }
 
@@ -1516,7 +1510,10 @@ impl FileSinkInner {
             }
             WriterBackend::Sync(sync_state) => {
                 if let Some(writer) = sync_state.writer.as_mut() {
-                    writer.flush_without_lock()?;
+                    // Another process may have rotated and removed the old
+                    // inode while our lines were buffered. Follow it under
+                    // the shared lock before flushing, then acquire LOCK_EX.
+                    writer.flush(&self.config.path)?;
                 }
             }
         }
@@ -1649,7 +1646,12 @@ impl FileSinkInner {
     fn apply_retention(&self) -> io::Result<()> {
         use std::time::SystemTime;
 
-        let parent = self.config.path.parent().unwrap_or(Path::new("."));
+        let parent = self
+            .config
+            .path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
         let stem = self
             .config
             .path
@@ -2428,6 +2430,99 @@ mod tests {
         assert_eq!(fs::read_to_string(&path).unwrap(), "buffered\n");
 
         drop(sink);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_size_rotation_preserves_buffer_after_external_rotation() {
+        let dir = unique_temp_path("buffered-size-external-rotation");
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("app.log");
+        let retired = dir.join("retired.log");
+        let sink = FileSink::new(FileSinkConfig {
+            path: path.clone(),
+            max_size: Some(10),
+            buffer_size: Some(1024),
+            ..FileSinkConfig::default()
+        })
+        .unwrap();
+
+        sink.write("0123456789").unwrap();
+        fs::rename(&path, &retired).unwrap();
+        fs::remove_file(&retired).unwrap();
+        fs::write(&path, "external\n").unwrap();
+
+        sink.write("after").unwrap();
+        sink.flush().unwrap();
+        let rotated: Vec<_> = fs::read_dir(&dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|candidate| candidate != &path && candidate.extension().unwrap() == "log")
+            .collect();
+        assert_eq!(rotated.len(), 1);
+        assert_eq!(
+            fs::read_to_string(&rotated[0]).unwrap(),
+            "external\n0123456789\n"
+        );
+        assert_eq!(fs::read_to_string(&path).unwrap(), "after\n");
+
+        drop(sink);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_buffered_size_rotation_shared_by_two_sinks() {
+        let dir = unique_temp_path("buffered-size-shared");
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("app.log");
+        let config = FileSinkConfig {
+            path: path.clone(),
+            max_size: Some(10),
+            buffer_size: Some(1024),
+            ..FileSinkConfig::default()
+        };
+        let first = FileSink::new(config.clone()).unwrap();
+        let second = FileSink::new(config).unwrap();
+
+        first.write("first-before").unwrap();
+        second.write("second-before").unwrap();
+        first.write("first-after").unwrap();
+        second.write("second-after").unwrap();
+        first.flush().unwrap();
+        second.flush().unwrap();
+
+        let rotated_count = fs::read_dir(&dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|candidate| candidate != &path && candidate.extension().unwrap() == "log")
+            .count();
+        assert_eq!(rotated_count, 2);
+        let mut lines: Vec<_> = fs::read_dir(&dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|candidate| candidate.extension().unwrap() == "log")
+            .flat_map(|candidate| {
+                fs::read_to_string(candidate)
+                    .unwrap()
+                    .lines()
+                    .map(String::from)
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        lines.sort();
+        assert_eq!(
+            lines,
+            [
+                "first-after",
+                "first-before",
+                "second-after",
+                "second-before"
+            ]
+        );
+
+        drop(first);
+        drop(second);
         let _ = fs::remove_dir_all(&dir);
     }
 
