@@ -405,9 +405,7 @@ class TestSharedState:
         assert out == ["negative"]
 
     def test_concurrent_add_and_remove(self, tmp_path: Path) -> None:
-        # File sinks only: a callable sink running while another thread adds a
-        # handler can deadlock (the sink holds the handler lock and waits for
-        # the GIL, the adder holds the GIL), a separate pre-existing issue.
+        # Exercise native-only dispatch while the configuration changes.
         logger = Logger(PyLogger(LogLevel.Trace))
         logger.remove()
         caller_log = tmp_path / "caller.log"

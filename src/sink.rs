@@ -722,6 +722,7 @@ struct FileSinkInner {
 }
 
 /// File sink with optional async writing support
+#[derive(Clone)]
 pub struct FileSink {
     inner: Arc<FileSinkInner>,
 }

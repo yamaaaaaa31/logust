@@ -11,6 +11,7 @@ mod time_format;
 
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::ops::{Deref, DerefMut};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, RwLockReadGuard, RwLockWriteGuard};
@@ -44,6 +45,42 @@ impl<T> RwLock<T> {
 
     fn write(&self) -> RwLockWriteGuard<'_, T> {
         self.0.write().unwrap_or_else(|e| e.into_inner())
+    }
+}
+
+type EntrySnapshot<T> = Arc<Vec<Arc<T>>>;
+
+/// Configuration lists use copy-on-write snapshots only when dispatch calls
+/// Python. Native-only dispatch still borrows the list without cloning it.
+struct EntryList<T>(RwLock<EntrySnapshot<T>>);
+
+impl<T> EntryList<T> {
+    fn new() -> Self {
+        Self(RwLock::new(Arc::new(Vec::new())))
+    }
+
+    fn read(&self) -> RwLockReadGuard<'_, EntrySnapshot<T>> {
+        self.0.read()
+    }
+
+    fn write(&self) -> EntryWriteGuard<'_, T> {
+        EntryWriteGuard(self.0.write())
+    }
+}
+
+struct EntryWriteGuard<'a, T>(RwLockWriteGuard<'a, EntrySnapshot<T>>);
+
+impl<T> Deref for EntryWriteGuard<'_, T> {
+    type Target = Vec<Arc<T>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<T> DerefMut for EntryWriteGuard<'_, T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        Arc::make_mut(&mut self.0)
     }
 }
 
@@ -134,6 +171,7 @@ impl FormattedSinkRequirements {
 /// Raw callbacks receive a full record dict; serialized sinks receive the fields of
 /// the JSON line with `extra` as typed JSON values; formatted sinks receive a
 /// minimal dict for templates.
+#[derive(Clone)]
 pub enum CallbackKind {
     /// `file_path`: add `file_path` to the record dict (`{file.path}` in a filtered sink);
     /// `extra_repr`: add the rendered extra dict (`{extra}` in a filtered sink)
@@ -146,9 +184,10 @@ pub enum CallbackKind {
 }
 
 /// Callback entry for log record callbacks
+#[derive(Clone)]
 pub struct CallbackEntry {
     pub id: u64,
-    pub callback: Py<PyAny>,
+    pub callback: Arc<Py<PyAny>>,
     pub level: u32,
     pub kind: CallbackKind,
     /// Propagate exceptions raised by the callback to the logging call
@@ -172,8 +211,10 @@ impl CallbackEntry {
 }
 
 /// `filter=` of a file / console handler.
-fn record_filter_arg(filter: Option<&Bound<'_, PyAny>>) -> PyResult<Option<RecordFilter>> {
-    filter.map_or(Ok(None), RecordFilter::from_py)
+fn record_filter_arg(filter: Option<&Bound<'_, PyAny>>) -> PyResult<Option<Arc<RecordFilter>>> {
+    filter
+        .map_or(Ok(None), RecordFilter::from_py)
+        .map(|f| f.map(Arc::new))
 }
 
 /// `filter=` of a callable sink: only string / dict filters reach Rust.
@@ -284,8 +325,8 @@ fn extract_truncate(mode: Option<&str>) -> PyResult<bool> {
 /// Merge handler + callback token requirements eligible when emitting at severity `emit_no`
 /// (numeric level value: built-in `LogLevel` as u32 or custom `LevelInfo.no`).
 fn merge_token_requirements_for_emit_no(
-    handlers: &[HandlerEntry],
-    callbacks: &[CallbackEntry],
+    handlers: &[Arc<HandlerEntry>],
+    callbacks: &[Arc<CallbackEntry>],
     emit_no: u32,
 ) -> TokenRequirements {
     let mut combined = TokenRequirements::default();
@@ -328,7 +369,7 @@ fn merge_token_requirements_for_emit_no(
 
 /// Handler formats only (no callbacks), merged for handlers eligible at `emit_no`.
 fn merge_handler_only_requirements_for_emit_no(
-    handlers: &[HandlerEntry],
+    handlers: &[Arc<HandlerEntry>],
     emit_no: u32,
 ) -> TokenRequirements {
     let mut combined = TokenRequirements::default();
@@ -343,14 +384,14 @@ fn merge_handler_only_requirements_for_emit_no(
 #[pyclass]
 pub struct PyLogger {
     /// All handlers (console + files)
-    handlers: Arc<RwLock<Vec<HandlerEntry>>>,
+    handlers: Arc<EntryList<HandlerEntry>>,
     /// Console handlers taken out by `disable()`, put back by `enable()`
     /// (shared with bound loggers like the handler list)
-    disabled_consoles: Arc<RwLock<Vec<HandlerEntry>>>,
+    disabled_consoles: Arc<EntryList<HandlerEntry>>,
     /// Bound context (extra fields) - immutable after creation for zero-copy sharing
     context: Arc<ExtraMap>,
     /// Registered callbacks
-    callbacks: Arc<RwLock<Vec<CallbackEntry>>>,
+    callbacks: Arc<EntryList<CallbackEntry>>,
     /// Cached minimum log level across all handlers and callbacks (shared via Arc)
     cached_min_level: Arc<AtomicU32>,
     /// Cached minimum level across callbacks only (`u32::MAX` without callbacks),
@@ -469,9 +510,11 @@ fn threshold_or_debug(level: Option<&Bound<'_, PyAny>>) -> PyResult<u32> {
     level.map_or(Ok(LogLevel::Debug as u32), level::level_threshold)
 }
 
-fn set_console_level(handlers: &mut [HandlerEntry], level: u32) {
+fn set_console_level(handlers: &mut [Arc<HandlerEntry>], level: u32) {
     for entry in handlers.iter_mut() {
-        if let HandlerType::Console(ref mut h) = entry.handler {
+        if matches!(entry.handler, HandlerType::Console(_))
+            && let HandlerType::Console(ref mut h) = Arc::make_mut(entry).handler
+        {
             h.level = level;
         }
     }
@@ -555,10 +598,10 @@ impl PyLogger {
     fn new(py: Python<'_>, level: Option<&Bound<'_, PyAny>>) -> PyResult<Self> {
         let console_level = threshold_or_debug(level)?;
         let logger = PyLogger {
-            handlers: Arc::new(RwLock::new(Vec::new())),
-            disabled_consoles: Arc::new(RwLock::new(Vec::new())),
+            handlers: Arc::new(EntryList::new()),
+            disabled_consoles: Arc::new(EntryList::new()),
             context: empty_context(),
-            callbacks: Arc::new(RwLock::new(Vec::new())),
+            callbacks: Arc::new(EntryList::new()),
             cached_min_level: Arc::new(AtomicU32::new(u32::MAX)),
             cached_callback_min_level: Arc::new(AtomicU32::new(u32::MAX)),
             cached_requirements_by_level: Arc::new(RwLock::new(HashMap::new())),
@@ -567,10 +610,8 @@ impl PyLogger {
             message_markup: true,
         };
 
-        logger
-            .handlers
-            .write()
-            .push(default_console_entry(py, console_level));
+        let default = Arc::new(default_console_entry(py, console_level));
+        logger.handlers.write().push(default);
         logger.update_min_level_cache();
         logger.update_requirements_cache();
 
@@ -662,7 +703,7 @@ impl PyLogger {
             exc_variant: 0,
         };
 
-        self.handlers.write().push(entry);
+        self.handlers.write().push(Arc::new(entry));
         self.update_min_level_cache();
         self.update_requirements_cache();
         Ok(id)
@@ -705,7 +746,7 @@ impl PyLogger {
             exc_variant: 0,
         };
 
-        self.handlers.write().push(entry);
+        self.handlers.write().push(Arc::new(entry));
         self.update_min_level_cache();
         self.update_requirements_cache();
         Ok(id)
@@ -715,30 +756,32 @@ impl PyLogger {
     #[pyo3(signature = (handler_id=None))]
     fn remove(&self, handler_id: Option<u64>) -> bool {
         let mut handlers = self.handlers.write();
-
         let mut disabled = self.disabled_consoles.write();
-
+        let mut removed = Vec::new();
         let result = if let Some(id) = handler_id {
             if let Some(pos) = handlers.iter().position(|h| h.id == id) {
-                handlers.remove(pos);
+                removed.push(handlers.remove(pos));
                 true
             } else if let Some(pos) = disabled.iter().position(|h| h.id == id) {
                 // A console handler parked by `disable()`: `enable()` must not
                 // bring it back.
-                disabled.remove(pos);
+                removed.push(disabled.remove(pos));
                 true
             } else {
                 false
             }
         } else {
-            handlers.clear();
-            disabled.clear();
+            removed.extend(handlers.drain(..));
+            removed.extend(disabled.drain(..));
             true
         };
         drop(disabled);
         drop(handlers); // Release lock before updating cache
         self.update_min_level_cache();
         self.update_requirements_cache();
+        // Python filters can run __del__ when their last reference is dropped.
+        // Finalize removed entries only after releasing configuration locks.
+        drop(removed);
         result
     }
 
@@ -808,7 +851,7 @@ impl PyLogger {
             .iter_mut()
             .find(|e| e.id == handler_id)
         {
-            entry.exc_variant = variant;
+            Arc::make_mut(entry).exc_variant = variant;
             return Ok(true);
         }
         if let Some(entry) = self
@@ -817,7 +860,7 @@ impl PyLogger {
             .iter_mut()
             .find(|e| e.id == handler_id)
         {
-            entry.exc_variant = variant;
+            Arc::make_mut(entry).exc_variant = variant;
             return Ok(true);
         }
         Ok(false)
@@ -1151,22 +1194,37 @@ impl PyLogger {
     #[pyo3(signature = (level=None))]
     fn enable(&self, py: Python<'_>, level: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
         let level = level.map(level::level_threshold).transpose()?;
-        {
-            let mut handlers = self.handlers.write();
-            handlers.append(&mut self.disabled_consoles.write());
-
-            let has_console = handlers
-                .iter()
-                .any(|e| matches!(e.handler, HandlerType::Console(_)));
-
-            if !has_console {
-                handlers.push(default_console_entry(
-                    py,
-                    level.unwrap_or(LogLevel::Debug as u32),
-                ));
-            } else if let Some(level) = level {
-                set_console_level(&mut handlers, level);
+        let mut default = None;
+        loop {
+            let needs_default = {
+                let mut handlers = self.handlers.write();
+                handlers.append(&mut self.disabled_consoles.write());
+                let has_console = handlers
+                    .iter()
+                    .any(|e| matches!(e.handler, HandlerType::Console(_)));
+                if !has_console {
+                    if let Some(entry) = default.take() {
+                        handlers.push(entry);
+                        false
+                    } else {
+                        true
+                    }
+                } else {
+                    if let Some(level) = level {
+                        set_console_level(&mut handlers, level);
+                    }
+                    false
+                }
+            };
+            if !needs_default {
+                break;
             }
+            // Color detection reads Python streams. They may reconfigure this
+            // logger, so release the locks and recheck before inserting it.
+            default = Some(Arc::new(default_console_entry(
+                py,
+                level.unwrap_or(LogLevel::Debug as u32),
+            )));
         }
         self.update_min_level_cache();
         self.update_requirements_cache();
@@ -1212,7 +1270,7 @@ impl PyLogger {
         let id = handler::next_handler_id();
         let entry = CallbackEntry {
             id,
-            callback,
+            callback: Arc::new(callback),
             level: threshold_or_debug(level)?,
             kind: CallbackKind::Raw {
                 file_path,
@@ -1222,7 +1280,7 @@ impl PyLogger {
             exc_variant: 0,
             filter,
         };
-        self.callbacks.write().push(entry);
+        self.callbacks.write().push(Arc::new(entry));
         self.update_min_level_cache();
         self.update_requirements_cache();
         Ok(id)
@@ -1241,14 +1299,14 @@ impl PyLogger {
         let id = handler::next_handler_id();
         let entry = CallbackEntry {
             id,
-            callback,
+            callback: Arc::new(callback),
             level: threshold_or_debug(level)?,
             kind: CallbackKind::Serialized,
             raise_errors,
             exc_variant: 0,
             filter,
         };
-        self.callbacks.write().push(entry);
+        self.callbacks.write().push(Arc::new(entry));
         self.update_min_level_cache();
         self.update_requirements_cache();
         Ok(id)
@@ -1270,14 +1328,14 @@ impl PyLogger {
         let id = handler::next_handler_id();
         let entry = CallbackEntry {
             id,
-            callback,
+            callback: Arc::new(callback),
             level: threshold_or_debug(level)?,
             kind: CallbackKind::FormattedLight(req),
             raise_errors,
             exc_variant: 0,
             filter,
         };
-        self.callbacks.write().push(entry);
+        self.callbacks.write().push(Arc::new(entry));
         self.update_min_level_cache();
         self.update_requirements_cache();
         Ok(id)
@@ -1285,17 +1343,17 @@ impl PyLogger {
 
     /// Remove a callback by ID
     fn remove_callback(&self, callback_id: u64) -> bool {
-        let result = {
+        let removed = {
             let mut callbacks = self.callbacks.write();
-            if let Some(pos) = callbacks.iter().position(|c| c.id == callback_id) {
-                callbacks.remove(pos);
-                true
-            } else {
-                false
-            }
+            callbacks
+                .iter()
+                .position(|c| c.id == callback_id)
+                .map(|pos| callbacks.remove(pos))
         };
         self.update_min_level_cache();
         self.update_requirements_cache();
+        let result = removed.is_some();
+        drop(removed);
         result
     }
 
@@ -1305,16 +1363,24 @@ impl PyLogger {
     /// Uses O(n+m) HashSet + retain instead of O(n*m) position + remove.
     fn remove_callbacks(&self, callback_ids: Vec<u64>) -> usize {
         let id_set: std::collections::HashSet<u64> = callback_ids.into_iter().collect();
-        let removed = {
+        let mut removed_entries = Vec::new();
+        {
             let mut callbacks = self.callbacks.write();
-            let before = callbacks.len();
-            callbacks.retain(|c| !id_set.contains(&c.id));
-            before - callbacks.len()
-        };
+            callbacks.retain(|c| {
+                if id_set.contains(&c.id) {
+                    removed_entries.push(Arc::clone(c));
+                    false
+                } else {
+                    true
+                }
+            });
+        }
+        let removed = removed_entries.len();
         if removed > 0 {
             self.update_min_level_cache();
             self.update_requirements_cache();
         }
+        drop(removed_entries);
         removed
     }
 
@@ -1652,7 +1718,10 @@ impl PyLogger {
 
     /// The callback list, locked only if a callback can take a record at `level_no`.
     #[inline]
-    fn callbacks_for(&self, level_no: u32) -> Option<RwLockReadGuard<'_, Vec<CallbackEntry>>> {
+    fn callbacks_for(
+        &self,
+        level_no: u32,
+    ) -> Option<RwLockReadGuard<'_, EntrySnapshot<CallbackEntry>>> {
         (level_no >= self.cached_callback_min_level.load(Ordering::Relaxed))
             .then(|| self.callbacks.read())
     }
@@ -1786,9 +1855,11 @@ impl PyLogger {
             return Ok(());
         }
 
+        let (exception, exc_variants) = extract_exception(exception)?;
         let handlers = self.handlers.read();
         let callbacks_guard = self.callbacks_for(level_no);
-        let callbacks: &[CallbackEntry] = callbacks_guard.as_deref().map_or(&[], Vec::as_slice);
+        let callbacks: &[Arc<CallbackEntry>] =
+            callbacks_guard.as_ref().map_or(&[], |g| g.as_slice());
 
         let mut has_eligible_handler = false;
         let mut has_eligible_filtered_handler = false;
@@ -1826,7 +1897,6 @@ impl PyLogger {
             id: process_id.unwrap_or(0),
         };
 
-        let (exception, exc_variants) = extract_exception(exception)?;
         let mut record =
             LogRecord::with_all(level, message, extra, exception, caller, thread, process);
         record.message_markup = self.message_markup;
@@ -1837,6 +1907,15 @@ impl PyLogger {
         let mut first_error: Option<PyErr> = None;
 
         if needs_gil {
+            // Keep this record's destinations alive, but never hold a config
+            // lock while calling Python (including callbacks that release the
+            // GIL or change the logger). Mutations affect subsequent records.
+            let handler_snapshot = Arc::clone(&handlers);
+            let callback_snapshot = callbacks_guard.as_ref().map(|g| Arc::clone(g));
+            drop(callbacks_guard);
+            drop(handlers);
+            let handlers = handler_snapshot;
+            let callbacks = callback_snapshot.as_ref().map_or(&[][..], |s| s.as_slice());
             Python::attach(|py| {
                 let mut need_text_full_dict = has_eligible_filtered_handler;
                 let mut with_file_path = false;
@@ -2202,9 +2281,11 @@ impl PyLogger {
             return Ok(());
         }
 
+        let (exception, exc_variants) = extract_exception(exception)?;
         let handlers = self.handlers.read();
         let callbacks_guard = self.callbacks_for(level_no);
-        let callbacks: &[CallbackEntry] = callbacks_guard.as_deref().map_or(&[], Vec::as_slice);
+        let callbacks: &[Arc<CallbackEntry>] =
+            callbacks_guard.as_ref().map_or(&[], |g| g.as_slice());
 
         let mut has_eligible_handler = false;
         let mut has_eligible_filtered_handler = false;
@@ -2244,7 +2325,6 @@ impl PyLogger {
             id: process_id.unwrap_or(0),
         };
 
-        let (exception, exc_variants) = extract_exception(exception)?;
         let mut record = LogRecord::with_custom_level_full(
             level_info.clone(),
             message,
@@ -2262,6 +2342,15 @@ impl PyLogger {
         let mut first_error: Option<PyErr> = None;
 
         if needs_gil {
+            // Keep this record's destinations alive, but never hold a config
+            // lock while calling Python (including callbacks that release the
+            // GIL or change the logger). Mutations affect subsequent records.
+            let handler_snapshot = Arc::clone(&handlers);
+            let callback_snapshot = callbacks_guard.as_ref().map(|g| Arc::clone(g));
+            drop(callbacks_guard);
+            drop(handlers);
+            let handlers = handler_snapshot;
+            let callbacks = callback_snapshot.as_ref().map_or(&[][..], |s| s.as_slice());
             Python::attach(|py| {
                 let mut need_text_full_dict = has_eligible_filtered_handler;
                 let mut with_file_path = false;
