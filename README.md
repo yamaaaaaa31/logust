@@ -23,7 +23,7 @@ A fast, Rust-powered Python logging library inspired by [loguru](https://github.
 - **Color Markup** - Inline `<red>color</red>` tags in log messages
 - **Async Writing** - Optional thread-safe async file writes with `enqueue=True`
 - **Canonical Events** - Request-scoped wide events with built-in tail sampling
-- **Free-Threaded Python** - Release automation builds wheels for CPython 3.13t and 3.14t on Linux and macOS
+- **Free-Threaded Python** - Release automation builds wheels for CPython 3.14t and 3.15t on Linux, macOS, and Windows
 - **Zero-Config Integrations** - Built-in support for standard logging, FastAPI, and function timing
 
 ## Benchmarks

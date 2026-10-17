@@ -55,7 +55,7 @@ hooks = [
 # Python type checking
 [[repos]]
 repo = "https://github.com/pre-commit/mirrors-mypy"
-rev = "v1.14.1"
+rev = "v2.4.0"
 
 [[repos.hooks]]
 id = "mypy"

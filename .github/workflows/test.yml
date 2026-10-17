@@ -47,12 +47,20 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        python-version: ['3.10', '3.11', '3.12', '3.13', '3.14']
+        python-version: ['3.10', '3.11', '3.12', '3.13', '3.14', '3.15']
         include:
           - os: ubuntu-latest
             python-version: '3.14t'
           - os: macos-latest
             python-version: '3.14t'
+          - os: windows-latest
+            python-version: '3.14t'
+          - os: ubuntu-latest
+            python-version: '3.15t'
+          - os: macos-latest
+            python-version: '3.15t'
+          - os: windows-latest
+            python-version: '3.15t'
 
     steps:
       - uses: actions/checkout@v7
@@ -70,9 +78,16 @@ jobs:
 
       - name: Install dependencies and build
         run: |
-          uv venv
+          uv venv --python python
           uv pip install maturin pytest pytest-cov rich
           uv run maturin develop
+
+      - name: Verify free-threaded interpreter and import
+        if: endsWith(matrix.python-version, 't')
+        run: >-
+          uv run python -c "import sys, sysconfig, logust;
+          assert sysconfig.get_config_var('Py_GIL_DISABLED') == 1;
+          assert not sys._is_gil_enabled(), 'Importing logust enabled the GIL'"
 
       - name: Run tests
         run: uv run pytest tests/ -v --cov=logust --cov-report=xml
