@@ -2473,6 +2473,14 @@ class Logger:
         if handler_id is not None and handler_id in self._callback_ids:
             return self.remove_callback(handler_id)
 
+        # Entry finalizers may add destinations while the Rust side removes
+        # the old ones. Keep their new bookkeeping instead of clearing it.
+        callback_ids = self._callback_ids | self._raw_callback_ids if handler_id is None else set()
+        removed_ids = (
+            set(self._collect_options) | callback_ids | self._filter_ids
+            if handler_id is None
+            else set()
+        )
         result = self._inner.remove(handler_id)
         # Clean up CollectOptions and tracking sets
         if handler_id is not None:
@@ -2482,14 +2490,14 @@ class Logger:
         else:
             # Remove all handlers: also remove all callable sinks and raw callbacks
             # Use batch removal to avoid O(n²) cache updates
-            all_callback_ids = list(self._callback_ids) + list(self._raw_callback_ids)
             callbacks_removed = (
-                self._inner.remove_callbacks(all_callback_ids) if all_callback_ids else 0
+                self._inner.remove_callbacks(list(callback_ids)) if callback_ids else 0
             )
-            self._collect_options.clear()
-            self._callback_ids.clear()
-            self._filter_ids.clear()
-            self._raw_callback_ids.clear()
+            for removed_id in removed_ids:
+                self._collect_options.pop(removed_id, None)
+            self._callback_ids.difference_update(callback_ids)
+            self._filter_ids.difference_update(removed_ids)
+            self._raw_callback_ids.difference_update(callback_ids)
             self._invalidate_requirements_cache()
             # Return True if handlers OR callbacks were removed
             return result or callbacks_removed > 0

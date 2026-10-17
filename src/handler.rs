@@ -763,6 +763,7 @@ impl LogRecord {
 }
 
 /// Handler type enum for different output destinations
+#[derive(Clone)]
 pub enum HandlerType {
     Console(ConsoleHandler),
     File(FileHandler),
@@ -817,11 +818,12 @@ impl CatchMode {
 }
 
 /// Handler entry with ID and optional filter
+#[derive(Clone)]
 pub struct HandlerEntry {
     pub id: u64,
     pub handler: HandlerType,
     /// Optional `filter=`: a Python callable, or a string / dict filter checked in Rust
-    pub filter: Option<RecordFilter>,
+    pub filter: Option<Arc<RecordFilter>>,
     /// Error policy; consulted when `handle` fails or the filter raises.
     pub catch: CatchMode,
     /// Traceback variant this handler gets (bit 0: backtrace, bit 1: diagnose)
@@ -832,13 +834,13 @@ impl HandlerEntry {
     /// The Python filter callable, if any (the only filter that needs the GIL).
     #[inline]
     pub fn python_filter(&self) -> Option<&Py<PyAny>> {
-        self.filter.as_ref().and_then(RecordFilter::as_python)
+        self.filter.as_deref().and_then(RecordFilter::as_python)
     }
 
     /// Whether a string / dict filter lets `record` through (true without one).
     #[inline]
     pub fn native_filter_passes(&self, record: &LogRecord) -> bool {
-        match self.filter.as_ref().and_then(RecordFilter::as_native) {
+        match self.filter.as_deref().and_then(RecordFilter::as_native) {
             Some(f) => f.passes(&record.caller.name, record.level_no()),
             None => true,
         }
@@ -847,7 +849,7 @@ impl HandlerEntry {
     /// Format requirements, plus the caller's module name for a string / dict filter.
     pub fn requirements(&self) -> TokenRequirements {
         let mut req = self.handler.requirements();
-        if matches!(self.filter, Some(RecordFilter::Native(_))) {
+        if matches!(self.filter.as_deref(), Some(RecordFilter::Native(_))) {
             req.needs_caller = true;
         }
         req
@@ -942,6 +944,7 @@ fn report_python_error(py: Python<'_>, handler_id: u64, record_repr: &str, err: 
 }
 
 /// Console handler for terminal output
+#[derive(Clone)]
 pub struct ConsoleHandler {
     pub level: u32,
     pub format: FormatConfig,
@@ -1077,6 +1080,7 @@ impl ConsoleHandler {
 }
 
 /// File handler for file output
+#[derive(Clone)]
 pub struct FileHandler {
     pub sink: FileSink,
     pub level: u32,
