@@ -58,7 +58,7 @@ Compare the two:
 * With `backtrace=True`, the file also shows the frame **above** it: line 22, where `report()` was called. Very useful when the same function is called from many places.
 * With `diagnose=True`, each line is followed by the variables it uses, as `| name = value`. Now you can see why it failed: `len(values) - skip` is `3 - 3`. 🤓
 
-The options apply to every traceback a handler writes: from `exception()`, `catch()` and `opt(exception=True)`.
+The options apply to every traceback a handler writes: from `exception()`, `catch()`, `opt(exception=True)` and intercepted stdlib exceptions. Exception groups retain each member's traceback, including repeated members; circular cause or context references stop expanding without losing the exception message.
 
 ## Why both are off by default { #why-both-are-off-by-default }
 

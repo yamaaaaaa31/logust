@@ -78,22 +78,20 @@ class OptLogger:
         # ``level`` is a built-in method name here, so this equals
         # ``logger.is_level_enabled(level)`` without the enum round trip.
         level_enabled = _LEVEL_VALUES[level] >= logger._inner.min_level
-        # For lazy evaluation, skip formatting if level is not enabled
+        # Suppression must precede argument formatting and traceback capture,
+        # including capture=False and non-lazy calls.
+        if not level_enabled:
+            return
+        activation = logger._activation
+        if activation.rules and activation.caller_disabled(self._depth + 2):
+            return
         if self._lazy:
-            if not level_enabled:
-                return
-            # Skip lazy args for disabled modules (user frame: +1 public method, + depth)
-            activation = logger._activation
-            if activation.rules and activation.caller_disabled(self._depth + 2):
-                return
             args = self._resolve_args(args)
 
         exc = kwargs.pop("exception", None)
         if not exc:
             exc = self._get_exception() if self._auto_exception else None
         if not self._capture:
-            if not level_enabled:
-                return
             message, args, kwargs = self._uncaptured(message, args, kwargs)
         # Formatting (args + kwargs) happens once in Logger, matching loguru.
         # Add depth: +1 for this method, +1 for the caller (trace/debug/etc), + user's depth
@@ -149,16 +147,18 @@ class OptLogger:
         Examples:
             >>> logger.opt(lazy=True).log("NOTICE", "Result: {}", expensive_func)
         """
-        if self._lazy:
-            logger = self._logger
-            # Skip lazy args for a filtered-out level or a disabled module, like
-            # the level methods do (user frame: +1 for this method, + depth)
-            emit_no = logger._inner.try_resolve_emit_level_no(level)
-            if emit_no is not None and emit_no < logger._inner.min_level:
-                return
-            activation = logger._activation
-            if activation.rules and activation.caller_disabled(self._depth + 1):
-                return
+        logger = self._logger
+        emit_no = logger._inner.try_resolve_emit_level_no(level)
+        if emit_no is None:
+            # Preserve Logger.log()'s invalid-level error, even when no handler
+            # or the caller's module is enabled. Do not format invalid calls.
+            logger.log(level, message, _depth=self._depth + 1)
+            return
+        if emit_no < logger._inner.min_level:
+            return
+        activation = logger._activation
+        if activation.rules and activation.caller_disabled(self._depth + 1):
+            return
         exc = kwargs.pop("exception", None) or self._get_exception()
         args = self._resolve_args(args)
         message, args, kwargs = self._uncaptured(message, args, kwargs)

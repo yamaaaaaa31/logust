@@ -129,6 +129,8 @@ User alice logged in | extra={}
 
 </div>
 
+Both the level methods and `log()` skip formatting when every handler rejects the level or the caller's module is disabled. An unknown level passed to `log()` still raises `ValueError`.
+
 ## Keep markup as plain text { #keep-markup-as-plain-text }
 
 Logust understands color tags like `<red>...</red>` in messages (see [Formatting](../tutorial/formatting.md#colors-in-messages)). That's great for your own messages, but not for text that comes from somewhere else, like user input. Tags in it would be interpreted, or removed.

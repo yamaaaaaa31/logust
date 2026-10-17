@@ -747,17 +747,24 @@ class Catcher:
         if self._exclude is not None and issubclass(exc_type, self._exclude):
             return False
 
-        tb_str = capture_exception(self._logger._inner, (exc_type, exc_value, tb))
         # Point the record at the ``with`` block, or at the caller of the decorated function
         depth = 2 if self._from_decorator else 1
-        # The exception text is data: never parse it as color markup
-        logger = self._logger._with_inner(self._logger._inner.with_colors(False))
-        logger.log(
-            self._level,
-            f"{self._message}: {_exception_str(exc_value)}",
-            exception=tb_str,
-            _depth=depth,
+        emit_no = self._logger._inner.try_resolve_emit_level_no(self._level)
+        activation = self._logger._activation
+        suppressed = emit_no is not None and (
+            emit_no < self._logger._inner.min_level
+            or (activation.rules and activation.caller_disabled(depth))
         )
+        if not suppressed:
+            tb_str = capture_exception(self._logger._inner, (exc_type, exc_value, tb))
+            # The exception text is data: never parse it as color markup
+            logger = self._logger._with_inner(self._logger._inner.with_colors(False))
+            logger.log(
+                self._level,
+                f"{self._message}: {_exception_str(exc_value)}",
+                exception=tb_str,
+                _depth=depth,
+            )
         if self._onerror is not None:
             self._onerror(exc_value)
         return not self._reraise
@@ -1604,6 +1611,10 @@ class Logger:
             ...     logger.exception("Operation failed")
             # Output: ERROR with full traceback
         """
+        if 40 < self._inner.min_level:
+            return
+        if self._activation.rules and self._activation.caller_disabled(_depth + 1):
+            return
         exc_info = current_exc_info()
         if exc_info is not None:
             tb = capture_exception(self._inner, exc_info)

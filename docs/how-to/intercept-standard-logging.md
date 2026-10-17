@@ -69,7 +69,7 @@ From then on, each `logging` record travels up to the root logger, and `Intercep
 * The **message**, already formatted by `logging` (`record.getMessage()`).
 * The **traceback**, when the record has `exc_info` (for example from `logging.exception()`).
 
-After that, it is a normal Logust message: it goes to all your handlers, with their levels, formats, filters, rotation and JSON output.
+After that, it is a normal Logust message: the target's patchers run before it goes to your handlers, with their levels, formats, filters, rotation and JSON output. This includes message and exception redaction configured with `patch()` or `configure(patcher=...)`. Intercepted exceptions also follow each handler's `backtrace` and `diagnose` options.
 
 /// tip
 
@@ -200,6 +200,8 @@ And `app.json` has the `source` field only on the intercepted record:
 ```
 
 `InterceptHandler(target=...)` takes the same argument.
+
+You can also pass a patched logger, such as `target=logger.patch(redact)`, to apply that patcher to intercepted records. Values from an active `contextualize()` block are available to both the patcher and the sinks; bound values take precedence over contextualized values, and the patcher's changes are applied last.
 
 ## Recap { #recap }
 

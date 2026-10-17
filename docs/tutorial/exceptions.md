@@ -250,6 +250,8 @@ The exception message is never parsed as [color markup](formatting.md#colors), s
 
 Logust's own frames, like the wrapper added by `@logger.catch`, are left out of the traceback.
 
+If the log level or module rules suppress the record, Logust skips formatting the exception and traceback. `catch()` still calls `onerror` and applies `default` and `reraise` as configured.
+
 ///
 
 ## More traceback detail { #more-traceback-detail }
