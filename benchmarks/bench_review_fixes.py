@@ -39,6 +39,7 @@ def run(calls: int) -> dict:
             "console_message",
             "error_callable",
             "error_filter",
+            "primitive_extra",
             "bound_empty_extra",
             "bound_large",
             "bound_large_extra",
@@ -80,7 +81,7 @@ def run(calls: int) -> dict:
                 logger = logger.bind(payload=list(range(10000)))
             elif kind == "bound_empty_extra":
                 logger = logger.bind(payload=[])
-            if kind in ("bound_large_extra", "bound_empty_extra"):
+            if kind in ("primitive_extra", "bound_large_extra", "bound_empty_extra"):
 
                 def emit(logger=logger):
                     logger.info("payload", event=1)
@@ -108,24 +109,28 @@ def run(calls: int) -> dict:
                 else calls
             )
             try:
-                raise ValueError("benchmark exception")
-            except ValueError:
-                for _ in range(100):
-                    emit()
-                logger.complete()
-                gc.disable()
                 try:
-                    started = time.perf_counter_ns()
-                    for _ in range(count):
+                    raise ValueError("benchmark exception")
+                except ValueError:
+                    for _ in range(100):
                         emit()
                     logger.complete()
-                    elapsed = time.perf_counter_ns() - started
+                    gc.disable()
+                    try:
+                        started = time.perf_counter_ns()
+                        for _ in range(count):
+                            emit()
+                        logger.complete()
+                        elapsed = time.perf_counter_ns() - started
+                    finally:
+                        gc.enable()
+            finally:
+                try:
+                    logger.remove()
                 finally:
-                    gc.enable()
-            logger.remove()
-            if console_backup is not None:
-                os.dup2(console_backup, 2)
-                os.close(console_backup)
+                    if console_backup is not None:
+                        os.dup2(console_backup, 2)
+                        os.close(console_backup)
             fingerprint = None
             if output.exists():
                 lines = output.read_text().splitlines()
