@@ -47,6 +47,58 @@ class TestCatchContextManager:
 
         assert output == []
 
+    @pytest.mark.parametrize("suppression", ["level", "module"])
+    @pytest.mark.parametrize("reraise", [False, True])
+    def test_suppressed_catch_keeps_onerror_and_reraise_without_formatting(
+        self, suppression: str, reraise: bool
+    ) -> None:
+        logger = Logger(PyLogger(LogLevel.Trace))
+        logger.remove()
+        output: list[str] = []
+        logger.add(output.append, level="CRITICAL" if suppression == "level" else 0)
+        if suppression == "module":
+            logger.disable(__name__)
+        errors: list[BaseException] = []
+
+        class ObservedError(Exception):
+            calls = 0
+
+            def __str__(self) -> str:
+                type(self).calls += 1
+                return "observed"
+
+        def fail() -> None:
+            with logger.catch(reraise=reraise, onerror=errors.append):
+                raise ObservedError()
+
+        try:
+            if reraise:
+                with pytest.raises(ObservedError):
+                    fail()
+            else:
+                fail()
+            assert len(errors) == 1
+            assert isinstance(errors[0], ObservedError)
+            assert ObservedError.calls == 0
+            assert output == []
+        finally:
+            logger.remove()
+
+    def test_suppressed_decorated_catch_keeps_default_without_formatting(self) -> None:
+        logger = Logger(PyLogger(LogLevel.Trace))
+        logger.remove()
+        logger.disable(__name__)
+
+        class ObservedError(Exception):
+            def __str__(self) -> str:
+                raise AssertionError("formatted")
+
+        @logger.catch(default=42)
+        def fail() -> int:
+            raise ObservedError()
+
+        assert fail() == 42
+
     def test_reraise(self, logger_and_output: tuple[Logger, list[str]]) -> None:
         logger, output = logger_and_output
 

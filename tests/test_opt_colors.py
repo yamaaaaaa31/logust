@@ -148,3 +148,47 @@ class TestCapture:
         logger.opt(capture=False).debug("{x}", x=Boom())
 
         assert out == []
+
+    @pytest.mark.parametrize("level", ["DEBUG", 10, LogLevel.Debug, "CAPTURE_SKIP_LVL"])
+    def test_capture_false_log_skips_formatting_when_level_disabled(
+        self, logger: Logger, level: str | int | LogLevel
+    ) -> None:
+        logger.level("CAPTURE_SKIP_LVL", no=21)
+        out: list[str] = []
+        logger.add(out.append, level="WARNING", format="{message}")
+
+        class Boom:
+            def __format__(self, spec: str) -> str:
+                raise AssertionError("formatted")
+
+        logger.opt(capture=False).log(level, "{x}", x=Boom())
+
+        assert out == []
+
+    @pytest.mark.parametrize("use_log", [False, True])
+    def test_capture_false_skips_formatting_for_disabled_module(
+        self, logger: Logger, use_log: bool
+    ) -> None:
+        out: list[str] = []
+        logger.add(out.append, format="{message}")
+        logger.disable(__name__)
+
+        class Boom:
+            def __format__(self, spec: str) -> str:
+                raise AssertionError("formatted")
+
+        if use_log:
+            logger.opt(capture=False).log("INFO", "{x}", x=Boom())
+        else:
+            logger.opt(capture=False).info("{x}", x=Boom())
+
+        assert out == []
+
+    @pytest.mark.parametrize("lazy", [False, True])
+    def test_capture_false_unknown_level_still_raises_when_module_disabled(
+        self, logger: Logger, lazy: bool
+    ) -> None:
+        logger.disable(__name__)
+
+        with pytest.raises(ValueError, match="Invalid log level"):
+            logger.opt(capture=False, lazy=lazy).log("NO_SUCH_CAPTURE_LEVEL", "{missing}", x=1)
