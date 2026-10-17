@@ -84,6 +84,6 @@ See [Logging Exceptions](tutorial/exceptions.md) and [Traceback Detail](advanced
 
 ### Ready for modern Python { #ready-for-modern-python }
 
-* Python 3.10+.
+* Python 3.10+, including Python 3.15.
 * Fully typed, with type stubs for the Rust extension.
-* Wheels for free-threaded CPython (3.13t and 3.14t) on Linux and macOS. See [Threads and Processes](advanced/threads-and-processes.md).
+* Release automation builds wheels for free-threaded CPython (3.14t and 3.15t) on Linux, macOS, and Windows. See [Threads and Processes](advanced/threads-and-processes.md).

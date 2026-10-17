@@ -172,9 +172,9 @@ If you can, prefer the **spawn** start method, and configure logging in each pro
 
 ## Free-threaded Python { #free-threaded-python }
 
-Python 3.13 introduced an optional **free-threaded** build (`python3.14t`), without the GIL, where threads really run in parallel.
+Python 3.13 introduced an optional **free-threaded** build (`python3.15t`), without the GIL, where threads really run in parallel.
 
-Logust supports it: the release builds `cp314t` wheels for Linux, macOS and Windows, and the test suite runs on 3.14t in CI. Importing `logust` keeps the GIL **disabled**.
+Logust supports it: release automation builds `cp314t` and `cp315t` wheels for Linux, macOS and Windows, and the test suite runs on 3.14t and 3.15t in CI. Importing `logust` keeps the GIL **disabled**.
 
 You can check it with this script, which logs from 8 threads in parallel:
 
@@ -185,9 +185,9 @@ You can check it with this script, which logs from 8 threads in parallel:
 <div class="termy">
 
 ```console
-$ python3.14t main.py
+$ python3.15t main.py
 
-Python 3.14.7, free-threaded build: True, GIL enabled: False
+Python 3.15.0, free-threaded build: True, GIL enabled: False
 16000 lines
 ```
 
@@ -200,7 +200,7 @@ Install it as usual, `pip` picks the free-threaded wheel for a free-threaded int
 <div class="termy">
 
 ```console
-$ python3.14t -m pip install logust
+$ python3.15t -m pip install logust
 
 ---> 100%
 ```
@@ -209,7 +209,7 @@ $ python3.14t -m pip install logust
 
 /// note
 
-Free-threaded wheels are built for Python **3.14t**. On other free-threaded versions, `pip` would build Logust from source, which needs a Rust toolchain.
+Free-threaded release builds target Python **3.14t and 3.15t**. Python 3.13t is no longer supported by PyO3. If a wheel is unavailable for your platform, `pip` builds Logust from source, which needs a Rust toolchain.
 
 ///
 
@@ -221,4 +221,4 @@ Free-threaded wheels are built for Python **3.14t**. On other free-threaded vers
 * With spawn or forkserver, configure logging in each process. With fork, the child inherits the handlers.
 * Several processes can share a log file, rotation included.
 * In forked children, `enqueue=True` sinks write synchronously.
-* Logust supports free-threaded Python 3.14t, and keeps the GIL disabled.
+* Logust supports free-threaded Python 3.14t and 3.15t, and keeps the GIL disabled.
