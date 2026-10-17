@@ -28,7 +28,8 @@ def main() -> None:
     if args.samples < 1 or args.calls < 1:
         parser.error("--samples and --calls must be positive")
     script = Path(__file__).with_name("bench_review_fixes.py").resolve()
-    paths = {"baseline": args.baseline.resolve(), "candidate": args.candidate.resolve()}
+    # Keep virtualenv interpreter symlinks: resolving them loses pyvenv.cfg.
+    paths = {"baseline": args.baseline.absolute(), "candidate": args.candidate.absolute()}
     raw: dict[str, list[dict]] = {label: [] for label in paths}
     with tempfile.TemporaryDirectory(prefix="logust-compare-") as directory:
         for index in range(args.samples):
