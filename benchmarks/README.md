@@ -56,3 +56,19 @@ Mixing raw callbacks or filters changes what gets measured.
 ## Results
 
 See [Benchmarks](../docs/about/benchmarks.md) for latest benchmark results.
+
+## Collection and context regression benchmark
+
+`bench_review_fixes.py` exercises ordinary file, JSON, callable and console output,
+mixed-severity sinks, bound context, and suppressed exception logging. Run the
+same script from outside the checkout using baseline and candidate interpreters
+with release wheels installed. It verifies the imported package is installed,
+checks output, and prints per-case timing and output fingerprints as JSON.
+Alternate baseline/candidate runs and compare medians; keep the compiler,
+dependencies, call counts and script identical. Do not use debug builds.
+
+```bash
+cd /tmp
+/path/to/baseline/bin/python /path/to/logust/benchmarks/bench_review_fixes.py --calls 30000
+/path/to/candidate/bin/python /path/to/logust/benchmarks/bench_review_fixes.py --calls 30000
+```
