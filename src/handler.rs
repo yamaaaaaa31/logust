@@ -45,7 +45,8 @@ static ENUM_TYPE: PyOnceLock<Py<PyType>> = PyOnceLock::new();
 
 /// Extra context value with text rendering compatibility and typed JSON output.
 ///
-/// Two views are stored side-by-side:
+/// Immutable views are shared by cloned context maps; adding per-call fields
+/// does not copy existing JSON trees. Two views are stored side-by-side:
 /// * `text` keeps loguru-compatible `str(value)` output for format-string
 ///   `{extra[key]}` rendering and Python callbacks (`record["extra"][key]`).
 /// * `json` carries the original Python type (int, float, bool, bytes,
@@ -53,6 +54,11 @@ static ENUM_TYPE: PyOnceLock<Py<PyType>> = PyOnceLock::new();
 ///   types instead of strings.
 #[derive(Clone, Debug)]
 pub struct ExtraValue {
+    views: Arc<ExtraViews>,
+}
+
+#[derive(Debug)]
+struct ExtraViews {
     text: String,
     json: Value,
     /// The Python value was a `str` (`{extra}` quotes it like `repr()`)
@@ -120,67 +126,45 @@ fn safe_text_view(value: &Bound<'_, PyAny>) -> String {
 }
 
 impl ExtraValue {
+    fn new(text: String, json: Value, is_str: bool) -> Self {
+        Self {
+            views: Arc::new(ExtraViews { text, json, is_str }),
+        }
+    }
+
     pub fn from_py(value: &Bound<'_, PyAny>) -> PyResult<Self> {
         let kind = FastKind::classify(value)?;
         let text = safe_text_view(value);
-
-        match kind {
-            FastKind::None => Ok(Self {
-                text,
-                json: Value::Null,
-                is_str: false,
-            }),
-            FastKind::Bool(b) => Ok(Self {
-                text,
-                json: Value::Bool(b),
-                is_str: false,
-            }),
-            FastKind::Str(s) => Ok(Self {
-                text,
-                json: Value::String(s),
-                is_str: true,
-            }),
-            FastKind::I64(n) => Ok(Self {
-                text,
-                json: Value::Number(Number::from(n)),
-                is_str: false,
-            }),
-            FastKind::U64(n) => Ok(Self {
-                text,
-                json: Value::Number(Number::from(n)),
-                is_str: false,
-            }),
+        let (json, is_str) = match kind {
+            FastKind::None => (Value::Null, false),
+            FastKind::Bool(b) => (Value::Bool(b), false),
+            FastKind::Str(s) => (Value::String(s), true),
+            FastKind::I64(n) => (Value::Number(Number::from(n)), false),
+            FastKind::U64(n) => (Value::Number(Number::from(n)), false),
             FastKind::Slow => {
                 let mut seen = HashSet::new();
                 let json = py_to_json_value(value, 0, &mut seen)
                     .unwrap_or_else(|_| Value::String(text.clone()));
-                Ok(Self {
-                    text,
-                    json,
-                    is_str: false,
-                })
+                (json, false)
             }
-        }
+        };
+        Ok(Self::new(text, json, is_str))
     }
 
     #[inline]
     pub fn as_str(&self) -> &str {
-        &self.text
+        &self.views.text
     }
 
     #[inline]
     pub fn as_json(&self) -> &Value {
-        &self.json
+        &self.views.json
     }
 
     /// A non-`str` value whose `str()` is `text` (e.g. an int), for tests
     #[cfg(test)]
     pub fn non_str(text: &str) -> Self {
-        Self {
-            text: text.to_string(),
-            json: Value::String(text.to_string()),
-            is_str: false,
-        }
+        Self::new(text.to_string(), Value::String(text.to_string()), false)
     }
 
     /// Append the value as it appears in `str(dict)` (loguru's `{extra}`).
@@ -189,10 +173,10 @@ impl ExtraValue {
     /// text, which equals `repr()` for `int`, `float`, `bool`, `None`, and
     /// `list` / `tuple` / `dict` values.
     pub fn write_repr(&self, out: &mut String) {
-        if self.is_str {
-            write_py_str_repr(&self.text, out);
+        if self.views.is_str {
+            write_py_str_repr(&self.views.text, out);
         } else {
-            out.push_str(&self.text);
+            out.push_str(&self.views.text);
         }
     }
 }
@@ -278,11 +262,7 @@ pub fn write_extra_repr(extra: &ExtraMap, out: &mut String) {
 
 impl From<String> for ExtraValue {
     fn from(value: String) -> Self {
-        Self {
-            text: value.clone(),
-            json: Value::String(value),
-            is_str: true,
-        }
+        Self::new(value.clone(), Value::String(value), true)
     }
 }
 
@@ -294,7 +274,7 @@ impl From<&str> for ExtraValue {
 
 impl fmt::Display for ExtraValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.text)
+        f.write_str(&self.views.text)
     }
 }
 
@@ -303,7 +283,7 @@ impl Serialize for ExtraValue {
     where
         S: Serializer,
     {
-        self.json.serialize(serializer)
+        self.views.json.serialize(serializer)
     }
 }
 
