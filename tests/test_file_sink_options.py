@@ -9,6 +9,7 @@ from __future__ import annotations
 import bz2
 import gzip
 import io
+import os
 import sys
 import tarfile
 import zipfile
@@ -44,6 +45,42 @@ def _read_archive(path: Path, fmt: str) -> str:
 def _archives(directory: Path, fmt: str) -> list[Path]:
     # Rotated names look like ``app.<timestamp>.pid<pid>.log.<fmt>``.
     return sorted(p for p in directory.iterdir() if p.name.endswith(f".log.{fmt}"))
+
+
+class TestRetentionPaths:
+    @pytest.mark.parametrize("path_kind", ["filename", "dot", "absolute"])
+    @pytest.mark.parametrize("catch", [None, True, False])
+    @pytest.mark.parametrize("retention", [1, "1 day"])
+    def test_rotation_keeps_logging_and_applies_retention(
+        self,
+        session_logger: Logger,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        path_kind: str,
+        catch: bool | None,
+        retention: int | str,
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        stale = tmp_path / "app.2000-01-01_00-00-00_000000.pid0.log"
+        stale.write_text("stale\n", encoding="utf-8")
+        os.utime(stale, (1, 1))
+        paths = {"filename": "app.log", "dot": "./app.log", "absolute": str(tmp_path / "app.log")}
+        handler_id = session_logger.add(
+            paths[path_kind], format="{message}", rotation="10 B", retention=retention, catch=catch
+        )
+        messages = [f"message {index:02d}" for index in range(4)]
+        try:
+            for message in messages:
+                session_logger.info(message)
+            session_logger.complete()
+        finally:
+            session_logger.remove(handler_id)
+
+        assert not stale.exists()
+        rotated = sorted(tmp_path.glob("app.*.log"))
+        expected = messages[-2:-1] if retention == 1 else messages[:-1]
+        assert [path.read_text(encoding="utf-8").strip() for path in rotated] == expected
+        assert (tmp_path / "app.log").read_text(encoding="utf-8") == messages[-1] + "\n"
 
 
 class TestCompressionFormats:

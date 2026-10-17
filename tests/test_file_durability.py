@@ -258,6 +258,43 @@ class TestBuffering:
         finally:
             session_logger.remove(handler_id)
 
+    @pytest.mark.parametrize("buffer_size", [8, 22, 65536])
+    @pytest.mark.parametrize("max_size", [10, 11, 22, 23])
+    @pytest.mark.parametrize("unicode_message", [False, True], ids=["ascii", "utf8"])
+    def test_size_rotation_counts_buffered_bytes(
+        self,
+        session_logger: Logger,
+        tmp_path: Path,
+        buffer_size: int,
+        max_size: int,
+        unicode_message: bool,
+    ) -> None:
+        log_file = tmp_path / "app.log"
+        messages = [
+            f"éééé{index:02d}" if unicode_message else f"{index:010d}" for index in range(10)
+        ]
+        line_size = 11  # Ten UTF-8 bytes plus the newline, even for the Unicode case.
+        lines_per_file = (max_size + line_size - 1) // line_size
+        handler_id = session_logger.add(
+            log_file,
+            format="{message}",
+            rotation=f"{max_size} B",
+            buffering=buffer_size,
+            catch=False,
+        )
+        try:
+            for message in messages:
+                session_logger.info(message)
+            session_logger.complete()
+        finally:
+            session_logger.remove(handler_id)
+
+        rotated = sorted(tmp_path.glob("app.*.log"))
+        assert len(rotated) == (len(messages) - 1) // lines_per_file
+        files = [*rotated, log_file]
+        assert [line for path in files for line in _read(path).splitlines()] == messages
+        assert all(path.stat().st_size <= lines_per_file * line_size for path in files)
+
     @pytest.mark.parametrize(
         "setup",
         [
