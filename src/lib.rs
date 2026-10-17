@@ -923,6 +923,23 @@ impl PyLogger {
         (t.needs_caller, t.needs_thread, t.needs_process)
     }
 
+    /// IDs eligible at this severity, used when merging Python CollectOptions.
+    fn collection_ids_for_emit_no(&self, emit_no: u32) -> (Vec<u64>, Vec<u64>) {
+        let handlers = self.handlers.read();
+        let callbacks = self.callbacks.read();
+        let handler_ids = handlers
+            .iter()
+            .filter(|entry| emit_no >= entry.handler.level())
+            .map(|entry| entry.id)
+            .collect();
+        let callback_ids = callbacks
+            .iter()
+            .filter(|entry| emit_no >= entry.level)
+            .map(|entry| entry.id)
+            .collect();
+        (handler_ids, callback_ids)
+    }
+
     /// Handler formats only at ``emit_no`` (untracked default console vs tracked handlers).
     fn handler_only_needs_for_emit_no(&self, emit_no: u32) -> (bool, bool, bool) {
         let handlers = self.handlers.read();
