@@ -82,8 +82,11 @@ def log_by_number() -> None:
     logger.log(27, "Logging at level 27 (NOTICE)")
     logger.log(35, "Logging at level 35 (SECURITY)")
 
-    # Or any arbitrary number
-    logger.log(18, "Logging at level 18 (between METRIC and INFO)")
+    # A threshold can be any number, not only a registered level's
+    logger.set_level(18)
+    logger.log("METRIC", "This won't show (15 < 18)")
+    logger.log("AUDIT", "This will show (22 >= 18)")
+    logger.set_level("TRACE")
 
 
 def main() -> None:

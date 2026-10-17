@@ -798,7 +798,7 @@ impl HandlerType {
     }
 
     /// Get the minimum log level for this handler
-    pub fn level(&self) -> LogLevel {
+    pub fn level(&self) -> u32 {
         match self {
             HandlerType::Console(h) => h.level,
             HandlerType::File(h) => h.level,
@@ -963,7 +963,7 @@ fn report_python_error(py: Python<'_>, handler_id: u64, record_repr: &str, err: 
 
 /// Console handler for terminal output
 pub struct ConsoleHandler {
-    pub level: LogLevel,
+    pub level: u32,
     pub format: FormatConfig,
     pub colorize: bool,
     pub use_stderr: bool,
@@ -1039,7 +1039,7 @@ pub fn stderr_should_colorize(py: Python<'_>) -> bool {
 impl ConsoleHandler {
     /// The default console handler: default format on stderr, as in loguru,
     /// colored when [`stderr_should_colorize`] says so.
-    pub fn new(py: Python<'_>, level: LogLevel) -> Self {
+    pub fn new(py: Python<'_>, level: u32) -> Self {
         ConsoleHandler {
             level,
             format: FormatConfig::default(),
@@ -1048,7 +1048,7 @@ impl ConsoleHandler {
         }
     }
 
-    pub fn with_format(level: LogLevel, format: FormatConfig) -> Self {
+    pub fn with_format(level: u32, format: FormatConfig) -> Self {
         let colorize = !format.serialize;
         ConsoleHandler {
             level,
@@ -1059,7 +1059,7 @@ impl ConsoleHandler {
     }
 
     pub fn with_options(
-        level: LogLevel,
+        level: u32,
         format: FormatConfig,
         colorize: bool,
         use_stderr: bool,
@@ -1073,7 +1073,7 @@ impl ConsoleHandler {
     }
 
     pub fn handle(&self, record: &LogRecord) -> io::Result<()> {
-        if record.level_no() >= self.level as u32 {
+        if record.level_no() >= self.level {
             let mut output = self.format.format_record(record, self.colorize);
             output.push('\n');
             // `println!` / `eprintln!` panic on a write error (a closed pipe
@@ -1099,13 +1099,13 @@ impl ConsoleHandler {
 /// File handler for file output
 pub struct FileHandler {
     pub sink: FileSink,
-    pub level: LogLevel,
+    pub level: u32,
     pub format: FormatConfig,
     pub colorize: bool,
 }
 
 impl FileHandler {
-    pub fn new(sink: FileSink, level: LogLevel) -> Self {
+    pub fn new(sink: FileSink, level: u32) -> Self {
         FileHandler {
             sink,
             level,
@@ -1114,12 +1114,7 @@ impl FileHandler {
         }
     }
 
-    pub fn with_format(
-        sink: FileSink,
-        level: LogLevel,
-        format: FormatConfig,
-        colorize: bool,
-    ) -> Self {
+    pub fn with_format(sink: FileSink, level: u32, format: FormatConfig, colorize: bool) -> Self {
         FileHandler {
             sink,
             level,
@@ -1130,7 +1125,7 @@ impl FileHandler {
 
     #[inline]
     pub fn handle(&self, record: &LogRecord) -> io::Result<()> {
-        if record.level_no() >= self.level as u32 {
+        if record.level_no() >= self.level {
             let output = self.format.format_record(record, self.colorize);
             self.sink.write_owned(output)
         } else {
