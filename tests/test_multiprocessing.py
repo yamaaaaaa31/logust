@@ -16,11 +16,11 @@ import multiprocessing.synchronize
 import os
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from collections import Counter
 from pathlib import Path
-import tempfile
 
 import pytest
 
@@ -109,6 +109,10 @@ def _child_nested_fork_writer(
     logger.complete()
 
 
+def _external_rotation_phase(message: str) -> None:
+    print(f"external rotation [pid={os.getpid()}]: {message}", file=sys.stderr, flush=True)
+
+
 def _child_external_rotation_burst(
     log_path: str,
     start_event: multiprocessing.synchronize.Event,
@@ -130,8 +134,11 @@ def _child_external_rotation_burst(
 
     try:
         for i in range(4):
+            _external_rotation_phase(f"child write {i}: starting")
             logger.info(f"rotator|{i:03d}|{payload}")
+            _external_rotation_phase(f"child write {i}: finished")
         logger.complete()
+        _external_rotation_phase("child flush: finished")
     finally:
         logger.remove(handler_id)
 
@@ -519,7 +526,8 @@ def _scenario_nested_fork_logging_works() -> None:
 
 
 def _scenario_external_rotation_progresses_under_sustained_async_writes() -> None:
-    tmp_path = Path(tempfile.mkdtemp())
+    temporary_directory = tempfile.TemporaryDirectory(prefix="logust-async-rotation-")
+    tmp_path = Path(temporary_directory.name)
     log_file = tmp_path / "stress.log"
     logger = Logger(PyLogger(LogLevel.Trace))
     logger.disable()
@@ -565,14 +573,20 @@ def _scenario_external_rotation_progresses_under_sustained_async_writes() -> Non
             f"background logging thread failed: {background_errors}"
         )
 
+        _external_rotation_phase("fork: starting")
         process.start()
+        _external_rotation_phase(f"fork: finished, child={process.pid}")
         start_event.set()
+        _external_rotation_phase("child join: starting with producer running")
         exitcode = _join_process_or_fail(
             process,
             timeout=90,
             context="external rotator could not acquire LOCK_EX under sustained async writes",
         )
         assert exitcode == 0
+        assert thread.is_alive(), "producer stopped before the external rotator finished"
+        assert not stop_event.is_set()
+        _external_rotation_phase("child join: finished with producer running")
 
         stop_event.set()
         thread.join(timeout=10)
@@ -581,21 +595,40 @@ def _scenario_external_rotation_progresses_under_sustained_async_writes() -> Non
             f"background logging thread failed: {background_errors}"
         )
 
+        _external_rotation_phase("parent flush: starting")
         logger.complete()
+        _external_rotation_phase("parent flush: finished")
 
-        lines = _read_aggregated_log_lines(log_file)
-        for i in range(4):
-            token = f"rotator|{i:03d}|"
-            assert sum(token in line for line in lines) == 1, (
-                f"missing or duplicated rotation token {token!r}"
-            )
+        # The unthrottled producer can emit gigabytes on a loaded runner. Keep
+        # only the four child tokens rather than retaining every parent line.
+        _external_rotation_phase("token scan: starting")
+        actual: Counter[str] = Counter()
+        rotated_files = []
+        for path in sorted(tmp_path.iterdir()):
+            if path.name == f"{log_file.name}.lock":
+                continue
+            if path != log_file and not path.name.startswith(f"{log_file.stem}."):
+                continue
+            if path != log_file:
+                rotated_files.append(path)
+            with path.open(encoding="utf-8") as stream:
+                for line in stream:
+                    if line.startswith("rotator|"):
+                        actual[line.split("|", 2)[1]] += 1
+        expected = Counter({f"{i:03d}": 1 for i in range(4)})
+        assert actual == expected, f"rotation tokens did not match: {actual} != {expected}"
+        assert rotated_files, "no rotated log was produced"
+        _external_rotation_phase("token scan: finished")
     finally:
         stop_event.set()
         thread.join(timeout=10)
         if process.is_alive():
             process.terminate()
             process.join(timeout=5)
-        logger.remove(handler_id)
+        try:
+            logger.remove(handler_id)
+        finally:
+            temporary_directory.cleanup()
 
 
 def _join_process_or_fail(
@@ -762,11 +795,9 @@ class TestMultiprocessingFork:
     def test_external_rotation_progresses_under_sustained_async_writes(
         self, tmp_path: Path
     ) -> None:
-        # Linux flock can starve a pending LOCK_EX waiter when shared
-        # holders re-acquire tightly after the async writer's 100ms flush.
-        # The scenario reliably completes in a couple of seconds locally but
-        # can spike well past 45s on loaded CI runners; widen to 120s to
-        # keep catching real deadlocks without flaking on scheduler jitter.
+        # Keep the outer deadline above the child's 90-second progress check.
+        # Captured phase markers distinguish fork, rotation, flush, and token
+        # validation if the independent scenario process stops responding.
         _run_module_scenario(
             "_scenario_external_rotation_progresses_under_sustained_async_writes",
             timeout=120,

@@ -23,6 +23,8 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
+from logust._traceback import capture_exception
+
 if TYPE_CHECKING:
     from logust import Logger
 
@@ -78,16 +80,35 @@ class InterceptHandler(logging.Handler):
             return
 
         level: str | int = record.levelname
+        emit_no = target._inner.try_resolve_emit_level_no(level)
+        if emit_no is not None and emit_no < target._inner.min_level:
+            return
 
         exception = None
         if record.exc_info:
-            import traceback
+            exc_type, exc_value, tb = record.exc_info
+            if exc_type is not None and exc_value is not None:
+                exception = capture_exception(target._inner, (exc_type, exc_value, tb))
+            else:
+                # logging.exception() outside an except block supplies this
+                # empty tuple; retain logging's "NoneType: None" output.
+                import traceback
 
-            exception = "".join(traceback.format_exception(*record.exc_info))
+                exception = "".join(traceback.format_exception(*record.exc_info))
 
-        target._inner.log(
+        message = record.getMessage()
+        extra = None
+        if target._patchers:
+            message, exception, extra = target._apply_patchers(
+                level_name=record.levelname,
+                level_no=emit_no or 0,
+                message=message,
+                exception=exception,
+                extra=None,
+            )
+        target._inner_for_call(extra).log(
             level,
-            record.getMessage(),
+            message,
             exception=exception,
         )
 
