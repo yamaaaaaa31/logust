@@ -170,6 +170,51 @@ class TestCallSites:
                 exec(code, {"__name__": 5, "logger": logger})
         assert pair.fast_out == pair.slow_out == []
 
+    def test_caller_globals_are_read_after_each_change(self, pair: Pair) -> None:
+        namespace: dict[str, Any] = {"__name__": "initial"}
+        code = compile(
+            "def emit(logger):\n"
+            "    global __name__\n"
+            "    for value in ('first', 'second', None):\n"
+            "        __name__ = value\n"
+            "        logger.info('changed')\n"
+            "    del __name__\n"
+            "    logger.info('missing')\n",
+            "<changing-globals>",
+            "exec",
+        )
+        exec(code, namespace)
+        emit = namespace["emit"]
+        with patch("logust._logger._get_caller_info", side_effect=AssertionError("python path")):
+            emit(pair.fast)
+        emit(pair.slow)
+        assert pair.fast_out == pair.slow_out
+        assert [line.split("|", 1)[0] for line in pair.fast_out] == [
+            "first",
+            "second",
+            "",
+            "<changing-globals>",
+        ]
+
+    def test_unicode_caller_with_str_subclass_module_name(self, pair: Pair) -> None:
+        class ModuleName(str):
+            def __str__(self) -> str:
+                raise AssertionError("module names use str contents without coercion")
+
+        namespace: dict[str, Any] = {"__name__": ModuleName("名前💡")}
+        code = compile(
+            "def 送信(logger):\n    logger.info('unicode')\n",
+            "/仮想/呼出🚀.py",
+            "exec",
+        )
+        exec(code, namespace)
+        emit = namespace["送信"]
+        with patch("logust._logger._get_caller_info", side_effect=AssertionError("python path")):
+            emit(pair.fast)
+        emit(pair.slow)
+        assert pair.fast_out == pair.slow_out
+        assert pair.fast_out[0].split("|")[:4] == ["名前💡", "送信", "2", "/仮想/呼出🚀.py"]
+
     def test_depth_past_the_top_of_the_stack(self, pair: Pair) -> None:
         pair.run(lambda logger: logger.info("too deep", _depth=10_000))
 
