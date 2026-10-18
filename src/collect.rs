@@ -77,6 +77,15 @@ pub fn caller_info(py: Python<'_>, depth: usize) -> PyResult<Option<CallerInfo>>
         return Ok(None);
     };
 
+    // CPython 3.11+ exposes the frame's globals directly, avoiding a generic
+    // attribute lookup. Keep the existing getter on older/other interpreters.
+    #[cfg(all(Py_3_11, not(any(Py_LIMITED_API, PyPy, GraalPy, RustPython))))]
+    let globals = unsafe {
+        // SAFETY: `frame` is live and the thread is attached. The API returns
+        // a new strong reference, adopted by the Bound (also safe without GIL).
+        Bound::from_owned_ptr_or_err(py, ffi::PyFrame_GetGlobals(frame.as_ptr().cast()))
+    }?;
+    #[cfg(any(not(Py_3_11), Py_LIMITED_API, PyPy, GraalPy, RustPython))]
     let globals = frame.getattr(intern!(py, "f_globals"))?;
     let Ok(globals) = globals.cast::<PyDict>() else {
         return Ok(None);
