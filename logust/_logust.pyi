@@ -272,6 +272,10 @@ class PyLogger:
         """``(needs_caller, needs_thread, needs_process)`` after full merge at ``emit_no``."""
         ...
 
+    def collection_ids_for_emit_no(self, emit_no: int) -> tuple[list[int], list[int]]:
+        """Handler and callback IDs eligible at this numeric severity."""
+        ...
+
     def handler_only_needs_for_emit_no(self, emit_no: int) -> tuple[bool, bool, bool]:
         """Handler formats only (no callbacks), merged for handlers eligible at ``emit_no``."""
         ...

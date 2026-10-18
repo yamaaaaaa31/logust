@@ -131,11 +131,20 @@ fn two_digits(n: u32) -> [u8; 2] {
 /// byte-identical to `dt.format(DEFAULT_TIME_FORMAT)`: years outside `0..=9999`
 /// (which chrono prints with a sign) fall back to chrono.
 pub fn write_default_time(dt: &DateTime<Local>, out: &mut String) {
+    if let Some(buf) = default_time_bytes(dt) {
+        // SAFETY: `default_time_bytes` returns only ASCII digits and punctuation.
+        out.push_str(unsafe { std::str::from_utf8_unchecked(&buf) });
+    } else {
+        let _ = write!(out, "{}", dt.format(DEFAULT_TIME_FORMAT));
+    }
+}
+
+/// The ordinary 23-byte timestamp, without allocating its own string.
+fn default_time_bytes(dt: &DateTime<Local>) -> Option<[u8; 23]> {
     let local = dt.naive_local();
     let year = local.year();
     if !(0..=9999).contains(&year) {
-        let _ = write!(out, "{}", dt.format(DEFAULT_TIME_FORMAT));
-        return;
+        return None;
     }
     let nanos = local.nanosecond();
     // Like chrono's `%S`, a leap second (nanosecond >= 1e9) renders as "60"
@@ -152,13 +161,10 @@ pub fn write_default_time(dt: &DateTime<Local>, out: &mut String) {
     let [s0, s1] = two_digits(second);
     let [ms1, ms2] = two_digits(millis % 100);
     let ms0 = b'0' + (millis / 100) as u8;
-    let buf = [
+    Some([
         c0, c1, y0, y1, b'-', mo0, mo1, b'-', d0, d1, b' ', h0, h1, b':', mi0, mi1, b':', s0, s1,
         b'.', ms0, ms1, ms2,
-    ];
-    // SAFETY: `buf` holds only ASCII digits and punctuation, which is valid UTF-8
-    // (`from_utf8` would validate the 23 bytes on every record)
-    out.push_str(unsafe { std::str::from_utf8_unchecked(&buf) });
+    ])
 }
 
 /// The default `{time}` rendering of `dt` as a new string
@@ -1071,7 +1077,7 @@ impl FormatConfig {
     fn format_record_json(&self, record: &LogRecord) -> String {
         #[derive(Serialize)]
         struct JsonRecord<'a> {
-            time: String,
+            time: &'a str,
             level: &'a str,
             message: &'a str,
             #[serde(skip_serializing_if = "str::is_empty")]
@@ -1090,8 +1096,20 @@ impl FormatConfig {
             *n == 0
         }
 
+        // Borrow the ordinary timestamp from the stack instead of allocating
+        // a separate String that serde immediately copies into its output.
+        let time_bytes = default_time_bytes(&record.timestamp);
+        let signed_time;
+        let time = match time_bytes.as_ref() {
+            // SAFETY: every byte is an ASCII digit or separator.
+            Some(bytes) => unsafe { std::str::from_utf8_unchecked(bytes) },
+            None => {
+                signed_time = format_default_time(&record.timestamp);
+                signed_time.as_str()
+            }
+        };
         let json_record = JsonRecord {
-            time: format_default_time(&record.timestamp),
+            time,
             level: record.level_name(),
             message: &record.message,
             name: &record.caller.name,
@@ -1132,6 +1150,114 @@ mod tests {
         let result = config.format_record(&record, false);
         assert!(result.contains("\"level\":\"ERROR\""));
         assert!(result.contains("\"message\":\"error occurred\""));
+    }
+
+    #[test]
+    fn test_json_timestamp_matches_chrono() {
+        use chrono::{NaiveDate, TimeZone};
+
+        let config = FormatConfig::new(None, true);
+        let mut record = LogRecord::new(LogLevel::Info, "m".into());
+        for year in [-1, 0, 1, 999, 2024, 9999, 10_000] {
+            for nanos in [0, 999, 1_000_000, 9_999_999, 999_999_999] {
+                let naive = NaiveDate::from_ymd_opt(year, 6, 15)
+                    .unwrap()
+                    .and_hms_nano_opt(12, 30, 45, nanos)
+                    .unwrap();
+                let timestamp = Local.from_utc_datetime(&naive);
+                record.timestamp = timestamp;
+                let output: serde_json::Value =
+                    serde_json::from_str(&config.format_record(&record, false)).unwrap();
+                assert_eq!(
+                    output["time"],
+                    timestamp.format(DEFAULT_TIME_FORMAT).to_string()
+                );
+            }
+        }
+        let leap = NaiveDate::from_ymd_opt(2016, 12, 31)
+            .unwrap()
+            .and_hms_nano_opt(23, 59, 59, 1_500_000_000)
+            .unwrap();
+        let timestamp = Local.from_utc_datetime(&leap);
+        record.timestamp = timestamp;
+        let output: serde_json::Value =
+            serde_json::from_str(&config.format_record(&record, false)).unwrap();
+        assert_eq!(
+            output["time"],
+            timestamp.format(DEFAULT_TIME_FORMAT).to_string()
+        );
+    }
+
+    #[test]
+    fn test_json_output_matches_owned_timestamp_record() {
+        use crate::handler::CallerInfo;
+
+        // The previous record shape is an independent byte-for-byte oracle:
+        // field order, individual omission rules and escaping stay unchanged.
+        #[derive(Serialize)]
+        struct OwnedTimestampRecord<'a> {
+            time: String,
+            level: &'a str,
+            message: &'a str,
+            #[serde(skip_serializing_if = "str::is_empty")]
+            name: &'a str,
+            #[serde(skip_serializing_if = "str::is_empty")]
+            function: &'a str,
+            #[serde(skip_serializing_if = "is_zero")]
+            line: u32,
+            #[serde(skip_serializing_if = "HashMap::is_empty")]
+            extra: &'a ExtraMap,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            exception: &'a Option<String>,
+        }
+        fn is_zero(value: &u32) -> bool {
+            *value == 0
+        }
+
+        let config = FormatConfig::new(None, true);
+        let callers = [
+            CallerInfo::default(),
+            CallerInfo::with_file("".into(), "関数".into(), 0, "unused.py".into()),
+            CallerInfo::with_file("app\"\n".into(), "emit".into(), 7, "unused.py".into()),
+        ];
+        for caller in callers {
+            for with_extra in [false, true] {
+                let mut extra = HashMap::new();
+                if with_extra {
+                    extra.insert("鍵\n\"".into(), ExtraValue::from("値\0\t\\💡"));
+                }
+                let extra = Arc::new(extra);
+                for exception in [None, Some(""), Some("traceback\n\"é\"\0")] {
+                    for custom_level in [false, true] {
+                        let mut record = LogRecord::with_extra(
+                            LogLevel::Info,
+                            "payload\n\"\\\0é💡".into(),
+                            Arc::clone(&extra),
+                        );
+                        if custom_level {
+                            record.level_info =
+                                Some(Arc::new(LevelInfo::new("CUSTOM_é".into(), 23, None, None)));
+                        }
+                        record.caller = caller.clone();
+                        record.exception = exception.map(str::to_string);
+                        let previous = OwnedTimestampRecord {
+                            time: record.timestamp.format(DEFAULT_TIME_FORMAT).to_string(),
+                            level: record.level_name(),
+                            message: &record.message,
+                            name: &record.caller.name,
+                            function: &record.caller.function,
+                            line: record.caller.line,
+                            extra: &record.extra,
+                            exception: &record.exception,
+                        };
+                        assert_eq!(
+                            config.format_record(&record, false),
+                            serde_json::to_string(&previous).unwrap()
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[test]

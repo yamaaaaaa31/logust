@@ -812,6 +812,24 @@ class Catcher:
         return cast("_F", catch_wrapper)
 
 
+_CollectAggregate = tuple[
+    bool,
+    CallerInfo | None,
+    bool,
+    bool,
+    bool,
+    ThreadInfo | None,
+    bool,
+    bool,
+    bool,
+    ProcessInfo | None,
+    bool,
+    bool,
+    bool,
+    bool,
+]
+
+
 class Logger:
     """Main logger class wrapping the Rust PyLogger.
 
@@ -838,28 +856,7 @@ class Logger:
             list[dict[int, tuple[bool | CallerInfo, bool | ThreadInfo, bool | ProcessInfo]] | None]
             | None
         ) = None,
-        aggregated_options_box: (
-            list[
-                tuple[
-                    bool,
-                    CallerInfo | None,
-                    bool,
-                    bool,
-                    bool,
-                    ThreadInfo | None,
-                    bool,
-                    bool,
-                    bool,
-                    ProcessInfo | None,
-                    bool,
-                    bool,
-                    bool,
-                    int,
-                ]
-                | None
-            ]
-            | None
-        ) = None,
+        aggregated_options_box: list[dict[int, _CollectAggregate] | None] | None = None,
         activation: _ModuleActivation | None = None,
     ) -> None:
         self._inner = inner
@@ -885,30 +882,10 @@ class Logger:
         self._requirements_cache_box: list[
             dict[int, tuple[bool | CallerInfo, bool | ThreadInfo, bool | ProcessInfo]] | None
         ] = requirements_cache_box if requirements_cache_box is not None else [None]
-        # Cached aggregated options in a box for O(1) access during log
-        # Format: (caller_true, caller_fixed, caller_none, caller_false,
-        #          thread_true, thread_fixed, thread_none, thread_false,
-        #          process_true, process_fixed, process_none, process_false,
-        #          needs_full_records, tracked_handler_count)
-        self._aggregated_options_box: list[
-            tuple[
-                bool,
-                CallerInfo | None,
-                bool,
-                bool,
-                bool,
-                ThreadInfo | None,
-                bool,
-                bool,
-                bool,
-                ProcessInfo | None,
-                bool,
-                bool,
-                bool,
-                int,
-            ]
-            | None
-        ] = aggregated_options_box if aggregated_options_box is not None else [None]
+        # Per-severity collection options, shared between bound loggers.
+        self._aggregated_options_box: list[dict[int, _CollectAggregate] | None] = (
+            aggregated_options_box if aggregated_options_box is not None else [None]
+        )
         # False routes every call through the Python dispatch path (tests only)
         self._fast_path = True
         # Identifies this Logger family's table in Rust (see _refresh_fast_collect)
@@ -953,33 +930,19 @@ class Logger:
             table |= nibble << (4 * slot)
         self._inner.set_fast_collect(table, generation, self._fast_owner)
 
-    def _get_aggregated_options(
-        self,
-    ) -> tuple[
-        bool,
-        CallerInfo | None,
-        bool,
-        bool,
-        bool,
-        ThreadInfo | None,
-        bool,
-        bool,
-        bool,
-        ProcessInfo | None,
-        bool,
-        bool,
-        bool,
-        int,
-    ]:
-        """Get aggregated CollectOptions, computing and caching if needed.
+    def _get_aggregated_options(self, emit_no: int) -> _CollectAggregate:
+        """Merge options of eligible handlers once per severity after invalidation."""
+        cache = self._aggregated_options_box[0]
+        if cache is not None:
+            cached = cache.get(emit_no)
+            if cached is not None:
+                return cached
 
-        Returns cached result or computes from _collect_options.
-        This is O(n) on first call after invalidation, O(1) thereafter.
-        """
-        cached = self._aggregated_options_box[0]
-        if cached is not None:
-            return cached
-
+        handler_ids, callback_ids = self._inner.collection_ids_for_emit_no(emit_no)
+        eligible = set(handler_ids)
+        eligible.update(callback_ids)
+        options = self._collect_options.copy()
+        has_untracked_handlers = any(handler_id not in options for handler_id in handler_ids)
         caller_true = False
         caller_fixed: CallerInfo | None = None
         caller_none = False
@@ -995,13 +958,9 @@ class Logger:
         process_none = False
         process_false = False
 
-        tracked_handler_count = 0
-
-        # A copy: another thread may add or remove handlers meanwhile
-        for handler_id, opts in self._collect_options.copy().items():
-            # Count tracked file handlers (not callbacks)
-            if handler_id not in self._callback_ids:
-                tracked_handler_count += 1
+        for handler_id, opts in options.items():
+            if handler_id not in eligible:
+                continue
 
             if opts.caller is True:
                 caller_true = True
@@ -1033,7 +992,9 @@ class Logger:
             elif opts.process is False:
                 process_false = True
 
-        needs_full_records = len(self._raw_callback_ids) > 0 or len(self._filter_ids) > 0
+        needs_full_records = bool(eligible & (self._raw_callback_ids | self._filter_ids)) or any(
+            callback_id not in options for callback_id in callback_ids
+        )
 
         result = (
             caller_true,
@@ -1049,9 +1010,12 @@ class Logger:
             process_none,
             process_false,
             needs_full_records,
-            tracked_handler_count,
+            has_untracked_handlers,
         )
-        self._aggregated_options_box[0] = result
+        if cache is None:
+            cache = {}
+            self._aggregated_options_box[0] = cache
+        cache[emit_no] = result
         return result
 
     def _compute_effective_requirements(
@@ -1116,11 +1080,8 @@ class Logger:
             process_none,
             process_false,
             needs_full_records,
-            tracked_handler_count,
-        ) = self._get_aggregated_options()
-
-        # Check if there are untracked handlers (O(1) - uses cached tracked_handler_count)
-        has_untracked_handlers = self._inner.handler_count > tracked_handler_count
+            has_untracked_handlers,
+        ) = self._get_aggregated_options(eff_emit)
 
         # Untracked handlers (e.g. default console): emit-scoped handler formats only.
         h_caller, h_thread, h_process = self._inner.handler_only_needs_for_emit_no(eff_emit)
