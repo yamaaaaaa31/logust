@@ -819,10 +819,10 @@ impl FileSink {
     /// Write a message to the file (borrows message)
     #[inline]
     pub fn write(&self, message: &str) -> io::Result<()> {
-        if self.inner.config.enqueue {
-            self.write_owned(message.to_string())
-        } else {
+        if self.supports_borrowed_write() {
             self.inner.write_borrowed_sync(message)
+        } else {
+            self.write_owned(message.to_string())
         }
     }
 
@@ -832,11 +832,11 @@ impl FileSink {
         self.inner.write_owned(message)
     }
 
-    /// Configured queueing stays enabled even when a forked child uses a
-    /// synchronous backend. Keep that case on the original owned handler path.
+    /// Keep queued, rotating and pending-rotation configurations on the owned
+    /// handler path, including a queued sink using a sync backend after fork.
     #[inline]
-    pub fn is_enqueue_enabled(&self) -> bool {
-        self.inner.config.enqueue
+    pub fn supports_borrowed_write(&self) -> bool {
+        !self.inner.config.enqueue && !self.inner.rotation_coordination_enabled()
     }
 
     /// Flush pending writes
@@ -1073,17 +1073,15 @@ impl FileSinkInner {
         Ok(())
     }
 
-    /// A non-enqueue sink starts synchronous and remains synchronous after
-    /// reopen, rotation and fork. Keep its borrowed write separate from the
-    /// original owned/queued path; no reference is retained by the writer.
+    /// Non-enqueue, non-rotating sinks consume the borrowed bytes under the
+    /// state lock. Rotating and queued writes retain the owned path above.
     fn write_borrowed_sync(&self, message: &str) -> io::Result<()> {
-        self.maybe_rotate()?;
-
         let msg_len = message.len() as u64 + 1;
-        let coordinate_rotation = self.rotation_coordination_enabled();
 
         {
             let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            // For a non-rotating sink maybe_rotate only checks for a fork.
+            // This also checks the PID and reopens after fork before writing.
             self.ensure_backend_ready_locked(&mut state)?;
 
             let WriterBackend::Sync(sync_state) = &mut state.backend else {
@@ -1096,19 +1094,9 @@ impl FileSinkInner {
                 .writer
                 .as_mut()
                 .ok_or_else(|| io::Error::other("sync backend writer missing"))?;
-            // Keep the same rotation lock, buffering and flush order as the
-            // synchronous branch of write_owned above.
-            if coordinate_rotation {
-                if self.config.buffer_size.is_some() {
-                    writer.write_line_buffered_sync(&self.config.path, message)?;
-                } else {
-                    writer.write_line(&self.config.path, message)?;
-                }
-            } else {
-                writer.write_line_unlocked(message)?;
-                if self.config.line_buffered {
-                    writer.flush_without_lock()?;
-                }
+            writer.write_line_unlocked(message)?;
+            if self.config.line_buffered {
+                writer.flush_without_lock()?;
             }
         }
 

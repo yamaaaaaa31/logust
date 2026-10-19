@@ -1111,17 +1111,24 @@ impl FileHandler {
     #[inline]
     pub fn handle(&self, record: &LogRecord) -> io::Result<()> {
         if record.level_no() >= self.level {
-            if self.format.is_message_only() && !self.sink.is_enqueue_enabled() {
-                match self.format.format_record_for_file(record, self.colorize) {
-                    Cow::Borrowed(output) => self.sink.write(output),
-                    Cow::Owned(output) => self.sink.write_owned(output),
-                }
+            if self.format.is_message_only() && self.sink.supports_borrowed_write() {
+                self.handle_message_only(record)
             } else {
                 let output = self.format.format_record(record, self.colorize);
                 self.sink.write_owned(output)
             }
         } else {
             Ok(())
+        }
+    }
+
+    // Keep the borrowed formatter's temporary values out of the common
+    // console/file dispatch frame used by other templates and JSON.
+    #[inline(never)]
+    fn handle_message_only(&self, record: &LogRecord) -> io::Result<()> {
+        match self.format.format_record_for_file(record, self.colorize) {
+            Cow::Borrowed(output) => self.sink.write(output),
+            Cow::Owned(output) => self.sink.write_owned(output),
         }
     }
 }
