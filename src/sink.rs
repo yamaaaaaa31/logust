@@ -970,9 +970,14 @@ impl FileSinkInner {
 
             loop {
                 let received = match dirty_since {
-                    Some(since) => {
-                        receiver.recv_timeout(flush_interval.saturating_sub(since.elapsed()))
-                    }
+                    Some(since) => match since.checked_add(flush_interval) {
+                        // A ready queue needs no clock read before receiving;
+                        // an empty one waits for the oldest buffered line.
+                        Some(deadline) => receiver.recv_deadline(deadline),
+                        None => {
+                            receiver.recv_timeout(flush_interval.saturating_sub(since.elapsed()))
+                        }
+                    },
                     // Nothing to flush: sleep until the next message.
                     None => receiver.recv().map_err(|_| RecvTimeoutError::Disconnected),
                 };
@@ -2679,6 +2684,87 @@ mod tests {
         ));
 
         fs::remove_dir(&path).unwrap();
+    }
+
+    #[test]
+    fn test_async_writer_prefilled_queue_flush_barrier_and_disconnect() {
+        for coordinate_rotation in [false, true] {
+            let dir = unique_temp_path("async-flush-barrier");
+            let path = dir.join("app.log");
+            let mut state =
+                FileSinkInner::create_async_writer_state(&path, coordinate_rotation).unwrap();
+            let sender = state.sender.take().unwrap();
+            let handle = state.handle.take().unwrap();
+
+            // Block at an initial flush ack, so all the following messages
+            // are queued before the worker can receive any of them.
+            let (start_ack, start_receiver) = bounded(0);
+            sender
+                .send(WriterMessage::Flush { ack: start_ack })
+                .unwrap();
+            for message in ["first", "second", "third"] {
+                sender
+                    .send(WriterMessage::Write(message.to_owned()))
+                    .unwrap();
+            }
+            let (ack, ack_receiver) = bounded(0);
+            sender.send(WriterMessage::Flush { ack }).unwrap();
+            sender
+                .send(WriterMessage::Write("after barrier".to_owned()))
+                .unwrap();
+            drop(sender);
+            start_receiver.recv_timeout(Duration::from_secs(5)).unwrap();
+
+            // The zero-capacity ack blocks the worker at the second Flush.
+            // Its prefix must already be visible, while the next queued line
+            // cannot pass that barrier, even though the channel disconnected.
+            let deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                let contents = fs::read_to_string(&path).unwrap();
+                if contents == "first\nsecond\nthird\n" {
+                    break;
+                }
+                assert!(Instant::now() < deadline, "flush prefix: {contents:?}");
+                thread::sleep(Duration::from_millis(1));
+            }
+            ack_receiver.recv_timeout(Duration::from_secs(5)).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !handle.is_finished() {
+                assert!(Instant::now() < deadline, "writer did not drain and exit");
+                thread::sleep(Duration::from_millis(1));
+            }
+            handle.join().unwrap();
+            assert_eq!(
+                fs::read_to_string(&path).unwrap(),
+                "first\nsecond\nthird\nafter barrier\n"
+            );
+            fs::remove_dir_all(dir).unwrap();
+        }
+    }
+
+    #[test]
+    fn test_async_writer_idle_deadline_flushes_without_barrier() {
+        for coordinate_rotation in [false, true] {
+            let dir = unique_temp_path("async-idle-deadline");
+            let path = dir.join("app.log");
+            let mut state =
+                FileSinkInner::create_async_writer_state(&path, coordinate_rotation).unwrap();
+            let sender = state.sender.take().unwrap();
+            sender
+                .send(WriterMessage::Write("idle line".to_owned()))
+                .unwrap();
+
+            // Keep the channel connected: neither an explicit flush nor
+            // disconnect may make this line visible in place of the deadline.
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while fs::read_to_string(&path).unwrap() != "idle line\n" {
+                assert!(Instant::now() < deadline, "idle line was not flushed");
+                thread::sleep(Duration::from_millis(1));
+            }
+            drop(sender);
+            FileSinkInner::stop_async_writer_locked(&mut state, true);
+            fs::remove_dir_all(dir).unwrap();
+        }
     }
 
     fn write_test_log(dir: &Path, name: &str, contents: &[u8]) -> PathBuf {
