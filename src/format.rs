@@ -1075,6 +1075,21 @@ impl FormatConfig {
 
     /// Format a LogRecord as JSON
     fn format_record_json(&self, record: &LogRecord) -> String {
+        fn minimal_json(time: &[u8; 23], level: &str, message: &str) -> serde_json::Result<String> {
+            let mut output = Vec::with_capacity(128);
+            output.extend_from_slice(b"{\"time\":\"");
+            output.extend_from_slice(time);
+            output.extend_from_slice(b"\",\"level\":");
+            serde_json::to_writer(&mut output, level)?;
+            output.extend_from_slice(b",\"message\":");
+            serde_json::to_writer(&mut output, message)?;
+            output.push(b'}');
+            // SAFETY: only fixed ASCII, the ASCII timestamp and serde's UTF-8
+            // JSON string output are appended. The owned buffer never leaves
+            // this function before serialization is complete.
+            Ok(unsafe { String::from_utf8_unchecked(output) })
+        }
+
         #[derive(Serialize)]
         struct JsonRecord<'a> {
             time: &'a str,
@@ -1099,6 +1114,19 @@ impl FormatConfig {
         // Borrow the ordinary timestamp from the stack instead of allocating
         // a separate String that serde immediately copies into its output.
         let time_bytes = default_time_bytes(&record.timestamp);
+        // The three-field shape has no optional fields. Its keys and ordinary
+        // timestamp are known ASCII; keep serde responsible for both strings
+        // supplied by the user, including custom level names.
+        if let Some(time) = time_bytes.as_ref()
+            && record.caller.name.is_empty()
+            && record.caller.function.is_empty()
+            && record.caller.line == 0
+            && record.extra.is_empty()
+            && record.exception.is_none()
+        {
+            return minimal_json(time, record.level_name(), &record.message)
+                .unwrap_or_else(|_| record.message.clone());
+        }
         let signed_time;
         let time = match time_bytes.as_ref() {
             // SAFETY: every byte is an ASCII digit or separator.
@@ -1217,8 +1245,19 @@ mod tests {
         let config = FormatConfig::new(None, true);
         let callers = [
             CallerInfo::default(),
+            CallerInfo::with_file("".into(), "".into(), 0, "unused.py".into()),
+            CallerInfo::new("app".into(), "".into(), 0),
             CallerInfo::with_file("".into(), "関数".into(), 0, "unused.py".into()),
+            CallerInfo::new("".into(), "".into(), 7),
             CallerInfo::with_file("app\"\n".into(), "emit".into(), 7, "unused.py".into()),
+        ];
+        let messages = [
+            String::new(),
+            "payload".into(),
+            "payload\n\"\\\0é💡\u{2028}\u{2029}".into(),
+            (0..=127).map(char::from).collect(),
+            "界".repeat(3000),
+            "\"\\\n".repeat(3000),
         ];
         for caller in callers {
             for with_extra in [false, true] {
@@ -1228,32 +1267,34 @@ mod tests {
                 }
                 let extra = Arc::new(extra);
                 for exception in [None, Some(""), Some("traceback\n\"é\"\0")] {
-                    for custom_level in [false, true] {
-                        let mut record = LogRecord::with_extra(
-                            LogLevel::Info,
-                            "payload\n\"\\\0é💡".into(),
-                            Arc::clone(&extra),
-                        );
-                        if custom_level {
-                            record.level_info =
-                                Some(Arc::new(LevelInfo::new("CUSTOM_é".into(), 23, None, None)));
+                    for custom_level in [None, Some("CUSTOM_é"), Some("CUSTOM_\"\\\n\0💡")] {
+                        for message in &messages {
+                            let mut record = LogRecord::with_extra(
+                                LogLevel::Info,
+                                message.clone(),
+                                Arc::clone(&extra),
+                            );
+                            if let Some(name) = custom_level {
+                                record.level_info =
+                                    Some(Arc::new(LevelInfo::new(name.into(), 23, None, None)));
+                            }
+                            record.caller = caller.clone();
+                            record.exception = exception.map(str::to_string);
+                            let previous = OwnedTimestampRecord {
+                                time: record.timestamp.format(DEFAULT_TIME_FORMAT).to_string(),
+                                level: record.level_name(),
+                                message: &record.message,
+                                name: &record.caller.name,
+                                function: &record.caller.function,
+                                line: record.caller.line,
+                                extra: &record.extra,
+                                exception: &record.exception,
+                            };
+                            assert_eq!(
+                                config.format_record(&record, false),
+                                serde_json::to_string(&previous).unwrap()
+                            );
                         }
-                        record.caller = caller.clone();
-                        record.exception = exception.map(str::to_string);
-                        let previous = OwnedTimestampRecord {
-                            time: record.timestamp.format(DEFAULT_TIME_FORMAT).to_string(),
-                            level: record.level_name(),
-                            message: &record.message,
-                            name: &record.caller.name,
-                            function: &record.caller.function,
-                            line: record.caller.line,
-                            extra: &record.extra,
-                            exception: &record.exception,
-                        };
-                        assert_eq!(
-                            config.format_record(&record, false),
-                            serde_json::to_string(&previous).unwrap()
-                        );
                     }
                 }
             }
