@@ -18,7 +18,7 @@ use serde_json::{Map, Number, Value};
 
 use crate::clock::local_now;
 use crate::filter::RecordFilter;
-use crate::format::{FormatConfig, TokenRequirements};
+use crate::format::{FormatConfig, TokenRequirements, apply_color_markup_from};
 use crate::level::{LevelInfo, LogLevel};
 use crate::sink::FileSink;
 
@@ -1126,6 +1126,34 @@ impl FileHandler {
     // console/file dispatch frame used by other templates and JSON.
     #[inline(never)]
     fn handle_message_only(&self, record: &LogRecord) -> io::Result<()> {
+        if self.format.is_message_only() && record.exception.is_none() {
+            let message = record.message.as_str();
+            if !record.message_markup {
+                return self.sink.write(message);
+            }
+            let first_open = if message.starts_with('<') {
+                Some(0)
+            } else {
+                message.find('<')
+            };
+            if let Some(first_open) = first_open {
+                return self.handle_message_markup(message, first_open);
+            }
+            return self.sink.write(message);
+        }
+        self.handle_message_rendered(record)
+    }
+
+    // Reuse admission's first tag position without entering the generic renderer.
+    #[inline(never)]
+    fn handle_message_markup(&self, message: &str, first_open: usize) -> io::Result<()> {
+        let output = apply_color_markup_from(message, self.colorize, first_open);
+        self.sink.write_owned(output)
+    }
+
+    // Keep the owned renderer and markup temporaries off the plain path.
+    #[inline(never)]
+    fn handle_message_rendered(&self, record: &LogRecord) -> io::Result<()> {
         match self.format.format_record_for_file(record, self.colorize) {
             Cow::Borrowed(output) => self.sink.write(output),
             Cow::Owned(output) => self.sink.write_owned(output),
@@ -1137,6 +1165,86 @@ impl FileHandler {
 mod tests {
     use super::*;
     use crate::sink::FileSinkConfig;
+
+    #[test]
+    fn test_direct_message_route_matches_owned_rendering_and_dynamic_changes() {
+        let dir = std::env::temp_dir().join(format!(
+            "logust-direct-message-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let cases = [
+            (String::new(), true, None),
+            ("payload".into(), true, None),
+            ("x".repeat(15), true, None),
+            ("x".repeat(16), true, None),
+            ("x".repeat(17), true, None),
+            ("x".repeat(4096), true, None),
+            ("猫💡\0\n\x1b[31mraw\x1b[0m".into(), true, None),
+            ("<red>leading</red>".into(), true, None),
+            ("plain <red>later</red>".into(), true, None),
+            (format!("{}<", "x".repeat(8192)), true, None),
+            (format!("{}<red>late</red>", "x".repeat(8192)), true, None),
+            ("猫💡\0\x1b[36mraw <red>late</red>".into(), true, None),
+            ("<unknown>x</unknown></red>".into(), true, None),
+            ("<".into(), true, None),
+            ("<red>disabled</red>".into(), false, None),
+            ("plain <red>disabled</red>".into(), false, None),
+            ("empty exception".into(), true, Some("")),
+            ("<red>exception</red>".into(), true, Some("trace\n猫\0")),
+        ];
+        for colorize in [false, true] {
+            let path = dir.join(format!("{colorize}.log"));
+            let sink = FileSink::new(FileSinkConfig {
+                path: path.clone(),
+                ..FileSinkConfig::default()
+            })
+            .unwrap();
+            let mut handler = FileHandler::with_format(
+                sink,
+                LogLevel::Info as u32,
+                FormatConfig::new(Some("{message}".into()), false),
+                colorize,
+            );
+            let mut expected = String::new();
+            let emit = |handler: &FileHandler, record: &LogRecord, expected: &mut String| {
+                expected.push_str(&handler.format.format_record(record, colorize));
+                expected.push('\n');
+                handler.handle(record).unwrap();
+            };
+            for (message, markup, exception) in &cases {
+                let mut record = LogRecord::new(LogLevel::Info, message.clone());
+                record.message_markup = *markup;
+                record.exception = exception.map(str::to_owned);
+                emit(&handler, &record, &mut expected);
+            }
+            let record = LogRecord::new(LogLevel::Info, "mutated".into());
+            handler.format = FormatConfig::new(Some("prefix:{message}".into()), false);
+            emit(&handler, &record, &mut expected);
+            handler.format.serialize = true;
+            emit(&handler, &record, &mut expected);
+            handler.sink.flush().unwrap();
+            assert_eq!(std::fs::read_to_string(path).unwrap(), expected);
+
+            let queued_path = dir.join(format!("queued-{colorize}.log"));
+            handler.sink = FileSink::new(FileSinkConfig {
+                path: queued_path.clone(),
+                enqueue: true,
+                ..FileSinkConfig::default()
+            })
+            .unwrap();
+            handler.format = FormatConfig::new(Some("{message}".into()), false);
+            handler
+                .handle(&LogRecord::new(LogLevel::Info, "queued".into()))
+                .unwrap();
+            handler.sink.flush().unwrap();
+            assert_eq!(std::fs::read_to_string(queued_path).unwrap(), "queued\n");
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn test_cached_file_route_preserves_threshold_and_dynamic_fallbacks() {
