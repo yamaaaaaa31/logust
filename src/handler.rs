@@ -18,7 +18,7 @@ use serde_json::{Map, Number, Value};
 
 use crate::clock::local_now;
 use crate::filter::RecordFilter;
-use crate::format::{FormatConfig, TokenRequirements};
+use crate::format::{FormatConfig, TokenRequirements, apply_color_markup_from};
 use crate::level::{LevelInfo, LogLevel};
 use crate::sink::FileSink;
 
@@ -1126,20 +1126,29 @@ impl FileHandler {
     // console/file dispatch frame used by other templates and JSON.
     #[inline(never)]
     fn handle_message_only(&self, record: &LogRecord) -> io::Result<()> {
-        let plain = if self.format.is_message_only() && record.exception.is_none() {
+        if self.format.is_message_only() && record.exception.is_none() {
             let message = record.message.as_str();
-            if !record.message_markup || (!message.starts_with('<') && !message.contains('<')) {
-                Some(message)
-            } else {
-                None
+            if !record.message_markup {
+                return self.sink.write(message);
             }
-        } else {
-            None
-        };
-        if let Some(message) = plain {
+            let first_open = if message.starts_with('<') {
+                Some(0)
+            } else {
+                message.find('<')
+            };
+            if let Some(first_open) = first_open {
+                return self.handle_message_markup(message, first_open);
+            }
             return self.sink.write(message);
         }
         self.handle_message_rendered(record)
+    }
+
+    // Reuse admission's first tag position without entering the generic renderer.
+    #[inline(never)]
+    fn handle_message_markup(&self, message: &str, first_open: usize) -> io::Result<()> {
+        let output = apply_color_markup_from(message, self.colorize, first_open);
+        self.sink.write_owned(output)
     }
 
     // Keep the owned renderer and markup temporaries off the plain path.
@@ -1178,6 +1187,8 @@ mod tests {
             ("<red>leading</red>".into(), true, None),
             ("plain <red>later</red>".into(), true, None),
             (format!("{}<", "x".repeat(8192)), true, None),
+            (format!("{}<red>late</red>", "x".repeat(8192)), true, None),
+            ("猫💡\0\x1b[36mraw <red>late</red>".into(), true, None),
             ("<unknown>x</unknown></red>".into(), true, None),
             ("<".into(), true, None),
             ("<red>disabled</red>".into(), false, None),
