@@ -964,6 +964,7 @@ impl FormatConfig {
 
     /// File sinks consume plain message bytes synchronously or own them before
     /// enqueueing. Avoid another output string when only the message is needed.
+    #[inline(always)]
     pub fn format_record_for_file<'a>(
         &self,
         record: &'a LogRecord,
