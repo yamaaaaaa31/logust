@@ -963,7 +963,7 @@ impl FormatConfig {
         colorize: bool,
     ) -> Cow<'a, str> {
         if self.is_message_only() && record.exception.is_none() {
-            if record.message_markup {
+            if record.message_markup && record.message.contains('<') {
                 apply_color_markup(&record.message, colorize)
             } else {
                 Cow::Borrowed(&record.message)
@@ -1394,6 +1394,9 @@ mod tests {
             "x<unknown>y</unknown></red>".into(),
             "lone<".into(),
             "<level>x</level>".into(),
+            "x".repeat(15),
+            "x".repeat(16),
+            "x".repeat(17),
             "x".repeat(4096),
             "<blue>💡</blue>".repeat(128),
         ];
