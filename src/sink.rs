@@ -970,14 +970,9 @@ impl FileSinkInner {
 
             loop {
                 let received = match dirty_since {
-                    Some(since) => match since.checked_add(flush_interval) {
-                        // A ready queue needs no clock read before receiving;
-                        // an empty one waits for the oldest buffered line.
-                        Some(deadline) => receiver.recv_deadline(deadline),
-                        None => {
-                            receiver.recv_timeout(flush_interval.saturating_sub(since.elapsed()))
-                        }
-                    },
+                    Some(since) => {
+                        receiver.recv_timeout(flush_interval.saturating_sub(since.elapsed()))
+                    }
                     // Nothing to flush: sleep until the next message.
                     None => receiver.recv().map_err(|_| RecvTimeoutError::Disconnected),
                 };
