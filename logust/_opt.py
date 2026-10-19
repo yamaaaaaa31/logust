@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from ._logger import _LEVEL_VALUES
 from ._traceback import capture_exception, current_exc_info
 
 if TYPE_CHECKING:
@@ -73,15 +72,8 @@ class OptLogger:
         return message_str.format(*args, **kwargs), (), {}
 
     def _log(self, level: str, message: str, *args: Any, **kwargs: Any) -> None:
-        """Internal log method with option processing."""
+        """Process options after the public method checks its built-in level."""
         logger = self._logger
-        # ``level`` is a built-in method name here, so this equals
-        # ``logger.is_level_enabled(level)`` without the enum round trip.
-        level_enabled = _LEVEL_VALUES[level] >= logger._inner.min_level
-        # Suppression must precede argument formatting and traceback capture,
-        # including capture=False and non-lazy calls.
-        if not level_enabled:
-            return
         activation = logger._activation
         if activation.rules and activation.caller_disabled(self._depth + 2):
             return
@@ -105,34 +97,50 @@ class OptLogger:
 
     def trace(self, message: str, *args: Any, **kwargs: Any) -> None:
         """Output TRACE level log message with options."""
+        if 5 < self._logger._inner.min_level:
+            return
         self._log("trace", message, *args, **kwargs)
 
     def debug(self, message: str, *args: Any, **kwargs: Any) -> None:
         """Output DEBUG level log message with options."""
+        if 10 < self._logger._inner.min_level:
+            return
         self._log("debug", message, *args, **kwargs)
 
     def info(self, message: str, *args: Any, **kwargs: Any) -> None:
         """Output INFO level log message with options."""
+        if 20 < self._logger._inner.min_level:
+            return
         self._log("info", message, *args, **kwargs)
 
     def success(self, message: str, *args: Any, **kwargs: Any) -> None:
         """Output SUCCESS level log message with options."""
+        if 25 < self._logger._inner.min_level:
+            return
         self._log("success", message, *args, **kwargs)
 
     def warning(self, message: str, *args: Any, **kwargs: Any) -> None:
         """Output WARNING level log message with options."""
+        if 30 < self._logger._inner.min_level:
+            return
         self._log("warning", message, *args, **kwargs)
 
     def error(self, message: str, *args: Any, **kwargs: Any) -> None:
         """Output ERROR level log message with options."""
+        if 40 < self._logger._inner.min_level:
+            return
         self._log("error", message, *args, **kwargs)
 
     def fail(self, message: str, *args: Any, **kwargs: Any) -> None:
         """Output FAIL level log message with options."""
+        if 45 < self._logger._inner.min_level:
+            return
         self._log("fail", message, *args, **kwargs)
 
     def critical(self, message: str, *args: Any, **kwargs: Any) -> None:
         """Output CRITICAL level log message with options."""
+        if 50 < self._logger._inner.min_level:
+            return
         self._log("critical", message, *args, **kwargs)
 
     def log(self, level: str | int | LogLevel, message: str, *args: Any, **kwargs: Any) -> None:

@@ -4,8 +4,113 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from logust import Logger, LogLevel
 from logust._logust import PyLogger
+
+
+@pytest.mark.parametrize(
+    ("method", "no"),
+    [
+        ("trace", 5),
+        ("debug", 10),
+        ("info", 20),
+        ("success", 25),
+        ("warning", 30),
+        ("error", 40),
+        ("fail", 45),
+        ("critical", 50),
+    ],
+)
+def test_opt_threshold_refresh_precedes_option_side_effects(
+    method: str, no: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    logger = Logger(PyLogger(LogLevel.Trace))
+    logger.remove()
+    out: list[str] = []
+    logger.add(out.append, format="{message}", level=no + 1)
+    opt = logger.opt(lazy=True, exception=True, capture=False)
+    effects: list[str] = []
+
+    def lazy_value() -> str:
+        effects.append("lazy")
+        return "arg"
+
+    class Formatted:
+        def __format__(self, _spec: str) -> str:
+            effects.append("format")
+            return "value"
+
+    def capture(*_args: object, **_kwargs: object) -> str:
+        effects.append("exception")
+        return "trace text"
+
+    monkeypatch.setattr("logust._opt.capture_exception", capture)
+    try:
+        raise ValueError("already active")
+    except ValueError:
+        emit = getattr(opt, method)
+        emit("{} {value}", lazy_value, value=Formatted())
+        assert effects == []
+        assert out == []
+
+        # Reuse the same OptLogger across handler threshold changes.
+        low = logger.add(out.append, format="{message}", level=no)
+        emit("{} {value}", lazy_value, value=Formatted())
+        assert effects == ["lazy", "exception", "format"]
+        assert out == ["arg value\ntrace text"]
+
+        assert logger.remove(low)
+        effects.clear()
+        emit("{} {value}", lazy_value, value=Formatted())
+        assert effects == []
+        assert out == ["arg value\ntrace text"]
+    finally:
+        logger.remove()
+
+
+def test_opt_threshold_tracks_callback_console_and_module_changes(
+    capfd: pytest.CaptureFixture[str],
+) -> None:
+    logger = Logger(PyLogger(LogLevel.Trace))
+    logger.remove()
+    opt = logger.opt(lazy=True)
+    calls: list[int] = []
+    records: list[dict] = []
+
+    def value() -> str:
+        calls.append(1)
+        return "opt-enabled"
+
+    opt.error("{}", value)
+    assert calls == []
+    callback = logger.add_callback(records.append, level="ERROR")
+    opt.error("{}", value)
+    assert len(calls) == 1
+    assert [record["message"] for record in records] == ["opt-enabled"]
+    assert logger.remove_callback(callback)
+    opt.error("{}", value)
+    assert len(calls) == 1
+
+    logger.enable(level="ERROR")
+    opt.error("{}", value)
+    assert len(calls) == 2
+    logger.set_level("CRITICAL")
+    opt.error("{}", value)
+    assert len(calls) == 2
+    logger.set_level("ERROR")
+    logger.disable(__name__)
+    opt.error("{}", value)
+    assert len(calls) == 2
+    logger.enable(__name__)
+    opt.error("{}", value)
+    assert len(calls) == 3
+    logger.disable()
+    opt.error("{}", value)
+    assert len(calls) == 3
+    logger.remove()
+    assert capfd.readouterr().err.count("opt-enabled") == 2
 
 
 class TestLazyEvaluation:
