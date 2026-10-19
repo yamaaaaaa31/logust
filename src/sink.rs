@@ -1027,10 +1027,12 @@ impl FileSinkInner {
     }
 
     fn write_owned(&self, message: String) -> io::Result<()> {
-        self.maybe_rotate()?;
+        let coordinate_rotation = self.rotation_coordination_enabled();
+        if coordinate_rotation {
+            self.maybe_rotate()?;
+        }
 
         let msg_len = message.len() as u64 + 1;
-        let coordinate_rotation = self.rotation_coordination_enabled();
 
         let maybe_sender = {
             let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
@@ -3116,6 +3118,82 @@ mod tests {
             drop(sink);
             let _ = fs::remove_dir_all(&dir);
         }
+    }
+
+    #[test]
+    fn test_non_rotating_owned_write_prepares_delayed_and_restarted_backend() {
+        for enqueue in [false, true] {
+            let dir = unique_temp_path(&format!("owned-restart-{enqueue}"));
+            let path = write_test_log(&dir, "app.log", b"old content\n");
+            let sink = FileSink::new(FileSinkConfig {
+                path: path.clone(),
+                enqueue,
+                delay: true,
+                truncate: true,
+                ..FileSinkConfig::default()
+            })
+            .unwrap();
+
+            sink.flush().unwrap();
+            assert_eq!(fs::read_to_string(&path).unwrap(), "old content\n");
+            sink.write_owned("first".to_owned()).unwrap();
+            sink.flush().unwrap();
+
+            // Teardown keeps the original configuration. The next owned
+            // write must prepare it again without applying mode="w" twice.
+            {
+                let mut state = sink.inner.state.lock().unwrap();
+                match &mut state.backend {
+                    WriterBackend::Async(async_state) => {
+                        FileSinkInner::stop_async_writer_locked(async_state, true);
+                    }
+                    WriterBackend::Sync(sync_state) => {
+                        sync_state.writer.take();
+                    }
+                }
+            }
+            sink.write_owned("second".to_owned()).unwrap();
+            sink.flush().unwrap();
+            assert_eq!(fs::read_to_string(&path).unwrap(), "first\nsecond\n");
+            assert!(!sink.inner.truncate_on_open.load(Ordering::Acquire));
+
+            drop(sink);
+            fs::remove_dir_all(dir).unwrap();
+        }
+    }
+
+    #[test]
+    fn test_non_rotating_owned_write_checks_pid_before_opening() {
+        let dir = unique_temp_path("owned-inherited-pid");
+        let path = write_test_log(&dir, "app.log", b"old content\n");
+        let sink = FileSink::new(FileSinkConfig {
+            path: path.clone(),
+            enqueue: true,
+            delay: true,
+            truncate: true,
+            ..FileSinkConfig::default()
+        })
+        .unwrap();
+
+        // Exercise the inherited-PID branch without forking a multithreaded
+        // Rust test process. The delayed async backend owns no live thread.
+        sink.inner.creation_pid.store(0, Ordering::Release);
+        sink.write_owned("child".to_owned()).unwrap();
+        {
+            let state = sink.inner.state.lock().unwrap();
+            assert!(matches!(state.backend, WriterBackend::Sync(_)));
+        }
+        assert_eq!(
+            sink.inner.creation_pid.load(Ordering::Acquire),
+            std::process::id()
+        );
+        sink.write_owned("more".to_owned()).unwrap();
+        sink.flush().unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "child\nmore\n");
+        assert!(!sink.inner.truncate_on_open.load(Ordering::Acquire));
+
+        drop(sink);
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
