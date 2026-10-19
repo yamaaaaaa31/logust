@@ -952,12 +952,11 @@ impl FileSinkInner {
 
         let writer_handle = thread::spawn(move || {
             let flush_interval = Duration::from_millis(ASYNC_FLUSH_INTERVAL_MS);
-            // None means clean. Ok caches the oldest buffered line's deadline;
-            // Err keeps its start time if checked_add overflows, preserving
-            // the relative-timeout fallback. Later writes do not extend it.
-            // Periodic and idle checks use this interval, but thread scheduling
-            // and file I/O do not provide a hard real-time flush guarantee.
-            let mut dirty_deadline: Option<Result<Instant, Instant>> = None;
+            // When the oldest line still sitting in the buffer was written;
+            // `None` while nothing is buffered. Every buffered line reaches the
+            // file at most `flush_interval` after it was written, whether the
+            // queue then goes idle (timeout) or keeps receiving lines.
+            let mut dirty_since: Option<Instant> = None;
             let mut batch_lock = None;
 
             let flush = |writer: &mut RotatingFileWriter,
@@ -970,9 +969,8 @@ impl FileSinkInner {
             };
 
             loop {
-                let received = match dirty_deadline {
-                    Some(Ok(deadline)) => receiver.recv_deadline(deadline),
-                    Some(Err(since)) => {
+                let received = match dirty_since {
+                    Some(since) => {
                         receiver.recv_timeout(flush_interval.saturating_sub(since.elapsed()))
                     }
                     // Nothing to flush: sleep until the next message.
@@ -993,26 +991,20 @@ impl FileSinkInner {
                             let _ = writeln!(io::stderr(), "Failed to write to log: {}", err);
                         }
 
-                        let now = Instant::now();
-                        let deadline = *dirty_deadline
-                            .get_or_insert_with(|| now.checked_add(flush_interval).ok_or(now));
-                        let flush_due = match deadline {
-                            Ok(deadline) => now >= deadline,
-                            Err(since) => now.saturating_duration_since(since) >= flush_interval,
-                        };
-                        if flush_due {
+                        let since = *dirty_since.get_or_insert_with(Instant::now);
+                        if since.elapsed() >= flush_interval {
                             flush(&mut writer, &mut batch_lock);
-                            dirty_deadline = None;
+                            dirty_since = None;
                         }
                     }
                     Ok(WriterMessage::Flush { ack }) => {
                         flush(&mut writer, &mut batch_lock);
-                        dirty_deadline = None;
+                        dirty_since = None;
                         let _ = ack.send(());
                     }
                     Err(RecvTimeoutError::Timeout) => {
                         flush(&mut writer, &mut batch_lock);
-                        dirty_deadline = None;
+                        dirty_since = None;
                     }
                     Err(RecvTimeoutError::Disconnected) => {
                         flush(&mut writer, &mut batch_lock);
