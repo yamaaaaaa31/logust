@@ -1034,13 +1034,28 @@ impl FileSinkInner {
             self.ensure_backend_ready_locked(&mut state)?;
 
             match &mut state.backend {
-                WriterBackend::Async(async_state) => Some(
-                    async_state
+                WriterBackend::Async(async_state) => {
+                    let sender = async_state
                         .sender
                         .as_ref()
-                        .expect("async backend must have sender after ensure")
-                        .clone(),
-                ),
+                        .expect("async backend must have sender after ensure");
+                    if !coordinate_rotation {
+                        // A ready queue can use the state's sender directly.
+                        // Capacity waits and backend recovery stay outside the
+                        // state lock, retaining ownership of the original line.
+                        let pending = match sender.try_send(WriterMessage::Write(message)) {
+                            Ok(()) => None,
+                            Err(error) => Some((error.into_inner(), sender.clone())),
+                        };
+                        drop(state);
+                        if let Some((message, sender)) = pending {
+                            self.send_with_retry(message, sender)?;
+                        }
+                        self.current_size.fetch_add(msg_len, Ordering::Relaxed);
+                        return Ok(());
+                    }
+                    Some(sender.clone())
+                }
                 WriterBackend::Sync(sync_state) => {
                     let writer = sync_state
                         .writer
@@ -2762,6 +2777,147 @@ mod tests {
             FileSinkInner::stop_async_writer_locked(&mut state, true);
             fs::remove_dir_all(dir).unwrap();
         }
+    }
+
+    #[test]
+    fn test_async_ready_writes_preserve_flush_order_and_size() {
+        let dir = unique_temp_path("async-ready-send");
+        let path = dir.join("app.log");
+        let sink = FileSink::new(FileSinkConfig {
+            path: path.clone(),
+            enqueue: true,
+            ..FileSinkConfig::default()
+        })
+        .unwrap();
+        let mut expected = String::new();
+        // Fewer total writes than queue slots: capacity cannot force fallback.
+        for i in 0..32 {
+            let message = format!("ready {i} 猫\0");
+            expected.push_str(&message);
+            expected.push('\n');
+            sink.write_owned(message).unwrap();
+        }
+        sink.flush().unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), expected);
+        assert_eq!(
+            sink.inner.current_size.load(Ordering::Relaxed),
+            expected.len() as u64
+        );
+        drop(sink);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn test_async_full_queue_releases_state_before_waiting() {
+        let dir = unique_temp_path("async-full-send");
+        let path = write_test_log(&dir, "app.log", b"");
+        let sink = FileSink::new(FileSinkConfig {
+            path,
+            enqueue: true,
+            delay: true,
+            ..FileSinkConfig::default()
+        })
+        .unwrap();
+        let (sender, receiver) = bounded(1);
+        sender
+            .send(WriterMessage::Write("already queued".to_owned()))
+            .unwrap();
+        let (start, started) = bounded(0);
+        let (received, result) = bounded(1);
+        let inner = Arc::clone(&sink.inner);
+        let handle = thread::spawn(move || {
+            started.recv_timeout(Duration::from_secs(5)).unwrap();
+            // Give the producer a full queue, then require access to state
+            // before allowing any capacity to become available.
+            thread::sleep(Duration::from_millis(20));
+            let deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                if let Ok(state) = inner.state.try_lock() {
+                    drop(state);
+                    break;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "producer retained state while waiting for queue capacity"
+                );
+                thread::sleep(Duration::from_millis(1));
+            }
+            let WriterMessage::Write(first) =
+                receiver.recv_timeout(Duration::from_secs(5)).unwrap()
+            else {
+                panic!("expected queued write");
+            };
+            let WriterMessage::Write(second) =
+                receiver.recv_timeout(Duration::from_secs(5)).unwrap()
+            else {
+                panic!("expected producer write");
+            };
+            received.send((first, second)).unwrap();
+        });
+        {
+            let mut state = sink.inner.state.lock().unwrap();
+            state.backend = WriterBackend::Async(AsyncWriterState {
+                sender: Some(sender),
+                handle: Some(handle),
+                file_identity: Arc::new(SharedFileIdentity::default()),
+            });
+        }
+        let message = "producer\0猫\n".repeat(128);
+        let original_pointer = message.as_ptr();
+        let original_size = message.len() as u64 + 1;
+        start.send(()).unwrap();
+        sink.write_owned(message).unwrap();
+        let (first, second) = result.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(first, "already queued");
+        assert_eq!(second, "producer\0猫\n".repeat(128));
+        assert_eq!(second.as_ptr(), original_pointer);
+        assert_eq!(
+            sink.inner.current_size.load(Ordering::Relaxed),
+            original_size
+        );
+        {
+            let mut state = sink.inner.state.lock().unwrap();
+            let WriterBackend::Async(async_state) = &mut state.backend else {
+                panic!("expected injected async backend");
+            };
+            FileSinkInner::stop_async_writer_locked(async_state, true);
+        }
+        drop(sink);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn test_async_disconnected_queue_retries_original_line_once() {
+        let dir = unique_temp_path("async-disconnected-send");
+        let path = write_test_log(&dir, "app.log", b"old\n");
+        let sink = FileSink::new(FileSinkConfig {
+            path: path.clone(),
+            enqueue: true,
+            delay: true,
+            ..FileSinkConfig::default()
+        })
+        .unwrap();
+        let (sender, receiver) = bounded(1);
+        drop(receiver);
+        {
+            let mut state = sink.inner.state.lock().unwrap();
+            state.backend = WriterBackend::Async(AsyncWriterState {
+                sender: Some(sender),
+                handle: Some(thread::spawn(|| {})),
+                file_identity: Arc::new(SharedFileIdentity::default()),
+            });
+        }
+        let message = "retry\0猫\n".repeat(128);
+        let expected = format!("old\n{message}\n");
+        sink.write_owned(message).unwrap();
+        sink.flush().unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), expected);
+        assert_eq!(
+            sink.inner.current_size.load(Ordering::Relaxed),
+            expected.len() as u64
+        );
+        drop(sink);
+        fs::remove_dir_all(dir).unwrap();
     }
 
     fn write_test_log(dir: &Path, name: &str, contents: &[u8]) -> PathBuf {
