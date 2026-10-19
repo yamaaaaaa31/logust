@@ -95,51 +95,53 @@ class OptLogger:
             **kwargs,
         )
 
+    # Check the live threshold before forwarding varargs. A "level" kwarg must
+    # still reach _log to preserve its binding TypeError before option work.
     def trace(self, message: str, *args: Any, **kwargs: Any) -> None:
         """Output TRACE level log message with options."""
-        if 5 < self._logger._inner.min_level:
+        if 5 < self._logger._inner.min_level and "level" not in kwargs:
             return
         self._log("trace", message, *args, **kwargs)
 
     def debug(self, message: str, *args: Any, **kwargs: Any) -> None:
         """Output DEBUG level log message with options."""
-        if 10 < self._logger._inner.min_level:
+        if 10 < self._logger._inner.min_level and "level" not in kwargs:
             return
         self._log("debug", message, *args, **kwargs)
 
     def info(self, message: str, *args: Any, **kwargs: Any) -> None:
         """Output INFO level log message with options."""
-        if 20 < self._logger._inner.min_level:
+        if 20 < self._logger._inner.min_level and "level" not in kwargs:
             return
         self._log("info", message, *args, **kwargs)
 
     def success(self, message: str, *args: Any, **kwargs: Any) -> None:
         """Output SUCCESS level log message with options."""
-        if 25 < self._logger._inner.min_level:
+        if 25 < self._logger._inner.min_level and "level" not in kwargs:
             return
         self._log("success", message, *args, **kwargs)
 
     def warning(self, message: str, *args: Any, **kwargs: Any) -> None:
         """Output WARNING level log message with options."""
-        if 30 < self._logger._inner.min_level:
+        if 30 < self._logger._inner.min_level and "level" not in kwargs:
             return
         self._log("warning", message, *args, **kwargs)
 
     def error(self, message: str, *args: Any, **kwargs: Any) -> None:
         """Output ERROR level log message with options."""
-        if 40 < self._logger._inner.min_level:
+        if 40 < self._logger._inner.min_level and "level" not in kwargs:
             return
         self._log("error", message, *args, **kwargs)
 
     def fail(self, message: str, *args: Any, **kwargs: Any) -> None:
         """Output FAIL level log message with options."""
-        if 45 < self._logger._inner.min_level:
+        if 45 < self._logger._inner.min_level and "level" not in kwargs:
             return
         self._log("fail", message, *args, **kwargs)
 
     def critical(self, message: str, *args: Any, **kwargs: Any) -> None:
         """Output CRITICAL level log message with options."""
-        if 50 < self._logger._inner.min_level:
+        if 50 < self._logger._inner.min_level and "level" not in kwargs:
             return
         self._log("critical", message, *args, **kwargs)
 

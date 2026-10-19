@@ -54,9 +54,17 @@ def test_opt_threshold_refresh_precedes_option_side_effects(
         emit("{} {value}", lazy_value, value=Formatted())
         assert effects == []
         assert out == []
+        # Preserve the private dispatch parameter's keyword-binding error,
+        # which occurs before option processing, even for a suppressed call.
+        with pytest.raises(TypeError, match="multiple values for argument 'level'"):
+            emit("{} {value}", lazy_value, value=Formatted(), level="extra")
+        assert effects == []
 
         # Reuse the same OptLogger across handler threshold changes.
         low = logger.add(out.append, format="{message}", level=no)
+        with pytest.raises(TypeError, match="multiple values for argument 'level'"):
+            emit("{} {value}", lazy_value, value=Formatted(), level="extra")
+        assert effects == []
         emit("{} {value}", lazy_value, value=Formatted())
         assert effects == ["lazy", "exception", "format"]
         assert out == ["arg value\ntrace text"]
