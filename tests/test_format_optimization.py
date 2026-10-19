@@ -4,10 +4,55 @@ Part 1: intern! - Test callback/filter dict creation
 Part 2: Lazy computation - Test format token-based lazy evaluation
 """
 
+import json
 from pathlib import Path
 
+from logust import CallerInfo, CollectOptions
 from logust._logger import Logger
 from logust._logust import LogLevel, PyLogger
+
+
+def test_default_file_renderer_matches_generic_and_shared_json(tmp_path: Path) -> None:
+    logger = Logger(PyLogger(LogLevel.Trace))
+    logger.remove()
+    plain = tmp_path / "default.log"
+    generic = tmp_path / "generic.log"
+    serialized = tmp_path / "records.json"
+    collect = CollectOptions(
+        caller=CallerInfo(name="app", function="emit", line=7, file="unused.py"),
+        thread=False,
+        process=False,
+    )
+    logger.add(plain, collect=collect)
+    # The module alias has the same value but keeps the ordinary token path.
+    logger.add(
+        generic,
+        format="{time} | {level:<8} | {module}:{function}:{line} - {message}",
+        collect=collect,
+    )
+    logger.add(serialized, serialize=True, collect=collect)
+    message = "<red>猫💡é</red>"
+    logger.opt(colors=False).info(message)
+    for exception in [None, "", "traceback\né"]:
+        logger.info(message, exception=exception)
+    logger.complete()
+
+    records = [json.loads(line) for line in serialized.read_text(encoding="utf-8").splitlines()]
+    assert len(records) == 4
+    expected = []
+    for record, rendered, exception in zip(
+        records, [message, "猫💡é", "猫💡é", "猫💡é"], [None, None, "", "traceback\né"], strict=True
+    ):
+        assert record["message"] == message
+        assert (record["name"], record["function"], record["line"]) == ("app", "emit", 7)
+        assert record.get("exception") == exception
+        output = f"{record['time']} | INFO     | app:emit:7 - {rendered}"
+        if exception is not None:
+            output += "\n" + exception
+        expected.append(output + "\n")
+    assert plain.read_text(encoding="utf-8") == "".join(expected)
+    assert generic.read_bytes() == plain.read_bytes()
+
 
 # ============================================================================
 # Part 1: intern! optimization tests (callback/filter dict)

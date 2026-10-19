@@ -888,6 +888,8 @@ pub struct FormatConfig {
     requirements: TokenRequirements,
     /// Template places the exception itself (`{exception}`): don't append it
     has_exception_token: bool,
+    /// The parsed default token shape, independent of public template edits.
+    default_template: bool,
 }
 
 impl Default for FormatConfig {
@@ -915,12 +917,21 @@ impl FormatConfig {
         };
         let requirements = compute_requirements(&tokens);
         let has_exception_token = tokens.iter().any(|t| matches!(t, FormatToken::Exception));
+        let default_template = matches!(
+            tokens.as_slice(),
+            [FormatToken::Time, FormatToken::Static(a), FormatToken::LevelWidth(8),
+                FormatToken::Static(b), FormatToken::Name, FormatToken::Static(c),
+                FormatToken::Function, FormatToken::Static(d), FormatToken::Line,
+                FormatToken::Static(e), FormatToken::Message]
+                if a == " | " && b == " | " && c == ":" && d == ":" && e == " - "
+        );
         Ok(FormatConfig {
             template,
             tokens,
             serialize,
             requirements,
             has_exception_token,
+            default_template,
         })
     }
 
@@ -964,6 +975,9 @@ impl FormatConfig {
 
     /// Format a LogRecord using pre-parsed tokens (O(n) single pass, thread-safe)
     fn format_record_template(&self, record: &LogRecord, colorize: bool) -> String {
+        if self.default_template && !colorize {
+            return self.format_default_plain(record);
+        }
         let level_name = record.level_name();
         let level_color = record
             .level_info
@@ -1097,10 +1111,68 @@ impl FormatConfig {
         result
     }
 
+    /// The default template has a fixed field order and no template markup.
+    /// Keep user-controlled text on the same helpers as the token renderer.
+    fn format_default_plain(&self, record: &LogRecord) -> String {
+        let message = if record.message_markup {
+            apply_color_markup(&record.message, false)
+        } else {
+            Cow::Borrowed(record.message.as_str())
+        };
+        let level_name = record.level_name();
+        // Room for punctuation, timestamp (including a signed i32 year),
+        // Unicode level padding, u32 line, exception newline and sink newline.
+        let capacity = FORMAT_RESULT_CAPACITY
+            .saturating_add(message.len())
+            .saturating_add(level_name.len())
+            .saturating_add(record.caller.name.len())
+            .saturating_add(record.caller.function.len())
+            .saturating_add(record.exception.as_ref().map_or(0, String::len));
+        let mut output = String::with_capacity(capacity);
+        write_default_time(&record.timestamp, &mut output);
+        output.push_str(" | ");
+        push_padded(&mut output, level_name, 8);
+        output.push_str(" | ");
+        output.push_str(&record.caller.name);
+        output.push(':');
+        output.push_str(&record.caller.function);
+        output.push(':');
+        push_num(&mut output, u64::from(record.caller.line), 0);
+        output.push_str(" - ");
+        output.push_str(&message);
+        if let Some(exception) = &record.exception {
+            output.push('\n');
+            output.push_str(exception);
+        }
+        output
+    }
+
     /// Format a LogRecord as JSON
     fn format_record_json(&self, record: &LogRecord) -> String {
         fn json_with_ascii_time(time: &[u8; 23], record: &LogRecord) -> serde_json::Result<String> {
-            let mut output = Vec::with_capacity(128);
+            // Required syntax/string quotes and the 23-byte timestamp need 58
+            // bytes. Count unescaped text only; serde handles any expansion.
+            let mut capacity = 58usize
+                .saturating_add(record.level_name().len())
+                .saturating_add(record.message.len());
+            if !record.caller.name.is_empty() {
+                capacity = capacity
+                    .saturating_add(10)
+                    .saturating_add(record.caller.name.len());
+            }
+            if !record.caller.function.is_empty() {
+                capacity = capacity
+                    .saturating_add(14)
+                    .saturating_add(record.caller.function.len());
+            }
+            if record.caller.line != 0 {
+                capacity = capacity.saturating_add(18); // Key and at most 10 decimal digits.
+            }
+            if let Some(exception) = &record.exception {
+                capacity = capacity.saturating_add(15).saturating_add(exception.len());
+            }
+            // ConsoleHandler appends one newline after formatting.
+            let mut output = Vec::with_capacity(capacity.saturating_add(1).max(128));
             output.extend_from_slice(b"{\"time\":\"");
             output.extend_from_slice(time);
             output.extend_from_slice(b"\",\"level\":");
@@ -1193,6 +1265,122 @@ mod tests {
         let result = config.format_record(&record, false);
         assert!(result.contains("INFO"));
         assert!(result.contains("test message"));
+    }
+
+    #[test]
+    fn test_default_plain_matches_token_renderer() {
+        use chrono::{NaiveDate, TimeZone};
+
+        let config = FormatConfig::default();
+        let mut generic = config.clone();
+        generic.default_template = false;
+        let timestamps = [
+            (-1, 6, 15, 12, 30, 45, 123_000_000),
+            (2024, 6, 15, 12, 30, 45, 999_999_999),
+            (10_000, 6, 15, 12, 30, 45, 0),
+            (2016, 12, 31, 23, 59, 59, 1_500_000_000),
+        ];
+        let callers = [
+            CallerInfo::default(),
+            CallerInfo::new("app".into(), "emit".into(), 123),
+            CallerInfo::with_file(
+                "名前💡".into(),
+                "関数é".into(),
+                u32::MAX,
+                "unused.py".into(),
+            ),
+        ];
+        let messages = [
+            String::new(),
+            "payload".into(),
+            "猫💡é\0\n{message}\x1b[31mraw\x1b[0m".into(),
+            "<red>猫<bold>é</bold></red>".into(),
+            "<red>unclosed <unknown>x</unknown></red>".into(),
+            "<blue>💡</blue>".repeat(256),
+        ];
+        for (year, month, day, hour, minute, second, nanos) in timestamps {
+            let naive = NaiveDate::from_ymd_opt(year, month, day)
+                .unwrap()
+                .and_hms_nano_opt(hour, minute, second, nanos)
+                .unwrap();
+            for caller in &callers {
+                for custom_level in [None, Some("注意💡"), Some("CUSTOM_LONG_LEVEL")] {
+                    for message in &messages {
+                        let mut record = LogRecord::new(LogLevel::Info, message.clone());
+                        record.timestamp = Local.from_utc_datetime(&naive);
+                        record.caller = caller.clone();
+                        if let Some(name) = custom_level {
+                            record.level_info =
+                                Some(Arc::new(LevelInfo::new(name.into(), 23, None, None)));
+                        }
+                        for exception in [None, Some(""), Some("traceback\né\0")] {
+                            record.exception = exception.map(str::to_string);
+                            for message_markup in [false, true] {
+                                record.message_markup = message_markup;
+                                for colorize in [false, true] {
+                                    let result = config.format_record(&record, colorize);
+                                    assert_eq!(result, generic.format_record(&record, colorize));
+                                    if !colorize {
+                                        // ConsoleHandler appends a newline to this owned string.
+                                        assert!(result.capacity() > result.len());
+                                    }
+                                    assert_eq!(record.message, *message);
+                                    assert_eq!(record.exception.as_deref(), exception);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_default_plain_shape_and_public_format_changes() {
+        let mut record = LogRecord::new(LogLevel::Info, "<red>payload</red>".into());
+        record.caller = CallerInfo::new("app".into(), "emit".into(), 7);
+        record.exception = Some(String::new());
+        for template in [
+            DEFAULT_FORMAT_TEMPLATE.to_string(),
+            DEFAULT_FORMAT_TEMPLATE.replace("{message}", "{message:}"),
+        ] {
+            for serialize in [false, true] {
+                let mut config = FormatConfig::new(Some(template.clone()), serialize);
+                assert!(config.default_template);
+                let mut generic = config.clone();
+                generic.default_template = false;
+                // Public template edits have never reparsed the cached tokens.
+                config.template = "changed after construction".into();
+                generic.template = config.template.clone();
+                for serialize in [false, true, false] {
+                    config.serialize = serialize;
+                    generic.serialize = serialize;
+                    for colorize in [false, true] {
+                        let output = config.format_record(&record, colorize);
+                        assert_eq!(output, generic.format_record(&record, colorize));
+                        if serialize {
+                            let value: serde_json::Value = serde_json::from_str(&output).unwrap();
+                            assert_eq!(value["message"], "<red>payload</red>");
+                            assert_eq!(value["exception"], "");
+                        } else {
+                            assert!(output.ends_with('\n'));
+                        }
+                    }
+                }
+            }
+        }
+        for template in [
+            String::new(),
+            "{message}".into(),
+            DEFAULT_FORMAT_TEMPLATE.replace("{level:<8}", "{level:<9}"),
+            DEFAULT_FORMAT_TEMPLATE.replace("{message}", "{message:.2}"),
+            DEFAULT_FORMAT_TEMPLATE.replace("{name}", "{module}"),
+            format!("<red>{DEFAULT_FORMAT_TEMPLATE}</red>"),
+            format!("{DEFAULT_FORMAT_TEMPLATE}{{exception}}"),
+        ] {
+            let config = FormatConfig::new(Some(template), false);
+            assert!(!config.default_template);
+        }
     }
 
     #[test]
@@ -1360,11 +1548,15 @@ mod tests {
             CallerInfo::new("app".into(), "".into(), 0),
             CallerInfo::with_file("".into(), "関数".into(), 0, "unused.py".into()),
             CallerInfo::new("".into(), "".into(), 7),
+            CallerInfo::new("app".into(), "emit".into(), u32::MAX),
             CallerInfo::with_file("app\"\n".into(), "emit".into(), 7, "unused.py".into()),
         ];
         let messages = [
             String::new(),
             "payload".into(),
+            "x".repeat(65),
+            "x".repeat(66),
+            "x".repeat(67),
             "payload\n\"\\\0é💡\u{2028}\u{2029}".into(),
             (0..=127).map(char::from).collect(),
             "界".repeat(3000),
@@ -1403,10 +1595,18 @@ mod tests {
                                 extra: &record.extra,
                                 exception: &record.exception,
                             };
-                            assert_eq!(
-                                config.format_record(&record, false),
-                                serde_json::to_string(&previous).unwrap()
-                            );
+                            let output = config.format_record(&record, false);
+                            assert_eq!(output, serde_json::to_string(&previous).unwrap());
+                            if record.caller.name.is_empty()
+                                && record.caller.function.is_empty()
+                                && record.caller.line == 0
+                                && record.extra.is_empty()
+                                && record.exception.is_none()
+                                && custom_level.is_none()
+                                && matches!(message.len(), 65..=67)
+                            {
+                                assert!(output.capacity() > output.len());
+                            }
                         }
                     }
                 }
