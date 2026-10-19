@@ -544,18 +544,11 @@ pub fn apply_color_markup(text: &str, colorize: bool) -> Cow<'_, str> {
 
 /// Like [`apply_color_markup`], for text rendered inside `base` (ANSI prefix of the
 /// surrounding styles): `base` is re-applied after each reset so it isn't lost.
-#[inline]
 pub fn apply_color_markup_within<'a>(text: &'a str, colorize: bool, base: &str) -> Cow<'a, str> {
     if !text.contains('<') {
         return Cow::Borrowed(text);
     }
 
-    apply_color_markup_tagged(text, colorize, base)
-}
-
-// Keep the tagged parser's stack and saved registers off the plain-text path.
-#[inline(never)]
-fn apply_color_markup_tagged<'a>(text: &'a str, colorize: bool, base: &str) -> Cow<'a, str> {
     let mut result = String::with_capacity(text.len());
     let mut chars = text.chars().peekable();
     let mut style_stack: Vec<&'static str> = Vec::new();
@@ -964,7 +957,6 @@ impl FormatConfig {
 
     /// File sinks consume plain message bytes synchronously or own them before
     /// enqueueing. Avoid another output string when only the message is needed.
-    #[inline(always)]
     pub fn format_record_for_file<'a>(
         &self,
         record: &'a LogRecord,
