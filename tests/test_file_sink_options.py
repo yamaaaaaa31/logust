@@ -22,6 +22,29 @@ from logust import Logger, LogLevel
 ARCHIVE_FORMATS = ["gz", "bz2", "zip", "tar", "tar.gz", "tar.bz2"]
 
 
+def test_complete_flushes_mixed_owned_and_borrowed_handlers(
+    session_logger: Logger, tmp_path: Path
+) -> None:
+    message_path = tmp_path / "message.log"
+    formatted_path = tmp_path / "formatted.log"
+    error_path = tmp_path / "error.log"
+    handler_ids = [
+        session_logger.add(message_path, format="{message}"),
+        session_logger.add(formatted_path, format="owned:{message}"),
+        session_logger.add(error_path, format="{message}", level="ERROR"),
+    ]
+    try:
+        session_logger.info("info")
+        session_logger.error("error")
+        session_logger.complete()
+        assert message_path.read_text() == "info\nerror\n"
+        assert formatted_path.read_text() == "owned:info\nowned:error\n"
+        assert error_path.read_text() == "error\n"
+    finally:
+        for handler_id in handler_ids:
+            session_logger.remove(handler_id)
+
+
 def _read_archive(path: Path, fmt: str) -> str:
     """Return the text of the single log file stored in a rotated archive."""
     if fmt == "gz":
