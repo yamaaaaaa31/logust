@@ -174,37 +174,6 @@ pub fn format_default_time(dt: &DateTime<Local>) -> String {
     out
 }
 
-/// The same raw-byte hint as the individual field additions, grouped so empty
-/// caller fields do not require selecting between partial saturated sums.
-#[inline]
-fn json_capacity_hint(
-    level_len: usize,
-    message_len: usize,
-    name_len: usize,
-    function_len: usize,
-    line: u32,
-    exception_len: Option<usize>,
-) -> usize {
-    // These three fixed contributions total at most 42 bytes. Raw empty
-    // strings contribute zero, whether or not their keys are emitted.
-    let caller_syntax = usize::from(name_len != 0) * 10
-        + usize::from(function_len != 0) * 14
-        + usize::from(line != 0) * 18;
-    // Required syntax/time (58) plus the console newline (1). Saturating
-    // addition is associative for nonnegative lengths, so regrouping preserves
-    // the previous hint even when an input length would overflow usize.
-    let mut capacity = 59usize
-        .saturating_add(level_len)
-        .saturating_add(message_len)
-        .saturating_add(name_len)
-        .saturating_add(function_len)
-        .saturating_add(caller_syntax);
-    if let Some(length) = exception_len {
-        capacity = capacity.saturating_add(15).saturating_add(length);
-    }
-    capacity.max(128)
-}
-
 /// Initial capacity hint for formatted result strings
 const FORMAT_RESULT_CAPACITY: usize = 64;
 
@@ -1181,15 +1150,29 @@ impl FormatConfig {
     /// Format a LogRecord as JSON
     fn format_record_json(&self, record: &LogRecord) -> String {
         fn json_with_ascii_time(time: &[u8; 23], record: &LogRecord) -> serde_json::Result<String> {
-            let capacity = json_capacity_hint(
-                record.level_name().len(),
-                record.message.len(),
-                record.caller.name.len(),
-                record.caller.function.len(),
-                record.caller.line,
-                record.exception.as_ref().map(String::len),
-            );
-            let mut output = Vec::with_capacity(capacity);
+            // Required syntax/string quotes and the 23-byte timestamp need 58
+            // bytes. Count unescaped text only; serde handles any expansion.
+            let mut capacity = 58usize
+                .saturating_add(record.level_name().len())
+                .saturating_add(record.message.len());
+            if !record.caller.name.is_empty() {
+                capacity = capacity
+                    .saturating_add(10)
+                    .saturating_add(record.caller.name.len());
+            }
+            if !record.caller.function.is_empty() {
+                capacity = capacity
+                    .saturating_add(14)
+                    .saturating_add(record.caller.function.len());
+            }
+            if record.caller.line != 0 {
+                capacity = capacity.saturating_add(18); // Key and at most 10 decimal digits.
+            }
+            if let Some(exception) = &record.exception {
+                capacity = capacity.saturating_add(15).saturating_add(exception.len());
+            }
+            // ConsoleHandler appends one newline after formatting.
+            let mut output = Vec::with_capacity(capacity.saturating_add(1).max(128));
             output.extend_from_slice(b"{\"time\":\"");
             output.extend_from_slice(time);
             output.extend_from_slice(b"\",\"level\":");
@@ -1273,55 +1256,6 @@ mod tests {
     use crate::handler::empty_context;
     use crate::handler::{CallerInfo, ExtraValue, LogRecord, ProcessInfo, ThreadInfo};
     use crate::level::{LevelInfo, LogLevel};
-
-    #[test]
-    fn test_json_capacity_hint_preserves_previous_allocation_sizes() {
-        // Independent oracle: retain the former field-by-field calculation,
-        // including omission rules, Some(empty), newline and saturation.
-        fn previous_hint(
-            level: usize,
-            message: usize,
-            name: usize,
-            function: usize,
-            line: u32,
-            exception: Option<usize>,
-        ) -> usize {
-            let mut capacity = 58usize.saturating_add(level).saturating_add(message);
-            if name != 0 {
-                capacity = capacity.saturating_add(10).saturating_add(name);
-            }
-            if function != 0 {
-                capacity = capacity.saturating_add(14).saturating_add(function);
-            }
-            if line != 0 {
-                capacity = capacity.saturating_add(18);
-            }
-            if let Some(length) = exception {
-                capacity = capacity.saturating_add(15).saturating_add(length);
-            }
-            capacity.saturating_add(1).max(128)
-        }
-
-        for level in [0, 4, 8, usize::MAX] {
-            for message in [0, 65, 66, 67, 4096, usize::MAX - 1, usize::MAX] {
-                for name in [0, 1, 8, 24, usize::MAX - 1, usize::MAX] {
-                    for function in [0, 4, 24, usize::MAX] {
-                        for line in [0, 1, u32::MAX] {
-                            for exception in [None, Some(0), Some(15), Some(usize::MAX)] {
-                                assert_eq!(
-                                    json_capacity_hint(
-                                        level, message, name, function, line, exception
-                                    ),
-                                    previous_hint(level, message, name, function, line, exception),
-                                    "{level} {message} {name} {function} {line} {exception:?}"
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
 
     #[test]
     fn test_default_format() {
