@@ -938,6 +938,12 @@ impl FormatConfig {
         }
     }
 
+    /// Whether file output can use the message-only renderer. Check the token
+    /// shape first so other templates retain the ordinary owned render path.
+    pub fn is_message_only(&self) -> bool {
+        matches!(self.tokens.as_slice(), [FormatToken::Message]) && !self.serialize
+    }
+
     /// File sinks consume plain message bytes synchronously or own them before
     /// enqueueing. Avoid another output string when only the message is needed.
     pub fn format_record_for_file<'a>(
@@ -945,10 +951,7 @@ impl FormatConfig {
         record: &'a LogRecord,
         colorize: bool,
     ) -> Cow<'a, str> {
-        if !self.serialize
-            && record.exception.is_none()
-            && matches!(self.tokens.as_slice(), [FormatToken::Message])
-        {
+        if self.is_message_only() && record.exception.is_none() {
             if record.message_markup {
                 apply_color_markup(&record.message, colorize)
             } else {
@@ -1208,6 +1211,7 @@ mod tests {
         ];
         for template in ["{message}", "{message:}"] {
             let config = FormatConfig::new(Some(template.into()), false);
+            assert!(config.is_message_only());
             assert!(matches!(config.tokens.as_slice(), [FormatToken::Message]));
             for message in &messages {
                 for exception in [None, Some(""), Some("traceback\né\0")] {
@@ -1253,7 +1257,9 @@ mod tests {
     #[test]
     fn test_message_only_file_renderer_keeps_other_tokens_and_json_owned() {
         let record = LogRecord::new(LogLevel::Info, "abcd".into());
+        assert!(!FormatConfig::default().is_message_only());
         for (template, expected) in [
+            ("", ""),
             ("{message:>6.2}", "    ab"),
             ("prefix{message}suffix", "prefixabcdsuffix"),
             ("{message}{message}", "abcdabcd"),
@@ -1261,11 +1267,13 @@ mod tests {
             ("{message}|{exception}", "abcd|"),
         ] {
             let config = FormatConfig::new(Some(template.into()), false);
+            assert!(!config.is_message_only());
             let output = config.format_record_for_file(&record, false);
             assert!(matches!(output, Cow::Owned(_)));
             assert_eq!(output, expected);
         }
         let config = FormatConfig::new(Some("{message}".into()), true);
+        assert!(!config.is_message_only());
         let output = config.format_record_for_file(&record, false);
         assert!(matches!(output, Cow::Owned(_)));
         let output: serde_json::Value = serde_json::from_str(&output).unwrap();

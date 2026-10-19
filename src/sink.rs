@@ -819,13 +819,17 @@ impl FileSink {
     /// Write a message to the file (borrows message)
     #[inline]
     pub fn write(&self, message: &str) -> io::Result<()> {
-        self.inner.write(message)
+        if self.inner.config.enqueue {
+            self.write_owned(message.to_string())
+        } else {
+            self.inner.write_borrowed_sync(message)
+        }
     }
 
     /// Write a message to the file (takes ownership, avoids clone in async mode)
     #[inline]
     pub fn write_owned(&self, message: String) -> io::Result<()> {
-        self.inner.write(message)
+        self.inner.write_owned(message)
     }
 
     /// Configured queueing stays enabled even when a forked child uses a
@@ -1017,10 +1021,10 @@ impl FileSinkInner {
         }
     }
 
-    fn write<M: AsRef<str> + Into<String>>(&self, message: M) -> io::Result<()> {
+    fn write_owned(&self, message: String) -> io::Result<()> {
         self.maybe_rotate()?;
 
-        let msg_len = message.as_ref().len() as u64 + 1;
+        let msg_len = message.len() as u64 + 1;
         let coordinate_rotation = self.rotation_coordination_enabled();
 
         let maybe_sender = {
@@ -1045,12 +1049,12 @@ impl FileSinkInner {
                     // buffer unless `buffering=1` asks for one write per line.
                     if coordinate_rotation {
                         if self.config.buffer_size.is_some() {
-                            writer.write_line_buffered_sync(&self.config.path, message.as_ref())?;
+                            writer.write_line_buffered_sync(&self.config.path, &message)?;
                         } else {
-                            writer.write_line(&self.config.path, message.as_ref())?;
+                            writer.write_line(&self.config.path, &message)?;
                         }
                     } else {
-                        writer.write_line_unlocked(message.as_ref())?;
+                        writer.write_line_unlocked(&message)?;
                         if self.config.line_buffered {
                             writer.flush_without_lock()?;
                         }
@@ -1061,7 +1065,51 @@ impl FileSinkInner {
         };
 
         if let Some(sender) = maybe_sender {
-            self.send_with_retry(WriterMessage::Write(message.into()), sender)?;
+            self.send_with_retry(WriterMessage::Write(message), sender)?;
+        }
+
+        self.current_size.fetch_add(msg_len, Ordering::Relaxed);
+
+        Ok(())
+    }
+
+    /// A non-enqueue sink starts synchronous and remains synchronous after
+    /// reopen, rotation and fork. Keep its borrowed write separate from the
+    /// original owned/queued path; no reference is retained by the writer.
+    fn write_borrowed_sync(&self, message: &str) -> io::Result<()> {
+        self.maybe_rotate()?;
+
+        let msg_len = message.len() as u64 + 1;
+        let coordinate_rotation = self.rotation_coordination_enabled();
+
+        {
+            let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            self.ensure_backend_ready_locked(&mut state)?;
+
+            let WriterBackend::Sync(sync_state) = &mut state.backend else {
+                // Preserve the owned path if a future backend transition can
+                // introduce an async writer for a non-enqueue configuration.
+                drop(state);
+                return self.write_owned(message.to_string());
+            };
+            let writer = sync_state
+                .writer
+                .as_mut()
+                .ok_or_else(|| io::Error::other("sync backend writer missing"))?;
+            // Keep the same rotation lock, buffering and flush order as the
+            // synchronous branch of write_owned above.
+            if coordinate_rotation {
+                if self.config.buffer_size.is_some() {
+                    writer.write_line_buffered_sync(&self.config.path, message)?;
+                } else {
+                    writer.write_line(&self.config.path, message)?;
+                }
+            } else {
+                writer.write_line_unlocked(message)?;
+                if self.config.line_buffered {
+                    writer.flush_without_lock()?;
+                }
+            }
         }
 
         self.current_size.fetch_add(msg_len, Ordering::Relaxed);

@@ -1111,13 +1111,14 @@ impl FileHandler {
     #[inline]
     pub fn handle(&self, record: &LogRecord) -> io::Result<()> {
         if record.level_no() >= self.level {
-            if self.format.serialize || self.sink.is_enqueue_enabled() {
+            if self.format.is_message_only() && !self.sink.is_enqueue_enabled() {
+                match self.format.format_record_for_file(record, self.colorize) {
+                    Cow::Borrowed(output) => self.sink.write(output),
+                    Cow::Owned(output) => self.sink.write_owned(output),
+                }
+            } else {
                 let output = self.format.format_record(record, self.colorize);
-                return self.sink.write_owned(output);
-            }
-            match self.format.format_record_for_file(record, self.colorize) {
-                Cow::Borrowed(output) => self.sink.write(output),
-                Cow::Owned(output) => self.sink.write_owned(output),
+                self.sink.write_owned(output)
             }
         } else {
             Ok(())
