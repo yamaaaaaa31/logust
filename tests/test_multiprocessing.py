@@ -665,6 +665,37 @@ def _join_process_or_fail(
 class TestMultiprocessingFork:
     """Issue #22: FileSink::drop must not panic in a forked child."""
 
+    def test_child_writes_inherited_message_only_sync_sink(self, tmp_path: Path) -> None:
+        """Borrowed writes reopen after fork without copying the parent's buffer."""
+        global _INHERITED_TEST_LOGGER
+
+        previous = _INHERITED_TEST_LOGGER
+        logger = Logger(PyLogger(LogLevel.Trace))
+        logger.remove()
+        _INHERITED_TEST_LOGGER = logger
+        log_file = tmp_path / "inherited-message-sync.log"
+        handler_id = logger.add(log_file, format="{message}", enqueue=False, mode="w")
+        try:
+            logger.info("persisted-before-fork")
+            logger.complete()
+            logger.info("buffered-before-fork")
+
+            ctx = multiprocessing.get_context("fork")
+            child = ctx.Process(target=_child_inherited_write_once, args=("child",))
+            child.start()
+            assert _join_process_or_fail(
+                child, context="borrowed sync sink failed to reopen after fork"
+            ) == 0
+
+            logger.info("parent-after-fork")
+            logger.complete()
+            assert Counter(log_file.read_text(encoding="utf-8").splitlines()) == Counter(
+                ["persisted-before-fork", "buffered-before-fork", "child", "parent-after-fork"]
+            )
+        finally:
+            logger.remove(handler_id)
+            _INHERITED_TEST_LOGGER = previous
+
     def test_child_creates_and_removes_enqueue_sink(self, tmp_path: Path) -> None:
         ctx = multiprocessing.get_context("fork")
         log_file = tmp_path / "child.log"

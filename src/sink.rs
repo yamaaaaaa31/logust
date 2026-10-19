@@ -819,13 +819,24 @@ impl FileSink {
     /// Write a message to the file (borrows message)
     #[inline]
     pub fn write(&self, message: &str) -> io::Result<()> {
-        self.write_owned(message.to_string())
+        if self.supports_borrowed_write() {
+            self.inner.write_borrowed_sync(message)
+        } else {
+            self.write_owned(message.to_string())
+        }
     }
 
     /// Write a message to the file (takes ownership, avoids clone in async mode)
     #[inline]
     pub fn write_owned(&self, message: String) -> io::Result<()> {
         self.inner.write_owned(message)
+    }
+
+    /// Keep queued, rotating and pending-rotation configurations on the owned
+    /// handler path, including a queued sink using a sync backend after fork.
+    #[inline]
+    pub fn supports_borrowed_write(&self) -> bool {
+        !self.inner.config.enqueue && !self.inner.rotation_coordination_enabled()
     }
 
     /// Flush pending writes
@@ -1055,6 +1066,38 @@ impl FileSinkInner {
 
         if let Some(sender) = maybe_sender {
             self.send_with_retry(WriterMessage::Write(message), sender)?;
+        }
+
+        self.current_size.fetch_add(msg_len, Ordering::Relaxed);
+
+        Ok(())
+    }
+
+    /// Non-enqueue, non-rotating sinks consume the borrowed bytes under the
+    /// state lock. Rotating and queued writes retain the owned path above.
+    fn write_borrowed_sync(&self, message: &str) -> io::Result<()> {
+        let msg_len = message.len() as u64 + 1;
+
+        {
+            let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            // For a non-rotating sink maybe_rotate only checks for a fork.
+            // This also checks the PID and reopens after fork before writing.
+            self.ensure_backend_ready_locked(&mut state)?;
+
+            let WriterBackend::Sync(sync_state) = &mut state.backend else {
+                // Preserve the owned path if a future backend transition can
+                // introduce an async writer for a non-enqueue configuration.
+                drop(state);
+                return self.write_owned(message.to_string());
+            };
+            let writer = sync_state
+                .writer
+                .as_mut()
+                .ok_or_else(|| io::Error::other("sync backend writer missing"))?;
+            writer.write_line_unlocked(message)?;
+            if self.config.line_buffered {
+                writer.flush_without_lock()?;
+            }
         }
 
         self.current_size.fetch_add(msg_len, Ordering::Relaxed);
@@ -2900,6 +2943,40 @@ mod tests {
 
         drop(sink);
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_borrowed_file_writes_preserve_input_before_flush() {
+        for enqueue in [false, true] {
+            for delay in [false, true] {
+                let dir = unique_temp_path(&format!("borrowed-{enqueue}-{delay}"));
+                let path = dir.join("nested").join("app.log");
+                let sink = FileSink::new(FileSinkConfig {
+                    path: path.clone(),
+                    enqueue,
+                    delay,
+                    ..FileSinkConfig::default()
+                })
+                .unwrap();
+                if delay {
+                    assert!(!path.exists());
+                }
+                let mut input = "first猫\0\nembedded".to_string();
+                sink.write(&input).unwrap();
+                input.clear();
+                input.push_str("replaced");
+                drop(input);
+                let long = "界".repeat(8192);
+                let expected = format!("first猫\0\nembedded\n{long}\nowned💡\n");
+                sink.write(&long).unwrap();
+                drop(long);
+                sink.write_owned("owned💡".into()).unwrap();
+                sink.flush().unwrap();
+                assert_eq!(fs::read_to_string(&path).unwrap(), expected);
+                drop(sink);
+                let _ = fs::remove_dir_all(&dir);
+            }
+        }
     }
 
     #[test]

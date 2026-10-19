@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Write as _};
 use std::io::{self, Write as _};
@@ -1086,34 +1087,126 @@ pub struct FileHandler {
     pub level: u32,
     pub format: FormatConfig,
     pub colorize: bool,
+    /// File configuration is stable after logger.add(). The renderer/sink
+    /// still check dynamic fallbacks if Rust code replaces public fields.
+    borrow_message: bool,
 }
 
 impl FileHandler {
     pub fn new(sink: FileSink, level: u32) -> Self {
-        FileHandler {
-            sink,
-            level,
-            format: FormatConfig::default(),
-            colorize: false,
-        }
+        Self::with_format(sink, level, FormatConfig::default(), false)
     }
 
     pub fn with_format(sink: FileSink, level: u32, format: FormatConfig, colorize: bool) -> Self {
+        let borrow_message = format.is_message_only() && sink.supports_borrowed_write();
         FileHandler {
             sink,
             level,
             format,
             colorize,
+            borrow_message,
         }
     }
 
     #[inline]
     pub fn handle(&self, record: &LogRecord) -> io::Result<()> {
         if record.level_no() >= self.level {
-            let output = self.format.format_record(record, self.colorize);
-            self.sink.write_owned(output)
+            if self.borrow_message {
+                self.handle_message_only(record)
+            } else {
+                let output = self.format.format_record(record, self.colorize);
+                self.sink.write_owned(output)
+            }
         } else {
             Ok(())
         }
+    }
+
+    // Keep the borrowed formatter's temporary values out of the common
+    // console/file dispatch frame used by other templates and JSON.
+    #[inline(never)]
+    fn handle_message_only(&self, record: &LogRecord) -> io::Result<()> {
+        match self.format.format_record_for_file(record, self.colorize) {
+            Cow::Borrowed(output) => self.sink.write(output),
+            Cow::Owned(output) => self.sink.write_owned(output),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sink::FileSinkConfig;
+
+    #[test]
+    fn test_cached_file_route_preserves_threshold_and_dynamic_fallbacks() {
+        let dir = std::env::temp_dir().join(format!(
+            "logust-cached-file-route-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cases = [
+            (Some("{message}"), false, false, None, true),
+            (Some("{message:}"), false, false, None, true),
+            (Some("{message:>8}"), false, false, None, false),
+            (None, false, false, None, false),
+            (Some("{message}"), true, false, None, false),
+            (Some("{message}"), false, true, None, false),
+            (Some("{message}"), false, false, Some(1024), false),
+        ];
+        for (index, (template, serialize, enqueue, max_size, borrowed)) in
+            cases.into_iter().enumerate()
+        {
+            let path = dir.join(format!("{index}.log"));
+            let sink = FileSink::new(FileSinkConfig {
+                path: path.clone(),
+                enqueue,
+                max_size,
+                ..FileSinkConfig::default()
+            })
+            .unwrap();
+            let format = FormatConfig::new(template.map(str::to_string), serialize);
+            let mut handler =
+                FileHandler::with_format(sink, LogLevel::Warning as u32, format, false);
+            assert_eq!(handler.borrow_message, borrowed);
+            if borrowed {
+                handler
+                    .handle(&LogRecord::new(LogLevel::Info, "hidden".into()))
+                    .unwrap();
+                let mut record = LogRecord::new(LogLevel::Warning, "visible".into());
+                record.exception = Some(String::new());
+                handler.handle(&record).unwrap();
+                handler.format = FormatConfig::new(Some("changed:{message}".into()), false);
+                handler
+                    .handle(&LogRecord::new(LogLevel::Warning, "after".into()))
+                    .unwrap();
+                handler.sink.flush().unwrap();
+                assert_eq!(
+                    std::fs::read_to_string(&path).unwrap(),
+                    "visible\n\nchanged:after\n"
+                );
+
+                // A stale true flag still delegates queue ownership to the
+                // sink when Rust code replaces the public configuration.
+                let queued_path = dir.join(format!("queued-{index}.log"));
+                handler.sink = FileSink::new(FileSinkConfig {
+                    path: queued_path.clone(),
+                    enqueue: true,
+                    ..FileSinkConfig::default()
+                })
+                .unwrap();
+                handler.format = FormatConfig::new(Some("{message}".into()), false);
+                handler
+                    .handle(&LogRecord::new(LogLevel::Warning, "queued".into()))
+                    .unwrap();
+                handler.sink.flush().unwrap();
+                assert_eq!(std::fs::read_to_string(queued_path).unwrap(), "queued\n");
+            }
+        }
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }
