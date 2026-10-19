@@ -938,6 +938,27 @@ impl FormatConfig {
         }
     }
 
+    /// File sinks consume plain message bytes synchronously or own them before
+    /// enqueueing. Avoid another output string when only the message is needed.
+    pub fn format_record_for_file<'a>(
+        &self,
+        record: &'a LogRecord,
+        colorize: bool,
+    ) -> Cow<'a, str> {
+        if !self.serialize
+            && record.exception.is_none()
+            && matches!(self.tokens.as_slice(), [FormatToken::Message])
+        {
+            if record.message_markup {
+                apply_color_markup(&record.message, colorize)
+            } else {
+                Cow::Borrowed(&record.message)
+            }
+        } else {
+            Cow::Owned(self.format_record(record, colorize))
+        }
+    }
+
     /// Format a LogRecord using pre-parsed tokens (O(n) single pass, thread-safe)
     fn format_record_template(&self, record: &LogRecord, colorize: bool) -> String {
         let level_name = record.level_name();
@@ -1169,6 +1190,87 @@ mod tests {
         let result = config.format_record(&record, false);
         assert!(result.contains("INFO"));
         assert!(result.contains("test message"));
+    }
+
+    #[test]
+    fn test_message_only_file_rendering_matches_owned_formatter() {
+        let messages = [
+            String::new(),
+            "payload".into(),
+            "猫💡é\0\n{message}\x1b[31mraw\x1b[0m".into(),
+            "<red>猫<bold>é</bold></red>".into(),
+            "<red>unclosed".into(),
+            "x<unknown>y</unknown></red>".into(),
+            "lone<".into(),
+            "<level>x</level>".into(),
+            "x".repeat(4096),
+            "<blue>💡</blue>".repeat(128),
+        ];
+        for template in ["{message}", "{message:}"] {
+            let config = FormatConfig::new(Some(template.into()), false);
+            assert!(matches!(config.tokens.as_slice(), [FormatToken::Message]));
+            for message in &messages {
+                for exception in [None, Some(""), Some("traceback\né\0")] {
+                    for custom_level in [false, true] {
+                        let mut record = LogRecord::new(LogLevel::Info, message.clone());
+                        record.exception = exception.map(str::to_string);
+                        if custom_level {
+                            record.level_info = Some(Arc::new(LevelInfo::new(
+                                "CUSTOM_注意".into(),
+                                23,
+                                None,
+                                None,
+                            )));
+                        }
+                        for message_markup in [false, true] {
+                            record.message_markup = message_markup;
+                            for colorize in [false, true] {
+                                let output = config.format_record_for_file(&record, colorize);
+                                assert_eq!(output, config.format_record(&record, colorize));
+                                if exception.is_none()
+                                    && (!message_markup || !message.contains('<'))
+                                {
+                                    let Cow::Borrowed(borrowed) = output else {
+                                        panic!("plain message must borrow the record");
+                                    };
+                                    assert_eq!(borrowed.as_ptr(), record.message.as_ptr());
+                                } else {
+                                    assert!(matches!(output, Cow::Owned(_)));
+                                }
+                                assert_eq!(record.message, *message);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let config = FormatConfig::new(Some("{message}".into()), false);
+        let mut record = LogRecord::new(LogLevel::Info, String::new());
+        record.exception = Some(String::new());
+        assert_eq!(config.format_record_for_file(&record, false), "\n");
+    }
+
+    #[test]
+    fn test_message_only_file_renderer_keeps_other_tokens_and_json_owned() {
+        let record = LogRecord::new(LogLevel::Info, "abcd".into());
+        for (template, expected) in [
+            ("{message:>6.2}", "    ab"),
+            ("prefix{message}suffix", "prefixabcdsuffix"),
+            ("{message}{message}", "abcdabcd"),
+            ("<red>{message}</red>", "abcd"),
+            ("{message}|{exception}", "abcd|"),
+        ] {
+            let config = FormatConfig::new(Some(template.into()), false);
+            let output = config.format_record_for_file(&record, false);
+            assert!(matches!(output, Cow::Owned(_)));
+            assert_eq!(output, expected);
+        }
+        let config = FormatConfig::new(Some("{message}".into()), true);
+        let output = config.format_record_for_file(&record, false);
+        assert!(matches!(output, Cow::Owned(_)));
+        let output: serde_json::Value = serde_json::from_str(&output).unwrap();
+        assert_eq!(output["message"], "abcd");
+        assert_eq!(output["level"], "INFO");
     }
 
     #[test]

@@ -819,13 +819,20 @@ impl FileSink {
     /// Write a message to the file (borrows message)
     #[inline]
     pub fn write(&self, message: &str) -> io::Result<()> {
-        self.write_owned(message.to_string())
+        self.inner.write(message)
     }
 
     /// Write a message to the file (takes ownership, avoids clone in async mode)
     #[inline]
     pub fn write_owned(&self, message: String) -> io::Result<()> {
-        self.inner.write_owned(message)
+        self.inner.write(message)
+    }
+
+    /// Configured queueing stays enabled even when a forked child uses a
+    /// synchronous backend. Keep that case on the original owned handler path.
+    #[inline]
+    pub fn is_enqueue_enabled(&self) -> bool {
+        self.inner.config.enqueue
     }
 
     /// Flush pending writes
@@ -1010,10 +1017,10 @@ impl FileSinkInner {
         }
     }
 
-    fn write_owned(&self, message: String) -> io::Result<()> {
+    fn write<M: AsRef<str> + Into<String>>(&self, message: M) -> io::Result<()> {
         self.maybe_rotate()?;
 
-        let msg_len = message.len() as u64 + 1;
+        let msg_len = message.as_ref().len() as u64 + 1;
         let coordinate_rotation = self.rotation_coordination_enabled();
 
         let maybe_sender = {
@@ -1038,12 +1045,12 @@ impl FileSinkInner {
                     // buffer unless `buffering=1` asks for one write per line.
                     if coordinate_rotation {
                         if self.config.buffer_size.is_some() {
-                            writer.write_line_buffered_sync(&self.config.path, &message)?;
+                            writer.write_line_buffered_sync(&self.config.path, message.as_ref())?;
                         } else {
-                            writer.write_line(&self.config.path, &message)?;
+                            writer.write_line(&self.config.path, message.as_ref())?;
                         }
                     } else {
-                        writer.write_line_unlocked(&message)?;
+                        writer.write_line_unlocked(message.as_ref())?;
                         if self.config.line_buffered {
                             writer.flush_without_lock()?;
                         }
@@ -1054,7 +1061,7 @@ impl FileSinkInner {
         };
 
         if let Some(sender) = maybe_sender {
-            self.send_with_retry(WriterMessage::Write(message), sender)?;
+            self.send_with_retry(WriterMessage::Write(message.into()), sender)?;
         }
 
         self.current_size.fetch_add(msg_len, Ordering::Relaxed);
@@ -2900,6 +2907,40 @@ mod tests {
 
         drop(sink);
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_borrowed_file_writes_preserve_input_before_flush() {
+        for enqueue in [false, true] {
+            for delay in [false, true] {
+                let dir = unique_temp_path(&format!("borrowed-{enqueue}-{delay}"));
+                let path = dir.join("nested").join("app.log");
+                let sink = FileSink::new(FileSinkConfig {
+                    path: path.clone(),
+                    enqueue,
+                    delay,
+                    ..FileSinkConfig::default()
+                })
+                .unwrap();
+                if delay {
+                    assert!(!path.exists());
+                }
+                let mut input = "first猫\0\nembedded".to_string();
+                sink.write(&input).unwrap();
+                input.clear();
+                input.push_str("replaced");
+                drop(input);
+                let long = "界".repeat(8192);
+                let expected = format!("first猫\0\nembedded\n{long}\nowned💡\n");
+                sink.write(&long).unwrap();
+                drop(long);
+                sink.write_owned("owned💡".into()).unwrap();
+                sink.flush().unwrap();
+                assert_eq!(fs::read_to_string(&path).unwrap(), expected);
+                drop(sink);
+                let _ = fs::remove_dir_all(&dir);
+            }
+        }
     }
 
     #[test]

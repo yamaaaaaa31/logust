@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Write as _};
 use std::io::{self, Write as _};
@@ -1110,8 +1111,14 @@ impl FileHandler {
     #[inline]
     pub fn handle(&self, record: &LogRecord) -> io::Result<()> {
         if record.level_no() >= self.level {
-            let output = self.format.format_record(record, self.colorize);
-            self.sink.write_owned(output)
+            if self.format.serialize || self.sink.is_enqueue_enabled() {
+                let output = self.format.format_record(record, self.colorize);
+                return self.sink.write_owned(output);
+            }
+            match self.format.format_record_for_file(record, self.colorize) {
+                Cow::Borrowed(output) => self.sink.write(output),
+                Cow::Owned(output) => self.sink.write_owned(output),
+            }
         } else {
             Ok(())
         }
