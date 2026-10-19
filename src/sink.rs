@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 
 use bzip2::write::BzEncoder;
 use chrono::{DateTime, Local, Timelike};
-use crossbeam_channel::{RecvTimeoutError, Sender, bounded};
+use crossbeam_channel::{RecvTimeoutError, Sender, TryRecvError, bounded};
 use flate2::Compression;
 use flate2::write::GzEncoder;
 use pyo3::prelude::*;
@@ -970,9 +970,16 @@ impl FileSinkInner {
 
             loop {
                 let received = match dirty_since {
-                    Some(since) => {
-                        receiver.recv_timeout(flush_interval.saturating_sub(since.elapsed()))
-                    }
+                    Some(since) => match receiver.try_recv() {
+                        // A queued message needs no timeout/deadline setup.
+                        // The post-write clock check below still bounds the
+                        // dirty interval while messages arrive continuously.
+                        Ok(message) => Ok(message),
+                        Err(TryRecvError::Empty) => {
+                            receiver.recv_timeout(flush_interval.saturating_sub(since.elapsed()))
+                        }
+                        Err(TryRecvError::Disconnected) => Err(RecvTimeoutError::Disconnected),
+                    },
                     // Nothing to flush: sleep until the next message.
                     None => receiver.recv().map_err(|_| RecvTimeoutError::Disconnected),
                 };
@@ -2775,6 +2782,52 @@ mod tests {
             }
             drop(sender);
             FileSinkInner::stop_async_writer_locked(&mut state, true);
+            fs::remove_dir_all(dir).unwrap();
+        }
+    }
+
+    #[test]
+    fn test_async_prefilled_writes_reach_idle_flush_then_disconnect() {
+        for coordinate_rotation in [false, true] {
+            let dir = unique_temp_path("async-prefilled-idle");
+            let path = dir.join("app.log");
+            let mut state =
+                FileSinkInner::create_async_writer_state(&path, coordinate_rotation).unwrap();
+            let sender = state.sender.take().unwrap();
+
+            // The initial rendezvous ack holds the worker until both writes
+            // are queued. Within one dirty interval, the second write is a
+            // ready receive, followed by an empty connected channel. A long
+            // scheduling pause can instead trigger the post-write flush.
+            let (start_ack, start_receiver) = bounded(0);
+            sender
+                .send(WriterMessage::Flush { ack: start_ack })
+                .unwrap();
+            for message in ["first 猫\0", "second 😀"] {
+                sender
+                    .send(WriterMessage::Write(message.to_owned()))
+                    .unwrap();
+            }
+            start_receiver.recv_timeout(Duration::from_secs(5)).unwrap();
+
+            // No explicit Flush or disconnect can make this prefix visible.
+            // Periodic or idle flushing must make both writes visible.
+            let expected = "first 猫\0\nsecond 😀\n";
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while fs::read_to_string(&path).unwrap() != expected {
+                assert!(Instant::now() < deadline, "prefilled writes did not flush");
+                thread::sleep(Duration::from_millis(1));
+            }
+
+            sender
+                .send(WriterMessage::Write("tail after idle".into()))
+                .unwrap();
+            drop(sender);
+            FileSinkInner::stop_async_writer_locked(&mut state, true);
+            assert_eq!(
+                fs::read_to_string(path).unwrap(),
+                format!("{expected}tail after idle\n")
+            );
             fs::remove_dir_all(dir).unwrap();
         }
     }
