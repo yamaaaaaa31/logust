@@ -544,11 +544,18 @@ pub fn apply_color_markup(text: &str, colorize: bool) -> Cow<'_, str> {
 
 /// Like [`apply_color_markup`], for text rendered inside `base` (ANSI prefix of the
 /// surrounding styles): `base` is re-applied after each reset so it isn't lost.
+#[inline]
 pub fn apply_color_markup_within<'a>(text: &'a str, colorize: bool, base: &str) -> Cow<'a, str> {
     if !text.contains('<') {
         return Cow::Borrowed(text);
     }
 
+    apply_color_markup_tagged(text, colorize, base)
+}
+
+// Keep the tagged parser's stack and saved registers off the plain-text path.
+#[inline(never)]
+fn apply_color_markup_tagged<'a>(text: &'a str, colorize: bool, base: &str) -> Cow<'a, str> {
     let mut result = String::with_capacity(text.len());
     let mut chars = text.chars().peekable();
     let mut style_stack: Vec<&'static str> = Vec::new();
@@ -963,7 +970,7 @@ impl FormatConfig {
         colorize: bool,
     ) -> Cow<'a, str> {
         if self.is_message_only() && record.exception.is_none() {
-            if record.message_markup && record.message.contains('<') {
+            if record.message_markup {
                 apply_color_markup(&record.message, colorize)
             } else {
                 Cow::Borrowed(&record.message)
@@ -1685,8 +1692,42 @@ mod tests {
 
     #[test]
     fn test_color_markup_no_tags() {
-        let result = apply_color_markup("plain text", true);
-        assert_eq!(result, "plain text");
+        for text in [
+            String::new(),
+            "plain text".into(),
+            "猫💡\0\n\x1b[31mraw\x1b[0m".into(),
+            "x".repeat(15),
+            "x".repeat(16),
+            "x".repeat(17),
+            "x".repeat(4096),
+        ] {
+            for colorize in [false, true] {
+                for base in ["", "\x1b[36m"] {
+                    let result = apply_color_markup_within(&text, colorize, base);
+                    let Cow::Borrowed(borrowed) = result else {
+                        panic!("plain markup rendering must borrow the original text");
+                    };
+                    assert_eq!(borrowed, text);
+                    assert_eq!(borrowed.as_ptr(), text.as_ptr());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_color_markup_tagged_preserves_base_and_literal_tags() {
+        let text = "猫\0<red>R<bold>B</bold></red><unknown>U</unknown></red><";
+        let plain = "猫\0RB<unknown>U</unknown></red><";
+        let colored = "猫\0\x1b[31mR\x1b[1mB\x1b[0m\x1b[36m\x1b[31m\x1b[0m\x1b[36m<unknown>U</unknown></red><";
+        for (colorize, expected) in [(false, plain), (true, colored)] {
+            let result = apply_color_markup_within(text, colorize, "\x1b[36m");
+            assert!(matches!(result, Cow::Owned(_)));
+            assert_eq!(result, expected);
+        }
+        assert_eq!(
+            apply_color_markup_within("<red>猫", true, "\x1b[36m"),
+            "\x1b[31m猫\x1b[0m\x1b[36m"
+        );
     }
 
     #[test]
