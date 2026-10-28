@@ -536,6 +536,74 @@ fn tag_to_ansi(tag: &str) -> Option<&'static str> {
     }
 }
 
+// Expand the same parser loop at both entries without a shared call boundary.
+// The known-index entry skips scanning and copying the literal prefix one char at a time.
+macro_rules! render_color_markup {
+    ($result:ident, $chars:ident, $style_stack:ident, $colorize:expr, $base:expr) => {{
+        while let Some(c) = $chars.next() {
+            if c == '<' {
+                let mut tag = String::new();
+                let is_closing = $chars.peek() == Some(&'/');
+                if is_closing {
+                    $chars.next();
+                }
+
+                let mut found_close = false;
+                while let Some(&ch) = $chars.peek() {
+                    if ch == '>' {
+                        $chars.next();
+                        found_close = true;
+                        break;
+                    }
+                    tag.push($chars.next().unwrap());
+                }
+
+                if !found_close {
+                    $result.push('<');
+                    if is_closing {
+                        $result.push('/');
+                    }
+                    $result.push_str(&tag);
+                    continue;
+                }
+
+                if is_closing {
+                    if tag_to_ansi(&tag).is_some() && !$style_stack.is_empty() {
+                        $style_stack.pop();
+                        if $colorize {
+                            $result.push_str("\x1b[0m");
+                            $result.push_str($base);
+                            for s in &$style_stack {
+                                $result.push_str(s);
+                            }
+                        }
+                    } else {
+                        $result.push_str("</");
+                        $result.push_str(&tag);
+                        $result.push('>');
+                    }
+                } else if let Some(ansi) = tag_to_ansi(&tag) {
+                    $style_stack.push(ansi);
+                    if $colorize {
+                        $result.push_str(ansi);
+                    }
+                } else {
+                    $result.push('<');
+                    $result.push_str(&tag);
+                    $result.push('>');
+                }
+            } else {
+                $result.push(c);
+            }
+        }
+
+        if $colorize && !$style_stack.is_empty() {
+            $result.push_str("\x1b[0m");
+            $result.push_str($base);
+        }
+    }};
+}
+
 /// Parse color markup tags (<red>, <bold>, <italic>, etc.) and render them as ANSI codes,
 /// or strip them if `colorize` is false. Unknown tags are kept as literal text.
 pub fn apply_color_markup(text: &str, colorize: bool) -> Cow<'_, str> {
@@ -553,69 +621,22 @@ pub fn apply_color_markup_within<'a>(text: &'a str, colorize: bool, base: &str) 
     let mut chars = text.chars().peekable();
     let mut style_stack: Vec<&'static str> = Vec::new();
 
-    while let Some(c) = chars.next() {
-        if c == '<' {
-            let mut tag = String::new();
-            let is_closing = chars.peek() == Some(&'/');
-            if is_closing {
-                chars.next();
-            }
-
-            let mut found_close = false;
-            while let Some(&ch) = chars.peek() {
-                if ch == '>' {
-                    chars.next();
-                    found_close = true;
-                    break;
-                }
-                tag.push(chars.next().unwrap());
-            }
-
-            if !found_close {
-                result.push('<');
-                if is_closing {
-                    result.push('/');
-                }
-                result.push_str(&tag);
-                continue;
-            }
-
-            if is_closing {
-                if tag_to_ansi(&tag).is_some() && !style_stack.is_empty() {
-                    style_stack.pop();
-                    if colorize {
-                        result.push_str("\x1b[0m");
-                        result.push_str(base);
-                        for s in &style_stack {
-                            result.push_str(s);
-                        }
-                    }
-                } else {
-                    result.push_str("</");
-                    result.push_str(&tag);
-                    result.push('>');
-                }
-            } else if let Some(ansi) = tag_to_ansi(&tag) {
-                style_stack.push(ansi);
-                if colorize {
-                    result.push_str(ansi);
-                }
-            } else {
-                result.push('<');
-                result.push_str(&tag);
-                result.push('>');
-            }
-        } else {
-            result.push(c);
-        }
-    }
-
-    if colorize && !style_stack.is_empty() {
-        result.push_str("\x1b[0m");
-        result.push_str(base);
-    }
+    render_color_markup!(result, chars, style_stack, colorize, base);
 
     Cow::Owned(result)
+}
+
+/// Render markup after the caller has located the first ASCII `<` byte.
+/// The prefix contains no markup, so copying it preserves UTF-8 and raw ANSI bytes.
+/// The byte index must come from finding `<` in this same string.
+pub(crate) fn apply_color_markup_from(text: &str, colorize: bool, first_open: usize) -> String {
+    debug_assert_eq!(text.as_bytes().get(first_open), Some(&b'<'));
+    let mut result = String::with_capacity(text.len());
+    result.push_str(&text[..first_open]);
+    let mut chars = text[first_open..].chars().peekable();
+    let mut style_stack: Vec<&'static str> = Vec::new();
+    render_color_markup!(result, chars, style_stack, colorize, "");
+    result
 }
 
 /// A color style opened by a markup tag in a format template
@@ -1394,6 +1415,9 @@ mod tests {
             "x<unknown>y</unknown></red>".into(),
             "lone<".into(),
             "<level>x</level>".into(),
+            "x".repeat(15),
+            "x".repeat(16),
+            "x".repeat(17),
             "x".repeat(4096),
             "<blue>💡</blue>".repeat(128),
         ];
@@ -1682,8 +1706,84 @@ mod tests {
 
     #[test]
     fn test_color_markup_no_tags() {
-        let result = apply_color_markup("plain text", true);
-        assert_eq!(result, "plain text");
+        for text in [
+            String::new(),
+            "plain text".into(),
+            "猫💡\0\n\x1b[31mraw\x1b[0m".into(),
+            "x".repeat(15),
+            "x".repeat(16),
+            "x".repeat(17),
+            "x".repeat(4096),
+        ] {
+            for colorize in [false, true] {
+                for base in ["", "\x1b[36m"] {
+                    let result = apply_color_markup_within(&text, colorize, base);
+                    let Cow::Borrowed(borrowed) = result else {
+                        panic!("plain markup rendering must borrow the original text");
+                    };
+                    assert_eq!(borrowed, text);
+                    assert_eq!(borrowed.as_ptr(), text.as_ptr());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_color_markup_tagged_preserves_base_and_literal_tags() {
+        let text = "猫\0<red>R<bold>B</bold></red><unknown>U</unknown></red><";
+        let plain = "猫\0RB<unknown>U</unknown></red><";
+        let colored = "猫\0\x1b[31mR\x1b[1mB\x1b[0m\x1b[36m\x1b[31m\x1b[0m\x1b[36m<unknown>U</unknown></red><";
+        for (colorize, expected) in [(false, plain), (true, colored)] {
+            let result = apply_color_markup_within(text, colorize, "\x1b[36m");
+            assert!(matches!(result, Cow::Owned(_)));
+            assert_eq!(result, expected);
+        }
+        assert_eq!(
+            apply_color_markup_within("<red>猫", true, "\x1b[36m"),
+            "\x1b[31m猫\x1b[0m\x1b[36m"
+        );
+    }
+
+    #[test]
+    fn test_color_markup_known_first_tag_matches_full_parser() {
+        let prefixes = [
+            String::new(),
+            "plain ".into(),
+            "猫💡é\0\n\x1b[36mraw\x1b[0m".into(),
+            "x".repeat(15),
+            "x".repeat(16),
+            "x".repeat(17),
+            "猫".repeat(1366),
+            "x".repeat(8192),
+        ];
+        let tails = [
+            "<red>R<bold>B</bold></red>",
+            "<red>unclosed",
+            "<unknown>U</unknown></red>",
+            "</red>",
+            "<red>R</blue></red>",
+            "<level>literal</level>",
+            "<red>猫\0\n\x1b[32mraw\x1b[0m</red>",
+            "<",
+            "</",
+            "<red",
+        ];
+        for prefix in &prefixes {
+            for tail in tails {
+                let text = format!("{prefix}{tail}");
+                let first_open = text.find('<').unwrap();
+                assert_eq!(first_open, prefix.len());
+                assert!(text.is_char_boundary(first_open));
+                for colorize in [false, true] {
+                    let output = apply_color_markup_from(&text, colorize, first_open);
+                    assert_eq!(output, apply_color_markup(&text, colorize));
+                    assert!(output.starts_with(prefix));
+                    if !colorize && tail == "<red>R<bold>B</bold></red>" {
+                        assert_eq!(output, format!("{prefix}RB"));
+                    }
+                }
+            }
+        }
     }
 
     #[test]
