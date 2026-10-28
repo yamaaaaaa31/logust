@@ -74,7 +74,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v10.3.0
+        uses: astral-sh/setup-uv@v10.3.2
 
       - name: Install dependencies and build
         run: |
@@ -114,7 +114,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v10.3.0
+        uses: astral-sh/setup-uv@v10.3.2
 
       - name: Install dependencies and build
         run: |
@@ -140,7 +140,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v10.3.0
+        uses: astral-sh/setup-uv@v10.3.2
 
       - name: Install dependencies and build
         run: |
