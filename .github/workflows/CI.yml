@@ -3,6 +3,8 @@
 #
 #    maturin generate-ci github
 #
+# Preserve the macOS/Windows free-threaded exclusions when regenerating:
+# freethreaded-release.yml owns those wheels.
 name: CI
 
 on:
@@ -107,6 +109,14 @@ jobs:
           target: ${{ matrix.platform.target }}
           args: --release --out dist --find-interpreter
           sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
+      - name: Exclude free-threaded wheels published by the dedicated workflow
+        shell: python
+        run: |
+          from pathlib import Path
+
+          for wheel in Path('dist').glob('*-cp*t-*.whl'):
+              print(f'Excluded dedicated free-threaded wheel: {wheel}')
+              wheel.unlink()
       - name: Upload wheels
         uses: actions/upload-artifact@v7
         with:
@@ -133,6 +143,14 @@ jobs:
           target: ${{ matrix.platform.target }}
           args: --release --out dist --find-interpreter
           sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
+      - name: Exclude free-threaded wheels published by the dedicated workflow
+        shell: python
+        run: |
+          from pathlib import Path
+
+          for wheel in Path('dist').glob('*-cp*t-*.whl'):
+              print(f'Excluded dedicated free-threaded wheel: {wheel}')
+              wheel.unlink()
       - name: Upload wheels
         uses: actions/upload-artifact@v7
         with:
