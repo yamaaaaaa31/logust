@@ -7,6 +7,7 @@ gives in Python: Python itself is the oracle here.
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -307,7 +308,12 @@ def test_elapsed_spec(tmp_path: Path) -> None:
         tmp_path, "[{elapsed:>14}|{elapsed:.5}|{elapsed:*^16}]", "m"
     )
     assert file_out == callable_out
-    assert file_out.startswith("[  00:00:")
+    padded, truncated, centered = file_out[1:-1].split("|")
+    elapsed = padded.lstrip()
+    assert re.fullmatch(r"\d{2,}:\d{2}:\d{2}\.\d{3}", elapsed)
+    assert padded == format(elapsed, ">14")
+    assert truncated == format(elapsed, ".5")
+    assert centered == format(elapsed, "*^16")
 
 
 def test_empty_spec_and_unknown_fields(tmp_path: Path) -> None:
