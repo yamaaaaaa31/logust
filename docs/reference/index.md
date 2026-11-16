@@ -24,7 +24,7 @@ Everything below is importable from `logust`:
 | `FilterCallback`, `PatcherCallback`, `LogCallback` | Callback protocols | [Callback protocols](#callback-protocols) |
 | `FilterType` | What `add(filter=...)` accepts | [Callback protocols](#callback-protocols) |
 | `parse`, `parse_json` | Log file parsers | [Parsing](#parsing) |
-| `__version__` | Version string, e.g. `"0.5.0"` | |
+| `__version__` | Version string, e.g. `"0.6.0"` | |
 
 The integrations live in `logust.contrib` and `logust.contrib.starlette`: see [Contrib](#contrib).
 

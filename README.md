@@ -28,20 +28,46 @@ A fast, Rust-powered Python logging library inspired by [loguru](https://github.
 
 ## Benchmarks
 
-Release-build runs of the included throughput suite (`benchmarks/bench_throughput.py`, 10,000 messages) produced the following snapshot:
+Compared with 0.5.0, the **0.6.0 candidate** cuts elapsed time for the main file
+workloads by about **53–56% on macOS** and **48–52% in Linux ARM64 Docker**.
+The sync, formatted and JSON rows below are about **2.1× faster on macOS** and
+**1.9–2.1× in Linux Docker**, under the measured conditions.
 
-| Scenario | logging | loguru | logust |
-|----------|---------|--------|--------|
-| File write (sync) | 81.58 ms | 90.61 ms | **8.32 ms** |
-| File write (sync, one write per line) | 83.42 ms | 89.44 ms | **29.75 ms** |
-| Formatted messages | 82.34 ms | 106.49 ms | **8.80 ms** |
-| JSON serialize | N/A | 188.64 ms | **9.12 ms** |
-| With context (sync) | N/A | 88.73 ms | **7.12 ms** |
-| File write (async + complete) | N/A | 437.38 ms | **7.09 ms** |
+| Workload | macOS: 0.5.0 → candidate | Linux Docker: 0.5.0 → candidate | Time reduction: macOS / Linux |
+|---|---:|---:|---:|
+| Sync file, default format | 14.84 → **6.89 ms** | 17.47 → **8.80 ms** | 53.6% / 49.6% |
+| Formatted messages | 16.28 → **7.55 ms** | 18.42 → **9.52 ms** | 53.6% / 48.3% |
+| JSON | 15.60 → **7.39 ms** | 18.13 → **8.78 ms** | 52.6% / 51.6% |
+| Bound context, sync | 14.74 → **6.89 ms** | 17.36 → **8.62 ms** | 53.3% / 50.3% |
+| Async + complete() | 14.39 → **6.74 ms** | 18.03 → **9.06 ms** | 53.1% / 49.8% |
+| Callable sink, message only | 7.92 → **4.13 ms** | 8.31 → **4.15 ms** | 47.9% / 50.0% |
 
-Medians of three runs. `logust` buffers file writes by default; the "one write per line" row uses `buffering=1`, which writes each line before the logging call returns like `logging` and `loguru` do, so every logged line survives a kill.
+Measured on 2026-11-16 using source-built release wheels, the same CPython
+3.14.9 interpreter and Rust 1.96.0, on an Apple M4 Pro. Linux is native ARM64
+inside an OrbStack Docker VM; logs use the container filesystem. Each version
+ran in six independent processes, each with three timed suites after warmup;
+the table compares the medians of the six process medians. Each throughput
+case logs 10,000 messages, with output counts/content checked after timing.
+The default file buffer is 8 KB in both versions. Flush completion is included
+except in the explicitly labeled queue-only/async-queue-latency cases.
 
-See `benchmarks/README.md` for reproduction steps and the [Benchmarks](https://yamaaaaaa31.github.io/logust/latest/about/benchmarks/) page in the docs.
+The additional 32-workload check found no case meeting the predeclared repeated
+slowdown screen (a median slowdown of at least 5%, with at least five of six
+pairs also at least 5% slower). This does **not** mean every case improved:
+active exception output was **3.3% slower on macOS** (only 1/6 pairs faster),
+and its Linux result was mixed (median 2.9% faster, only 2/6 pairs faster).
+Long plain messages on macOS had one pair more than 5% slower despite an
+improved overall median. All adverse samples are retained.
+
+These results cover the measured regular-CPython workloads, not every API,
+configuration or platform. They do not establish Windows, x86-64 Linux or
+free-threaded performance, or erase the smaller intermediate-version enqueue
+regression discussed in PR #103. The old cross-library snapshot used a
+different Python/environment and is not combined with these percentages.
+
+See the [complete results and raw data](benchmarks/results/0.6.0/README.md),
+[reproduction steps](benchmarks/release/README.md), and the
+[Benchmarks documentation](https://yamaaaaaa31.github.io/logust/latest/about/benchmarks/).
 
 ## Installation
 

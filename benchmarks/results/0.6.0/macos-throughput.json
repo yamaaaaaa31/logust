@@ -1,0 +1,595 @@
+{
+  "environment": {
+    "python": "3.14.9 (main, Oct 21 2026, 17:47:42) [Clang 23.1.3 ]",
+    "platform": "macOS-27.2.1-arm64-arm-64bit-Mach-O",
+    "compiler": "rustc 1.96.0 (ac68faa20 2026-05-25)",
+    "heads": {
+      "old": {
+        "sha": "6d7962129c55d8c98eb9b77cce0b7ad0c0f7e573",
+        "source_archive_sha256": "a281fac10f8795a1c21b6bde6ed0a7e758b53b90ef52efaea504e2413ce72099",
+        "wheel": "/study/old/dist/logust-0.5.0-cp314-cp314-macosx_11_0_arm64.whl",
+        "wheel_sha256": "bd8bc52100eba1eac0621b4565c1d1ffdda5da8bf7bc3312d4be1470978655b5",
+        "native_sha256": "8eda0eb00ce6a2ad7ac521d49e6605f23c532765097a095b4017c85e0c6a514e",
+        "dependencies": {
+          "adler2": "2.0.1",
+          "android_system_properties": "0.1.6",
+          "autocfg": "1.5.1",
+          "bumpalo": "3.20.4",
+          "cc": "1.11.2",
+          "cfg-if": "1.0.5",
+          "chrono": "0.4.45",
+          "colored": "3.1.1",
+          "core-foundation-sys": "0.8.7",
+          "crc32fast": "1.5.5",
+          "crossbeam-channel": "0.5.17",
+          "crossbeam-utils": "0.8.23",
+          "find-msvc-tools": "0.1.15",
+          "flate2": "1.1.11",
+          "futures-core": "0.3.34",
+          "futures-task": "0.3.34",
+          "futures-util": "0.3.34",
+          "heck": "0.5.0",
+          "iana-time-zone": "0.1.65",
+          "iana-time-zone-haiku": "0.1.2",
+          "itoa": "1.0.19",
+          "js-sys": "0.3.107",
+          "libc": "0.2.191",
+          "log": "0.4.35",
+          "memchr": "2.8.3",
+          "miniz_oxide": "0.9.1",
+          "num-traits": "0.2.19",
+          "once_cell": "1.21.4",
+          "pin-project-lite": "0.2.17",
+          "portable-atomic": "1.15.0",
+          "proc-macro2": "1.0.107",
+          "pyo3": "0.29.3",
+          "pyo3-build-config": "0.29.3",
+          "pyo3-ffi": "0.29.3",
+          "pyo3-macros": "0.29.3",
+          "pyo3-macros-backend": "0.29.3",
+          "quote": "1.0.47",
+          "rustversion": "1.0.23",
+          "serde": "1.0.229",
+          "serde_core": "1.0.229",
+          "serde_derive": "1.0.229",
+          "serde_json": "1.0.154",
+          "shlex": "2.0.1",
+          "simd-adler32": "0.3.10",
+          "slab": "0.4.12",
+          "syn": "3.0.10",
+          "target-lexicon": "0.13.6",
+          "unicode-ident": "1.0.27",
+          "wasm-bindgen": "0.2.130",
+          "wasm-bindgen-macro": "0.2.130",
+          "wasm-bindgen-macro-support": "0.2.130",
+          "wasm-bindgen-shared": "0.2.130",
+          "windows-core": "0.62.2",
+          "windows-implement": "0.60.2",
+          "windows-interface": "0.59.3",
+          "windows-link": "0.2.1",
+          "windows-result": "0.4.1",
+          "windows-strings": "0.5.1",
+          "windows-sys": "0.61.2",
+          "zlib-rs": "0.6.8",
+          "zmij": "1.0.23"
+        }
+      },
+      "new": {
+        "sha": "936c7821ad07c8c95d0e20200615215ce56c1c92",
+        "source_archive_sha256": "6f25831195b588fdc55eafe5e2d585f0a953b4a5bcf5beb1e0cbb2656fe6ea26",
+        "wheel": "/study/new/dist/logust-0.5.0-cp314-cp314-macosx_11_0_arm64.whl",
+        "wheel_sha256": "8e4215deecd4c73ec8b52f7ee27eac53f72ddf37867a9f8bd5cbd3ce900ed5e3",
+        "native_sha256": "2b8470c4ab720e002e6a728f6680499d6f309e540907e0f9741da5929f2ec227",
+        "dependencies": {
+          "adler2": "2.0.1",
+          "android_system_properties": "0.1.6",
+          "autocfg": "1.5.1",
+          "bumpalo": "3.20.4",
+          "bzip2": "0.6.1",
+          "cc": "1.11.2",
+          "cfg-if": "1.0.5",
+          "chrono": "0.4.45",
+          "colored": "3.1.1",
+          "core-foundation-sys": "0.8.7",
+          "crc32fast": "1.5.5",
+          "crossbeam-channel": "0.5.17",
+          "crossbeam-utils": "0.8.23",
+          "find-msvc-tools": "0.1.15",
+          "flate2": "1.1.11",
+          "futures-core": "0.3.34",
+          "futures-task": "0.3.34",
+          "futures-util": "0.3.34",
+          "heck": "0.5.0",
+          "iana-time-zone": "0.1.65",
+          "iana-time-zone-haiku": "0.1.2",
+          "itoa": "1.0.19",
+          "js-sys": "0.3.107",
+          "libbz2-rs-sys": "0.2.6",
+          "libc": "0.2.191",
+          "log": "0.4.35",
+          "memchr": "2.8.3",
+          "miniz_oxide": "0.9.1",
+          "num-traits": "0.2.19",
+          "once_cell": "1.21.4",
+          "pin-project-lite": "0.2.17",
+          "portable-atomic": "1.15.0",
+          "proc-macro2": "1.0.107",
+          "pyo3": "0.30.1",
+          "pyo3-build-config": "0.30.1",
+          "pyo3-ffi": "0.30.1",
+          "pyo3-macros": "0.30.1",
+          "pyo3-macros-backend": "0.30.1",
+          "quote": "1.0.47",
+          "rustversion": "1.0.23",
+          "serde": "1.0.229",
+          "serde_core": "1.0.229",
+          "serde_derive": "1.0.229",
+          "serde_json": "1.0.154",
+          "shlex": "2.0.1",
+          "simd-adler32": "0.3.10",
+          "slab": "0.4.12",
+          "syn": "3.0.10",
+          "target-lexicon": "0.13.6",
+          "unicode-ident": "1.0.27",
+          "wasm-bindgen": "0.2.130",
+          "wasm-bindgen-macro": "0.2.130",
+          "wasm-bindgen-macro-support": "0.2.130",
+          "wasm-bindgen-shared": "0.2.130",
+          "windows-core": "0.62.2",
+          "windows-implement": "0.60.2",
+          "windows-interface": "0.59.3",
+          "windows-link": "0.2.1",
+          "windows-result": "0.4.1",
+          "windows-strings": "0.5.1",
+          "windows-sys": "0.61.2",
+          "zlib-rs": "0.6.8",
+          "zmij": "1.0.23"
+        }
+      }
+    },
+    "dependency_changes": {
+      "bzip2": [
+        null,
+        "0.6.1"
+      ],
+      "libbz2-rs-sys": [
+        null,
+        "0.2.6"
+      ],
+      "pyo3": [
+        "0.29.3",
+        "0.30.1"
+      ],
+      "pyo3-build-config": [
+        "0.29.3",
+        "0.30.1"
+      ],
+      "pyo3-ffi": [
+        "0.29.3",
+        "0.30.1"
+      ],
+      "pyo3-macros": [
+        "0.29.3",
+        "0.30.1"
+      ],
+      "pyo3-macros-backend": [
+        "0.29.3",
+        "0.30.1"
+      ]
+    }
+  },
+  "summary": {
+    "order": [
+      "old",
+      "new",
+      "new",
+      "old",
+      "new",
+      "old",
+      "old",
+      "new",
+      "old",
+      "new",
+      "new",
+      "old"
+    ],
+    "processes_per_head": 6,
+    "nested_suites_per_process": 3,
+    "calls_per_case": 10000,
+    "script_sha256": "711e9f6ba5e62825c3a9e7dd07559af32ee0044b24c90d21e84ef41f3ae4db7c",
+    "cases": {
+      "file": {
+        "old_ms": 14.844083547359332,
+        "new_ms": 6.8882289924658835,
+        "reduction_percent": 53.59613161372124,
+        "speedup": 2.1549927511985008,
+        "old_process_ms": [
+          14.881083043292165,
+          15.018500038422644,
+          14.526707993354648,
+          14.8070840514265,
+          14.352875004988164,
+          15.122791985049844
+        ],
+        "new_process_ms": [
+          6.889540993142873,
+          7.043208985123783,
+          6.775624991860241,
+          6.942167005036026,
+          6.886916991788894,
+          6.825916992966086
+        ],
+        "paired_changes_percent": [
+          -53.7026910400287,
+          -53.1031130465442,
+          -53.357464093311435,
+          -53.11590735268889,
+          -52.017160398906626,
+          -54.863381049517315
+        ],
+        "pairs_faster": 6,
+        "controls": {
+          "logging": {
+            "old": 71.2192295177374,
+            "new": 70.60120851383545
+          },
+          "loguru": {
+            "old": 80.0930414989125,
+            "new": 78.44595852657221
+          }
+        }
+      },
+      "formatted": {
+        "old_ms": 16.277312504826114,
+        "new_ms": 7.55343702621758,
+        "reduction_percent": 53.5953062031706,
+        "speedup": 2.1549544198658737,
+        "old_process_ms": [
+          16.307084006257355,
+          16.944084025453776,
+          15.5539580155164,
+          16.247541003394872,
+          15.858541009947658,
+          16.325125005096197
+        ],
+        "new_process_ms": [
+          7.708084012847394,
+          7.714167004451156,
+          7.5345830409787595,
+          7.5722910114564,
+          7.502916036173701,
+          7.477334002032876
+        ],
+        "paired_changes_percent": [
+          -52.73168391179166,
+          -54.47280010614464,
+          -51.55841983460178,
+          -53.3942335651026,
+          -52.68848482677371,
+          -54.197385933040735
+        ],
+        "pairs_faster": 6,
+        "controls": {
+          "logging": {
+            "old": 70.33435450284742,
+            "new": 68.89918749220669
+          },
+          "loguru": {
+            "old": 79.1681875125505,
+            "new": 78.88064600410871
+          }
+        }
+      },
+      "json": {
+        "old_ms": 15.59797950903885,
+        "new_ms": 7.392562518361956,
+        "reduction_percent": 52.605640274895535,
+        "speedup": 2.1099557116082464,
+        "old_process_ms": [
+          15.622125007212162,
+          15.532416990026832,
+          15.57383401086554,
+          16.019542003050447,
+          15.3184580267407,
+          15.651834022719413
+        ],
+        "new_process_ms": [
+          7.278417004272342,
+          7.383667048998177,
+          7.196166960056871,
+          7.530000002589077,
+          7.691832957789302,
+          7.401457987725735
+        ],
+        "paired_changes_percent": [
+          -53.4095585529359,
+          -52.46285846086198,
+          -53.793221662461185,
+          -52.99491083356058,
+          -49.78715909680963,
+          -52.71188042895068
+        ],
+        "pairs_faster": 6,
+        "controls": {
+          "loguru": {
+            "old": 157.68752101575956,
+            "new": 159.46106251794845
+          }
+        }
+      },
+      "context": {
+        "old_ms": 14.736041484866291,
+        "new_ms": 6.8885834771208465,
+        "reduction_percent": 53.25350105592926,
+        "speedup": 2.139197635306202,
+        "old_process_ms": [
+          15.179124951828271,
+          14.527874998748302,
+          14.570374973118305,
+          15.017333964351565,
+          14.375375001691282,
+          14.901707996614277
+        ],
+        "new_process_ms": [
+          6.798583024647087,
+          6.884541944600642,
+          6.851666956208646,
+          6.892625009641051,
+          7.080834009684622,
+          6.9477499928325415
+        ],
+        "paired_changes_percent": [
+          -55.210968707203236,
+          -52.611500682695834,
+          -52.97535602996033,
+          -54.10220598407882,
+          -50.74330924340025,
+          -53.37614993924793
+        ],
+        "pairs_faster": 6,
+        "controls": {
+          "loguru": {
+            "old": 79.64220849680714,
+            "new": 79.39697950496338
+          }
+        }
+      },
+      "async": {
+        "old_ms": 14.3889170140028,
+        "new_ms": 6.741916469763964,
+        "reduction_percent": 53.145073647982244,
+        "speedup": 2.13424729875162,
+        "old_process_ms": [
+          14.82820900855586,
+          14.37320903642103,
+          14.40462499158457,
+          15.034749987535179,
+          14.306375000160187,
+          14.147625013720244
+        ],
+        "new_process_ms": [
+          6.678625009953976,
+          6.769832980353385,
+          8.13045899849385,
+          6.713999959174544,
+          6.944749969989061,
+          6.6541669657453895
+        ],
+        "paired_changes_percent": [
+          -54.960002208625355,
+          -52.89964152612718,
+          -43.556607664248084,
+          -55.343454565317664,
+          -51.456955588600884,
+          -52.96619072606013
+        ],
+        "pairs_faster": 6,
+        "controls": {
+          "loguru": {
+            "old": 331.2545829976443,
+            "new": 327.30877050198615
+          }
+        }
+      },
+      "async_context": {
+        "old_ms": 14.760312507860363,
+        "new_ms": 6.910374533617869,
+        "reduction_percent": 53.18273559629674,
+        "speedup": 2.135964184872151,
+        "old_process_ms": [
+          15.494874969590455,
+          14.820125012192875,
+          14.653875026851892,
+          14.70050000352785,
+          14.41450003767386,
+          15.0438750279136
+        ],
+        "new_process_ms": [
+          8.40649998281151,
+          7.708541990723461,
+          6.846208998467773,
+          6.92033302038908,
+          6.803416996262968,
+          6.900416046846658
+        ],
+        "paired_changes_percent": [
+          -45.74657750185317,
+          -47.98598537879095,
+          -53.28055558053608,
+          -52.924505841785475,
+          -52.80157495243331,
+          -54.13139211776834
+        ],
+        "pairs_faster": 6,
+        "controls": {
+          "loguru": {
+            "old": 334.4058125221636,
+            "new": 334.443646017462
+          }
+        }
+      },
+      "nonblocking": {
+        "old_ms": 14.668457995867357,
+        "new_ms": 6.525625009089708,
+        "reduction_percent": 55.512535735329394,
+        "speedup": 2.2478242276311144,
+        "old_process_ms": [
+          16.355875006411225,
+          14.354499988257885,
+          14.148207963444293,
+          14.603915973566473,
+          14.73300001816824,
+          15.461582981515676
+        ],
+        "new_process_ms": [
+          6.42704195342958,
+          6.688250054139644,
+          6.528333004098386,
+          6.522917014081031,
+          7.17320799594745,
+          6.416290998458862
+        ],
+        "paired_changes_percent": [
+          -60.70499468288742,
+          -53.406596819041454,
+          -53.8575272503338,
+          -55.33446627680063,
+          -51.31196642162702,
+          -58.50171999769016
+        ],
+        "pairs_faster": 6,
+        "controls": {
+          "loguru": {
+            "old": 319.4123335124459,
+            "new": 318.4074164892081
+          }
+        }
+      },
+      "callable_sink": {
+        "old_ms": 7.91968748671934,
+        "new_ms": 4.129729466512799,
+        "reduction_percent": 47.854893599804115,
+        "speedup": 1.9177254953232648,
+        "old_process_ms": [
+          7.834957970771939,
+          7.8359999461099505,
+          7.935790985357016,
+          7.903583988081664,
+          8.084667031653225,
+          8.037457999307662
+        ],
+        "new_process_ms": [
+          4.351999959908426,
+          4.197165952064097,
+          3.970709047280252,
+          4.098666948266327,
+          4.053250013384968,
+          4.160791984759271
+        ],
+        "paired_changes_percent": [
+          -44.45407395746827,
+          -46.43739176966548,
+          -49.96454600925181,
+          -48.14166643326651,
+          -49.86497282429055,
+          -48.232488616205806
+        ],
+        "pairs_faster": 6,
+        "controls": {
+          "loguru": {
+            "old": 40.07543751504272,
+            "new": 39.98020850121975
+          }
+        }
+      },
+      "latency.sync": {
+        "old_ms": 15.428354032337666,
+        "new_ms": 7.545103988377377,
+        "reduction_percent": 51.095859139847846,
+        "speedup": 2.0448166196388806,
+        "old_process_ms": [
+          15.490167017560452,
+          15.366541047114879,
+          15.19920799182728,
+          15.629875008016825,
+          15.146874997299165,
+          15.692457964178175
+        ],
+        "new_process_ms": [
+          7.36954202875495,
+          8.59366700751707,
+          7.5255000265315175,
+          7.652166998013854,
+          7.551999995484948,
+          7.538207981269807
+        ],
+        "paired_changes_percent": [
+          -52.42438625483858,
+          -44.07546251841392,
+          -50.48755151861839,
+          -51.04140631905931,
+          -50.14153086473914,
+          -51.96286013014924
+        ],
+        "pairs_faster": 6,
+        "controls": {
+          "loguru": {
+            "old": 77.10295796277933,
+            "new": 77.74966603028588
+          }
+        }
+      },
+      "latency.async": {
+        "old_ms": 16.3020835025236,
+        "new_ms": 8.323353482410312,
+        "reduction_percent": 48.94300792213562,
+        "speedup": 1.9585955993548378,
+        "old_process_ms": [
+          17.00979203451425,
+          16.04254200356081,
+          15.986791986506432,
+          17.41974998731166,
+          16.055000014603138,
+          16.549166990444064
+        ],
+        "new_process_ms": [
+          8.359915984328836,
+          8.066625043284148,
+          8.220374991651624,
+          8.286790980491787,
+          9.98662505298853,
+          8.52129200939089
+        ],
+        "paired_changes_percent": [
+          -50.85233277769717,
+          -49.71728893405001,
+          -48.58020922152494,
+          -52.428760536013506,
+          -37.79741486200561,
+          -48.50923907945751
+        ],
+        "pairs_faster": 6,
+        "controls": {
+          "loguru": {
+            "old": 323.1722499767784,
+            "new": 324.4808750168886
+          }
+        }
+      }
+    }
+  },
+  "raw": [
+    {"label":"old","python":"3.14.9 (main, Oct 21 2026, 17:47:42) [Clang 23.1.3 ]","package":"/study/old/env/lib/python3.14/site-packages/logust/__init__.py","native":"/study/old/env/lib/python3.14/site-packages/logust/_logust.cpython-314-darwin.so","loguru":"0.7.3","n":10000,"warmup_suites":1,"samples":[{"file":{"logging":0.06922962499083951,"loguru":0.0773389579844661,"logust":0.014713999989908189},"formatted":{"logging":0.0723734589992091,"loguru":0.07830012502381578,"logust":0.016307084006257355},"json":{"logging":null,"loguru":0.1591337090358138,"logust":0.015710167004726827},"context":{"logging":null,"loguru":0.0804204999585636,"logust":0.015179124951828271},"async":{"logging":null,"loguru":0.3546685000183061,"logust":0.01482820900855586},"async_context":{"logging":null,"loguru":0.3251897500013001,"logust":0.014983375032898039},"nonblocking":{"logging":null,"loguru":0.30342820804798976,"logust":0.016355875006411225},"callable_sink":{"loguru":0.03928408399224281,"logust":0.007733291946351528},"latency.sync":{"loguru":0.07624758296879008,"logust":0.015747042023576796},"latency.async":{"loguru":0.3283638329594396,"logust":0.01747933402657509}},{"file":{"logging":0.06764787499560043,"loguru":0.07583745796000585,"logust":0.014881083043292165},"formatted":{"logging":0.06812512496253476,"loguru":0.0793581249890849,"logust":0.015553709003143013},"json":{"logging":null,"loguru":0.1577079170383513,"logust":0.015278709004633129},"context":{"logging":null,"loguru":0.07782270800089464,"logust":0.015109041996765882},"async":{"logging":null,"loguru":0.35291491699172184,"logust":0.015062167018186301},"async_context":{"logging":null,"loguru":0.3448570420150645,"logust":0.015778750006575137},"nonblocking":{"logging":null,"loguru":0.3829425419680774,"logust":0.01695250003831461},"callable_sink":{"loguru":0.03934208396822214,"logust":0.007834957970771939},"latency.sync":{"loguru":0.07826991699403152,"logust":0.015490167017560452},"latency.async":{"loguru":0.3422432499937713,"logust":0.01700979203451425}},{"file":{"logging":0.08235429198248312,"loguru":0.09587520797504112,"logust":0.015064082981552929},"formatted":{"logging":0.07240654103225097,"loguru":0.0817600839654915,"logust":0.017305333982221782},"json":{"logging":null,"loguru":0.16422766697360203,"logust":0.015622125007212162},"context":{"logging":null,"loguru":0.08190850005485117,"logust":0.015383124991785735},"async":{"logging":null,"loguru":0.3319250420317985,"logust":0.014240707969292998},"async_context":{"logging":null,"loguru":0.33849512500455603,"logust":0.015494874969590455},"nonblocking":{"logging":null,"loguru":0.3197875000187196,"logust":0.014794333023019135},"callable_sink":{"loguru":0.03948224999476224,"logust":0.007915000023785979},"latency.sync":{"loguru":0.07694820797769353,"logust":0.015099708049092442},"latency.async":{"loguru":0.3159909999812953,"logust":0.016271499975118786}}],"output_checks":[{"case":"file","file":"logust.log","lines":10000,"message_sha256":"44093c8c669d67a7f9c7f2bd89638200be71dbc8373c7a712a914699380674b0"},{"case":"formatted","file":"logust.log","lines":10000,"message_sha256":"40cd4acccdcb7f1e2a2a0d88fa58dae63866b68084a94841f769a38a01548a5e"},{"case":"json","file":"logust.json","lines":10000,"message_sha256":"4bc0f0b4c39b12df6bc1aa983e41b8f0e1cea0b013d6d286ef44e79babfd1bb2"},{"case":"context","file":"logust.log","lines":10000,"message_sha256":"a3cafb74508d45b48a8f35f7b2bf8fbf2edab6592b6f89a31eadca741eac2b3f"},{"case":"async","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"async_context","file":"logust_async_ctx.log","lines":10000,"message_sha256":"d16456e57608612f05517d14c887167c0d2f01d2b48c045fe7e1c3660ae9f18f"},{"case":"nonblocking","file":"logust_nonblock.log","lines":10000,"message_sha256":"a59bbd248568e533fdefd199dd935f13be0440847b7720fd479efeb719ceaee7"},{"case":"latency","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"latency","file":"logust_sync.log","lines":10000,"message_sha256":"d436d688b0fdd94bb31031db49528d72e5566e4c20e76dce59b77b43daebcf15"},{"case":"file","file":"logust.log","lines":10000,"message_sha256":"44093c8c669d67a7f9c7f2bd89638200be71dbc8373c7a712a914699380674b0"},{"case":"formatted","file":"logust.log","lines":10000,"message_sha256":"40cd4acccdcb7f1e2a2a0d88fa58dae63866b68084a94841f769a38a01548a5e"},{"case":"json","file":"logust.json","lines":10000,"message_sha256":"4bc0f0b4c39b12df6bc1aa983e41b8f0e1cea0b013d6d286ef44e79babfd1bb2"},{"case":"context","file":"logust.log","lines":10000,"message_sha256":"a3cafb74508d45b48a8f35f7b2bf8fbf2edab6592b6f89a31eadca741eac2b3f"},{"case":"async","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"async_context","file":"logust_async_ctx.log","lines":10000,"message_sha256":"d16456e57608612f05517d14c887167c0d2f01d2b48c045fe7e1c3660ae9f18f"},{"case":"nonblocking","file":"logust_nonblock.log","lines":10000,"message_sha256":"a59bbd248568e533fdefd199dd935f13be0440847b7720fd479efeb719ceaee7"},{"case":"latency","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"latency","file":"logust_sync.log","lines":10000,"message_sha256":"d436d688b0fdd94bb31031db49528d72e5566e4c20e76dce59b77b43daebcf15"},{"case":"file","file":"logust.log","lines":10000,"message_sha256":"44093c8c669d67a7f9c7f2bd89638200be71dbc8373c7a712a914699380674b0"},{"case":"formatted","file":"logust.log","lines":10000,"message_sha256":"40cd4acccdcb7f1e2a2a0d88fa58dae63866b68084a94841f769a38a01548a5e"},{"case":"json","file":"logust.json","lines":10000,"message_sha256":"4bc0f0b4c39b12df6bc1aa983e41b8f0e1cea0b013d6d286ef44e79babfd1bb2"},{"case":"context","file":"logust.log","lines":10000,"message_sha256":"a3cafb74508d45b48a8f35f7b2bf8fbf2edab6592b6f89a31eadca741eac2b3f"},{"case":"async","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"async_context","file":"logust_async_ctx.log","lines":10000,"message_sha256":"d16456e57608612f05517d14c887167c0d2f01d2b48c045fe7e1c3660ae9f18f"},{"case":"nonblocking","file":"logust_nonblock.log","lines":10000,"message_sha256":"a59bbd248568e533fdefd199dd935f13be0440847b7720fd479efeb719ceaee7"},{"case":"latency","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"latency","file":"logust_sync.log","lines":10000,"message_sha256":"d436d688b0fdd94bb31031db49528d72e5566e4c20e76dce59b77b43daebcf15"},{"case":"file","file":"logust.log","lines":10000,"message_sha256":"44093c8c669d67a7f9c7f2bd89638200be71dbc8373c7a712a914699380674b0"},{"case":"formatted","file":"logust.log","lines":10000,"message_sha256":"40cd4acccdcb7f1e2a2a0d88fa58dae63866b68084a94841f769a38a01548a5e"},{"case":"json","file":"logust.json","lines":10000,"message_sha256":"4bc0f0b4c39b12df6bc1aa983e41b8f0e1cea0b013d6d286ef44e79babfd1bb2"},{"case":"context","file":"logust.log","lines":10000,"message_sha256":"a3cafb74508d45b48a8f35f7b2bf8fbf2edab6592b6f89a31eadca741eac2b3f"},{"case":"async","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"async_context","file":"logust_async_ctx.log","lines":10000,"message_sha256":"d16456e57608612f05517d14c887167c0d2f01d2b48c045fe7e1c3660ae9f18f"},{"case":"nonblocking","file":"logust_nonblock.log","lines":10000,"message_sha256":"a59bbd248568e533fdefd199dd935f13be0440847b7720fd479efeb719ceaee7"},{"case":"latency","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"latency","file":"logust_sync.log","lines":10000,"message_sha256":"d436d688b0fdd94bb31031db49528d72e5566e4c20e76dce59b77b43daebcf15"}],"pid":86166,"tmpdir":"/study/tmp"},
+    {"label":"new","python":"3.14.9 (main, Oct 21 2026, 17:47:42) [Clang 23.1.3 ]","package":"/study/new/env/lib/python3.14/site-packages/logust/__init__.py","native":"/study/new/env/lib/python3.14/site-packages/logust/_logust.cpython-314-darwin.so","loguru":"0.7.3","n":10000,"warmup_suites":1,"samples":[{"file":{"logging":0.07012500002747402,"loguru":0.07699720800155774,"logust":0.006889540993142873},"formatted":{"logging":0.07038470800034702,"loguru":0.07858595799189061,"logust":0.007521957973949611},"json":{"logging":null,"loguru":0.15859700000146404,"logust":0.00734912499319762},"context":{"logging":null,"loguru":0.07704841700615361,"logust":0.006798583024647087},"async":{"logging":null,"loguru":0.312041292025242,"logust":0.006540458009112626},"async_context":{"logging":null,"loguru":0.3371572500327602,"logust":0.00840649998281151},"nonblocking":{"logging":null,"loguru":0.3514427079935558,"logust":0.006349915987811983},"callable_sink":{"loguru":0.03998858301201835,"logust":0.00430945900734514},"latency.sync":{"loguru":0.07732879102695733,"logust":0.00736954202875495},"latency.async":{"loguru":0.3246004999964498,"logust":0.008281957998406142}},{"file":{"logging":0.07140683301258832,"loguru":0.07749762496678159,"logust":0.006742166995536536},"formatted":{"logging":0.06893525004852563,"loguru":0.07821483298903331,"logust":0.007708084012847394},"json":{"logging":null,"loguru":0.15498308301903307,"logust":0.007278417004272342},"context":{"logging":null,"loguru":0.07859300001291558,"logust":0.0066669590305536985},"async":{"logging":null,"loguru":0.3631183340330608,"logust":0.008106624998617917},"async_context":{"logging":null,"loguru":0.37011091597378254,"logust":0.009500875021331012},"nonblocking":{"logging":null,"loguru":0.3261171249905601,"logust":0.006878332991618663},"callable_sink":{"loguru":0.04150766599923372,"logust":0.004833667015191168},"latency.sync":{"loguru":0.07805849995929748,"logust":0.007658499991521239},"latency.async":{"loguru":0.31631129200104624,"logust":0.008359915984328836}},{"file":{"logging":0.07226991601055488,"loguru":0.08316958299838006,"logust":0.007092415995430201},"formatted":{"logging":0.07066399999894202,"loguru":0.08129058300983161,"logust":0.008211666019633412},"json":{"logging":null,"loguru":0.15810025000246242,"logust":0.007217000005766749},"context":{"logging":null,"loguru":0.08478229201864451,"logust":0.0068551250151358545},"async":{"logging":null,"loguru":0.31387579103466123,"logust":0.006678625009953976},"async_context":{"logging":null,"loguru":0.3336695830221288,"logust":0.0068984999670647085},"nonblocking":{"logging":null,"loguru":0.3101428329828195,"logust":0.00642704195342958},"callable_sink":{"loguru":0.040462167002260685,"logust":0.004351999959908426},"latency.sync":{"loguru":0.08791437500622123,"logust":0.007358458999078721},"latency.async":{"loguru":0.3296031249919906,"logust":0.009603124985005707}}],"output_checks":[{"case":"file","file":"logust.log","lines":10000,"message_sha256":"44093c8c669d67a7f9c7f2bd89638200be71dbc8373c7a712a914699380674b0"},{"case":"formatted","file":"logust.log","lines":10000,"message_sha256":"40cd4acccdcb7f1e2a2a0d88fa58dae63866b68084a94841f769a38a01548a5e"},{"case":"json","file":"logust.json","lines":10000,"message_sha256":"4bc0f0b4c39b12df6bc1aa983e41b8f0e1cea0b013d6d286ef44e79babfd1bb2"},{"case":"context","file":"logust.log","lines":10000,"message_sha256":"a3cafb74508d45b48a8f35f7b2bf8fbf2edab6592b6f89a31eadca741eac2b3f"},{"case":"async","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"async_context","file":"logust_async_ctx.log","lines":10000,"message_sha256":"d16456e57608612f05517d14c887167c0d2f01d2b48c045fe7e1c3660ae9f18f"},{"case":"nonblocking","file":"logust_nonblock.log","lines":10000,"message_sha256":"a59bbd248568e533fdefd199dd935f13be0440847b7720fd479efeb719ceaee7"},{"case":"latency","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"latency","file":"logust_sync.log","lines":10000,"message_sha256":"d436d688b0fdd94bb31031db49528d72e5566e4c20e76dce59b77b43daebcf15"},{"case":"file","file":"logust.log","lines":10000,"message_sha256":"44093c8c669d67a7f9c7f2bd89638200be71dbc8373c7a712a914699380674b0"},{"case":"formatted","file":"logust.log","lines":10000,"message_sha256":"40cd4acccdcb7f1e2a2a0d88fa58dae63866b68084a94841f769a38a01548a5e"},{"case":"json","file":"logust.json","lines":10000,"message_sha256":"4bc0f0b4c39b12df6bc1aa983e41b8f0e1cea0b013d6d286ef44e79babfd1bb2"},{"case":"context","file":"logust.log","lines":10000,"message_sha256":"a3cafb74508d45b48a8f35f7b2bf8fbf2edab6592b6f89a31eadca741eac2b3f"},{"case":"async","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"async_context","file":"logust_async_ctx.log","lines":10000,"message_sha256":"d16456e57608612f05517d14c887167c0d2f01d2b48c045fe7e1c3660ae9f18f"},{"case":"nonblocking","file":"logust_nonblock.log","lines":10000,"message_sha256":"a59bbd248568e533fdefd199dd935f13be0440847b7720fd479efeb719ceaee7"},{"case":"latency","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"latency","file":"logust_sync.log","lines":10000,"message_sha256":"d436d688b0fdd94bb31031db49528d72e5566e4c20e76dce59b77b43daebcf15"},{"case":"file","file":"logust.log","lines":10000,"message_sha256":"44093c8c669d67a7f9c7f2bd89638200be71dbc8373c7a712a914699380674b0"},{"case":"formatted","file":"logust.log","lines":10000,"message_sha256":"40cd4acccdcb7f1e2a2a0d88fa58dae63866b68084a94841f769a38a01548a5e"},{"case":"json","file":"logust.json","lines":10000,"message_sha256":"4bc0f0b4c39b12df6bc1aa983e41b8f0e1cea0b013d6d286ef44e79babfd1bb2"},{"case":"context","file":"logust.log","lines":10000,"message_sha256":"a3cafb74508d45b48a8f35f7b2bf8fbf2edab6592b6f89a31eadca741eac2b3f"},{"case":"async","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"async_context","file":"logust_async_ctx.log","lines":10000,"message_sha256":"d16456e57608612f05517d14c887167c0d2f01d2b48c045fe7e1c3660ae9f18f"},{"case":"nonblocking","file":"logust_nonblock.log","lines":10000,"message_sha256":"a59bbd248568e533fdefd199dd935f13be0440847b7720fd479efeb719ceaee7"},{"case":"latency","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"latency","file":"logust_sync.log","lines":10000,"message_sha256":"d436d688b0fdd94bb31031db49528d72e5566e4c20e76dce59b77b43daebcf15"},{"case":"file","file":"logust.log","lines":10000,"message_sha256":"44093c8c669d67a7f9c7f2bd89638200be71dbc8373c7a712a914699380674b0"},{"case":"formatted","file":"logust.log","lines":10000,"message_sha256":"40cd4acccdcb7f1e2a2a0d88fa58dae63866b68084a94841f769a38a01548a5e"},{"case":"json","file":"logust.json","lines":10000,"message_sha256":"4bc0f0b4c39b12df6bc1aa983e41b8f0e1cea0b013d6d286ef44e79babfd1bb2"},{"case":"context","file":"logust.log","lines":10000,"message_sha256":"a3cafb74508d45b48a8f35f7b2bf8fbf2edab6592b6f89a31eadca741eac2b3f"},{"case":"async","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"async_context","file":"logust_async_ctx.log","lines":10000,"message_sha256":"d16456e57608612f05517d14c887167c0d2f01d2b48c045fe7e1c3660ae9f18f"},{"case":"nonblocking","file":"logust_nonblock.log","lines":10000,"message_sha256":"a59bbd248568e533fdefd199dd935f13be0440847b7720fd479efeb719ceaee7"},{"case":"latency","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"latency","file":"logust_sync.log","lines":10000,"message_sha256":"d436d688b0fdd94bb31031db49528d72e5566e4c20e76dce59b77b43daebcf15"}],"pid":86202,"tmpdir":"/study/tmp"},
+    {"label":"new","python":"3.14.9 (main, Oct 21 2026, 17:47:42) [Clang 23.1.3 ]","package":"/study/new/env/lib/python3.14/site-packages/logust/__init__.py","native":"/study/new/env/lib/python3.14/site-packages/logust/_logust.cpython-314-darwin.so","loguru":"0.7.3","n":10000,"warmup_suites":1,"samples":[{"file":{"logging":0.06898120796540752,"loguru":0.0777250420069322,"logust":0.006642791966442019},"formatted":{"logging":0.06894383300095797,"loguru":0.078033083002083,"logust":0.007636624970473349},"json":{"logging":null,"loguru":0.15366758400341496,"logust":0.007235834025777876},"context":{"logging":null,"loguru":0.0776807910297066,"logust":0.006884541944600642},"async":{"logging":null,"loguru":0.3233245830051601,"logust":0.007032916997559369},"async_context":{"logging":null,"loguru":0.3503807500237599,"logust":0.00939066702267155},"nonblocking":{"logging":null,"loguru":0.33557020797161385,"logust":0.006688250054139644},"callable_sink":{"loguru":0.0396256250096485,"logust":0.0041473330347798765},"latency.sync":{"loguru":0.07607016700785607,"logust":0.009415082982741296},"latency.async":{"loguru":0.32691599999088794,"logust":0.008023749978747219}},{"file":{"logging":0.07105262501863763,"loguru":0.08032875001663342,"logust":0.007043208985123783},"formatted":{"logging":0.07272391597507522,"loguru":0.08254666702123359,"logust":0.007997874985449016},"json":{"logging":null,"loguru":0.16137337498366833,"logust":0.007555917021818459},"context":{"logging":null,"loguru":0.0818776250234805,"logust":0.007050750020425767},"async":{"logging":null,"loguru":0.3399250420043245,"logust":0.006769832980353385},"async_context":{"logging":null,"loguru":0.33388241700595245,"logust":0.007708541990723461},"nonblocking":{"logging":null,"loguru":0.32797787501476705,"logust":0.007530291972216219},"callable_sink":{"loguru":0.04061262495815754,"logust":0.004197165952064097},"latency.sync":{"loguru":0.07930654200026765,"logust":0.00859366700751707},"latency.async":{"loguru":0.3243612500373274,"logust":0.008297958003822714}},{"file":{"logging":0.0703018750064075,"loguru":0.07781470898771659,"logust":0.00719137501437217},"formatted":{"logging":0.0687742920126766,"loguru":0.07801962498342618,"logust":0.007714167004451156},"json":{"logging":null,"loguru":0.1558461669483222,"logust":0.007383667048998177},"context":{"logging":null,"loguru":0.07725524995476007,"logust":0.0068134579923935235},"async":{"logging":null,"loguru":0.3238237079931423,"logust":0.006587624957319349},"async_context":{"logging":null,"loguru":0.32511637499555945,"logust":0.006931416981387883},"nonblocking":{"logging":null,"loguru":0.3234978749533184,"logust":0.006627959024626762},"callable_sink":{"loguru":0.04002524999668822,"logust":0.004226082994136959},"latency.sync":{"loguru":0.07882566598709673,"logust":0.007532957999501377},"latency.async":{"loguru":0.31773341598454863,"logust":0.008066625043284148}}],"output_checks":[{"case":"file","file":"logust.log","lines":10000,"message_sha256":"44093c8c669d67a7f9c7f2bd89638200be71dbc8373c7a712a914699380674b0"},{"case":"formatted","file":"logust.log","lines":10000,"message_sha256":"40cd4acccdcb7f1e2a2a0d88fa58dae63866b68084a94841f769a38a01548a5e"},{"case":"json","file":"logust.json","lines":10000,"message_sha256":"4bc0f0b4c39b12df6bc1aa983e41b8f0e1cea0b013d6d286ef44e79babfd1bb2"},{"case":"context","file":"logust.log","lines":10000,"message_sha256":"a3cafb74508d45b48a8f35f7b2bf8fbf2edab6592b6f89a31eadca741eac2b3f"},{"case":"async","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"async_context","file":"logust_async_ctx.log","lines":10000,"message_sha256":"d16456e57608612f05517d14c887167c0d2f01d2b48c045fe7e1c3660ae9f18f"},{"case":"nonblocking","file":"logust_nonblock.log","lines":10000,"message_sha256":"a59bbd248568e533fdefd199dd935f13be0440847b7720fd479efeb719ceaee7"},{"case":"latency","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"latency","file":"logust_sync.log","lines":10000,"message_sha256":"d436d688b0fdd94bb31031db49528d72e5566e4c20e76dce59b77b43daebcf15"},{"case":"file","file":"logust.log","lines":10000,"message_sha256":"44093c8c669d67a7f9c7f2bd89638200be71dbc8373c7a712a914699380674b0"},{"case":"formatted","file":"logust.log","lines":10000,"message_sha256":"40cd4acccdcb7f1e2a2a0d88fa58dae63866b68084a94841f769a38a01548a5e"},{"case":"json","file":"logust.json","lines":10000,"message_sha256":"4bc0f0b4c39b12df6bc1aa983e41b8f0e1cea0b013d6d286ef44e79babfd1bb2"},{"case":"context","file":"logust.log","lines":10000,"message_sha256":"a3cafb74508d45b48a8f35f7b2bf8fbf2edab6592b6f89a31eadca741eac2b3f"},{"case":"async","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"async_context","file":"logust_async_ctx.log","lines":10000,"message_sha256":"d16456e57608612f05517d14c887167c0d2f01d2b48c045fe7e1c3660ae9f18f"},{"case":"nonblocking","file":"logust_nonblock.log","lines":10000,"message_sha256":"a59bbd248568e533fdefd199dd935f13be0440847b7720fd479efeb719ceaee7"},{"case":"latency","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"latency","file":"logust_sync.log","lines":10000,"message_sha256":"d436d688b0fdd94bb31031db49528d72e5566e4c20e76dce59b77b43daebcf15"},{"case":"file","file":"logust.log","lines":10000,"message_sha256":"44093c8c669d67a7f9c7f2bd89638200be71dbc8373c7a712a914699380674b0"},{"case":"formatted","file":"logust.log","lines":10000,"message_sha256":"40cd4acccdcb7f1e2a2a0d88fa58dae63866b68084a94841f769a38a01548a5e"},{"case":"json","file":"logust.json","lines":10000,"message_sha256":"4bc0f0b4c39b12df6bc1aa983e41b8f0e1cea0b013d6d286ef44e79babfd1bb2"},{"case":"context","file":"logust.log","lines":10000,"message_sha256":"a3cafb74508d45b48a8f35f7b2bf8fbf2edab6592b6f89a31eadca741eac2b3f"},{"case":"async","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"async_context","file":"logust_async_ctx.log","lines":10000,"message_sha256":"d16456e57608612f05517d14c887167c0d2f01d2b48c045fe7e1c3660ae9f18f"},{"case":"nonblocking","file":"logust_nonblock.log","lines":10000,"message_sha256":"a59bbd248568e533fdefd199dd935f13be0440847b7720fd479efeb719ceaee7"},{"case":"latency","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"latency","file":"logust_sync.log","lines":10000,"message_sha256":"d436d688b0fdd94bb31031db49528d72e5566e4c20e76dce59b77b43daebcf15"},{"case":"file","file":"logust.log","lines":10000,"message_sha256":"44093c8c669d67a7f9c7f2bd89638200be71dbc8373c7a712a914699380674b0"},{"case":"formatted","file":"logust.log","lines":10000,"message_sha256":"40cd4acccdcb7f1e2a2a0d88fa58dae63866b68084a94841f769a38a01548a5e"},{"case":"json","file":"logust.json","lines":10000,"message_sha256":"4bc0f0b4c39b12df6bc1aa983e41b8f0e1cea0b013d6d286ef44e79babfd1bb2"},{"case":"context","file":"logust.log","lines":10000,"message_sha256":"a3cafb74508d45b48a8f35f7b2bf8fbf2edab6592b6f89a31eadca741eac2b3f"},{"case":"async","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"async_context","file":"logust_async_ctx.log","lines":10000,"message_sha256":"d16456e57608612f05517d14c887167c0d2f01d2b48c045fe7e1c3660ae9f18f"},{"case":"nonblocking","file":"logust_nonblock.log","lines":10000,"message_sha256":"a59bbd248568e533fdefd199dd935f13be0440847b7720fd479efeb719ceaee7"},{"case":"latency","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"latency","file":"logust_sync.log","lines":10000,"message_sha256":"d436d688b0fdd94bb31031db49528d72e5566e4c20e76dce59b77b43daebcf15"}],"pid":86236,"tmpdir":"/study/tmp"},
+    {"label":"old","python":"3.14.9 (main, Oct 21 2026, 17:47:42) [Clang 23.1.3 ]","package":"/study/old/env/lib/python3.14/site-packages/logust/__init__.py","native":"/study/old/env/lib/python3.14/site-packages/logust/_logust.cpython-314-darwin.so","loguru":"0.7.3","n":10000,"warmup_suites":1,"samples":[{"file":{"logging":0.07344283297425136,"loguru":0.07930375001160428,"logust":0.015104499994777143},"formatted":{"logging":0.07202479196712375,"loguru":0.08060437499079853,"logust":0.016944084025453776},"json":{"logging":null,"loguru":0.16406854201341048,"logust":0.01562683400698006},"context":{"logging":null,"loguru":0.08122254203772172,"logust":0.01425154198659584},"async":{"logging":null,"loguru":0.31068491603946313,"logust":0.01437320903642103},"async_context":{"logging":null,"loguru":0.317336666979827,"logust":0.014929457975085825},"nonblocking":{"logging":null,"loguru":0.30711837497074157,"logust":0.014354499988257885},"callable_sink":{"loguru":0.04022612498374656,"logust":0.007926707970909774},"latency.sync":{"loguru":0.07846941601019353,"logust":0.015272999997250736},"latency.async":{"loguru":0.3136289999820292,"logust":0.01604254200356081}},{"file":{"logging":0.06995487498352304,"loguru":0.08016716601559892,"logust":0.014948541997000575},"formatted":{"logging":0.07033870898885652,"loguru":0.07906612503575161,"logust":0.016017750022001565},"json":{"logging":null,"loguru":0.1562413329957053,"logust":0.015345249965321273},"context":{"logging":null,"loguru":0.07886391703505069,"logust":0.014527874998748302},"async":{"logging":null,"loguru":0.3192309580044821,"logust":0.014284499979112297},"async_context":{"logging":null,"loguru":0.34206187503878027,"logust":0.014532333007082343},"nonblocking":{"logging":null,"loguru":0.3093817500048317,"logust":0.014357374981045723},"callable_sink":{"loguru":0.04014104203088209,"logust":0.00783599994610995},"latency.sync":{"loguru":0.07656283304095268,"logust":0.015366541047114879},"latency.async":{"loguru":0.3169751249952242,"logust":0.015942999976687133}},{"file":{"logging":0.06907204200979322,"loguru":0.08201437501702458,"logust":0.015018500038422644},"formatted":{"logging":0.06937820895109326,"loguru":0.07871266698930413,"logust":0.017936833028215915},"json":{"logging":null,"loguru":0.1555229999939911,"logust":0.015532416990026832},"context":{"logging":null,"loguru":0.07798704196466133,"logust":0.014910458005033433},"async":{"logging":null,"loguru":0.3282390410313383,"logust":0.014461750048212707},"async_context":{"logging":null,"loguru":0.3303165000397712,"logust":0.014820125012192875},"nonblocking":{"logging":null,"loguru":0.30739558301866055,"logust":0.014207750034984201},"callable_sink":{"loguru":0.03943241701927036,"logust":0.00782129098661244},"latency.sync":{"loguru":0.07686283299699426,"logust":0.01563458301825449},"latency.async":{"loguru":0.32484412495978177,"logust":0.016221625031903386}}],"output_checks":[{"case":"file","file":"logust.log","lines":10000,"message_sha256":"44093c8c669d67a7f9c7f2bd89638200be71dbc8373c7a712a914699380674b0"},{"case":"formatted","file":"logust.log","lines":10000,"message_sha256":"40cd4acccdcb7f1e2a2a0d88fa58dae63866b68084a94841f769a38a01548a5e"},{"case":"json","file":"logust.json","lines":10000,"message_sha256":"4bc0f0b4c39b12df6bc1aa983e41b8f0e1cea0b013d6d286ef44e79babfd1bb2"},{"case":"context","file":"logust.log","lines":10000,"message_sha256":"a3cafb74508d45b48a8f35f7b2bf8fbf2edab6592b6f89a31eadca741eac2b3f"},{"case":"async","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"async_context","file":"logust_async_ctx.log","lines":10000,"message_sha256":"d16456e57608612f05517d14c887167c0d2f01d2b48c045fe7e1c3660ae9f18f"},{"case":"nonblocking","file":"logust_nonblock.log","lines":10000,"message_sha256":"a59bbd248568e533fdefd199dd935f13be0440847b7720fd479efeb719ceaee7"},{"case":"latency","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"latency","file":"logust_sync.log","lines":10000,"message_sha256":"d436d688b0fdd94bb31031db49528d72e5566e4c20e76dce59b77b43daebcf15"},{"case":"file","file":"logust.log","lines":10000,"message_sha256":"44093c8c669d67a7f9c7f2bd89638200be71dbc8373c7a712a914699380674b0"},{"case":"formatted","file":"logust.log","lines":10000,"message_sha256":"40cd4acccdcb7f1e2a2a0d88fa58dae63866b68084a94841f769a38a01548a5e"},{"case":"json","file":"logust.json","lines":10000,"message_sha256":"4bc0f0b4c39b12df6bc1aa983e41b8f0e1cea0b013d6d286ef44e79babfd1bb2"},{"case":"context","file":"logust.log","lines":10000,"message_sha256":"a3cafb74508d45b48a8f35f7b2bf8fbf2edab6592b6f89a31eadca741eac2b3f"},{"case":"async","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"async_context","file":"logust_async_ctx.log","lines":10000,"message_sha256":"d16456e57608612f05517d14c887167c0d2f01d2b48c045fe7e1c3660ae9f18f"},{"case":"nonblocking","file":"logust_nonblock.log","lines":10000,"message_sha256":"a59bbd248568e533fdefd199dd935f13be0440847b7720fd479efeb719ceaee7"},{"case":"latency","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"latency","file":"logust_sync.log","lines":10000,"message_sha256":"d436d688b0fdd94bb31031db49528d72e5566e4c20e76dce59b77b43daebcf15"},{"case":"file","file":"logust.log","lines":10000,"message_sha256":"44093c8c669d67a7f9c7f2bd89638200be71dbc8373c7a712a914699380674b0"},{"case":"formatted","file":"logust.log","lines":10000,"message_sha256":"40cd4acccdcb7f1e2a2a0d88fa58dae63866b68084a94841f769a38a01548a5e"},{"case":"json","file":"logust.json","lines":10000,"message_sha256":"4bc0f0b4c39b12df6bc1aa983e41b8f0e1cea0b013d6d286ef44e79babfd1bb2"},{"case":"context","file":"logust.log","lines":10000,"message_sha256":"a3cafb74508d45b48a8f35f7b2bf8fbf2edab6592b6f89a31eadca741eac2b3f"},{"case":"async","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"async_context","file":"logust_async_ctx.log","lines":10000,"message_sha256":"d16456e57608612f05517d14c887167c0d2f01d2b48c045fe7e1c3660ae9f18f"},{"case":"nonblocking","file":"logust_nonblock.log","lines":10000,"message_sha256":"a59bbd248568e533fdefd199dd935f13be0440847b7720fd479efeb719ceaee7"},{"case":"latency","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"latency","file":"logust_sync.log","lines":10000,"message_sha256":"d436d688b0fdd94bb31031db49528d72e5566e4c20e76dce59b77b43daebcf15"},{"case":"file","file":"logust.log","lines":10000,"message_sha256":"44093c8c669d67a7f9c7f2bd89638200be71dbc8373c7a712a914699380674b0"},{"case":"formatted","file":"logust.log","lines":10000,"message_sha256":"40cd4acccdcb7f1e2a2a0d88fa58dae63866b68084a94841f769a38a01548a5e"},{"case":"json","file":"logust.json","lines":10000,"message_sha256":"4bc0f0b4c39b12df6bc1aa983e41b8f0e1cea0b013d6d286ef44e79babfd1bb2"},{"case":"context","file":"logust.log","lines":10000,"message_sha256":"a3cafb74508d45b48a8f35f7b2bf8fbf2edab6592b6f89a31eadca741eac2b3f"},{"case":"async","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"async_context","file":"logust_async_ctx.log","lines":10000,"message_sha256":"d16456e57608612f05517d14c887167c0d2f01d2b48c045fe7e1c3660ae9f18f"},{"case":"nonblocking","file":"logust_nonblock.log","lines":10000,"message_sha256":"a59bbd248568e533fdefd199dd935f13be0440847b7720fd479efeb719ceaee7"},{"case":"latency","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"latency","file":"logust_sync.log","lines":10000,"message_sha256":"d436d688b0fdd94bb31031db49528d72e5566e4c20e76dce59b77b43daebcf15"}],"pid":86302,"tmpdir":"/study/tmp"},
+    {"label":"new","python":"3.14.9 (main, Oct 21 2026, 17:47:42) [Clang 23.1.3 ]","package":"/study/new/env/lib/python3.14/site-packages/logust/__init__.py","native":"/study/new/env/lib/python3.14/site-packages/logust/_logust.cpython-314-darwin.so","loguru":"0.7.3","n":10000,"warmup_suites":1,"samples":[{"file":{"logging":0.07090054202126339,"loguru":0.07811125001171604,"logust":0.006683583953417838},"formatted":{"logging":0.0685979169793427,"loguru":0.07860766700468957,"logust":0.007507625035941601},"json":{"logging":null,"loguru":0.16107575001660734,"logust":0.007196166960056871},"context":{"logging":null,"loguru":0.08171029097866267,"logust":0.006715166033245623},"async":{"logging":null,"loguru":0.3457645000307821,"logust":0.00813045899849385},"async_context":{"logging":null,"loguru":0.33389066701056436,"logust":0.006846208998467773},"nonblocking":{"logging":null,"loguru":0.30982170801144093,"logust":0.0062576659838669},"callable_sink":{"loguru":0.039942750008776784,"logust":0.003970709047280252},"latency.sync":{"loguru":0.07606291701085865,"logust":0.007754667021799833},"latency.async":{"loguru":0.3170828329748474,"logust":0.008577083004638553}},{"file":{"logging":0.0700842920341529,"loguru":0.07712199998786673,"logust":0.006775624991860241},"formatted":{"logging":0.06853133294498548,"loguru":0.0809294999926351,"logust":0.0075345830409787595},"json":{"logging":null,"loguru":0.1542862500064075,"logust":0.007091958017554134},"context":{"logging":null,"loguru":0.07533000002149493,"logust":0.006851666956208646},"async":{"logging":null,"loguru":0.32580495899310336,"logust":0.006880250002723187},"async_context":{"logging":null,"loguru":0.3737775419722311,"logust":0.006797083013225347},"nonblocking":{"logging":null,"loguru":0.3224662500433624,"logust":0.006786249985452741},"callable_sink":{"loguru":0.03917408298002556,"logust":0.004005791968666017},"latency.sync":{"loguru":0.08306099998299032,"logust":0.0075255000265315175},"latency.async":{"loguru":0.3691604160121642,"logust":0.008220374991651624}},{"file":{"logging":0.07090395799605176,"loguru":0.0846762919682078,"logust":0.007329459011089057},"formatted":{"logging":0.07019020803272724,"loguru":0.07841875002486631,"logust":0.00782816600985825},"json":{"logging":null,"loguru":0.1559874169761315,"logust":0.007826416986063123},"context":{"logging":null,"loguru":0.08085733302868903,"logust":0.006887166004162282},"async":{"logging":null,"loguru":0.33777312497841194,"logust":0.009027875028550625},"async_context":{"logging":null,"loguru":0.3350048750289716,"logust":0.006866625044494867},"nonblocking":{"logging":null,"loguru":0.30622220801888034,"logust":0.006528333004098386},"callable_sink":{"loguru":0.03933129197685048,"logust":0.003952833008952439},"latency.sync":{"loguru":0.07608129194704816,"logust":0.007404332980513573},"latency.async":{"loguru":0.3338662920286879,"logust":0.008025249990168959}}],"output_checks":[{"case":"file","file":"logust.log","lines":10000,"message_sha256":"44093c8c669d67a7f9c7f2bd89638200be71dbc8373c7a712a914699380674b0"},{"case":"formatted","file":"logust.log","lines":10000,"message_sha256":"40cd4acccdcb7f1e2a2a0d88fa58dae63866b68084a94841f769a38a01548a5e"},{"case":"json","file":"logust.json","lines":10000,"message_sha256":"4bc0f0b4c39b12df6bc1aa983e41b8f0e1cea0b013d6d286ef44e79babfd1bb2"},{"case":"context","file":"logust.log","lines":10000,"message_sha256":"a3cafb74508d45b48a8f35f7b2bf8fbf2edab6592b6f89a31eadca741eac2b3f"},{"case":"async","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"async_context","file":"logust_async_ctx.log","lines":10000,"message_sha256":"d16456e57608612f05517d14c887167c0d2f01d2b48c045fe7e1c3660ae9f18f"},{"case":"nonblocking","file":"logust_nonblock.log","lines":10000,"message_sha256":"a59bbd248568e533fdefd199dd935f13be0440847b7720fd479efeb719ceaee7"},{"case":"latency","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"latency","file":"logust_sync.log","lines":10000,"message_sha256":"d436d688b0fdd94bb31031db49528d72e5566e4c20e76dce59b77b43daebcf15"},{"case":"file","file":"logust.log","lines":10000,"message_sha256":"44093c8c669d67a7f9c7f2bd89638200be71dbc8373c7a712a914699380674b0"},{"case":"formatted","file":"logust.log","lines":10000,"message_sha256":"40cd4acccdcb7f1e2a2a0d88fa58dae63866b68084a94841f769a38a01548a5e"},{"case":"json","file":"logust.json","lines":10000,"message_sha256":"4bc0f0b4c39b12df6bc1aa983e41b8f0e1cea0b013d6d286ef44e79babfd1bb2"},{"case":"context","file":"logust.log","lines":10000,"message_sha256":"a3cafb74508d45b48a8f35f7b2bf8fbf2edab6592b6f89a31eadca741eac2b3f"},{"case":"async","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"async_context","file":"logust_async_ctx.log","lines":10000,"message_sha256":"d16456e57608612f05517d14c887167c0d2f01d2b48c045fe7e1c3660ae9f18f"},{"case":"nonblocking","file":"logust_nonblock.log","lines":10000,"message_sha256":"a59bbd248568e533fdefd199dd935f13be0440847b7720fd479efeb719ceaee7"},{"case":"latency","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"latency","file":"logust_sync.log","lines":10000,"message_sha256":"d436d688b0fdd94bb31031db49528d72e5566e4c20e76dce59b77b43daebcf15"},{"case":"file","file":"logust.log","lines":10000,"message_sha256":"44093c8c669d67a7f9c7f2bd89638200be71dbc8373c7a712a914699380674b0"},{"case":"formatted","file":"logust.log","lines":10000,"message_sha256":"40cd4acccdcb7f1e2a2a0d88fa58dae63866b68084a94841f769a38a01548a5e"},{"case":"json","file":"logust.json","lines":10000,"message_sha256":"4bc0f0b4c39b12df6bc1aa983e41b8f0e1cea0b013d6d286ef44e79babfd1bb2"},{"case":"context","file":"logust.log","lines":10000,"message_sha256":"a3cafb74508d45b48a8f35f7b2bf8fbf2edab6592b6f89a31eadca741eac2b3f"},{"case":"async","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"async_context","file":"logust_async_ctx.log","lines":10000,"message_sha256":"d16456e57608612f05517d14c887167c0d2f01d2b48c045fe7e1c3660ae9f18f"},{"case":"nonblocking","file":"logust_nonblock.log","lines":10000,"message_sha256":"a59bbd248568e533fdefd199dd935f13be0440847b7720fd479efeb719ceaee7"},{"case":"latency","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"latency","file":"logust_sync.log","lines":10000,"message_sha256":"d436d688b0fdd94bb31031db49528d72e5566e4c20e76dce59b77b43daebcf15"},{"case":"file","file":"logust.log","lines":10000,"message_sha256":"44093c8c669d67a7f9c7f2bd89638200be71dbc8373c7a712a914699380674b0"},{"case":"formatted","file":"logust.log","lines":10000,"message_sha256":"40cd4acccdcb7f1e2a2a0d88fa58dae63866b68084a94841f769a38a01548a5e"},{"case":"json","file":"logust.json","lines":10000,"message_sha256":"4bc0f0b4c39b12df6bc1aa983e41b8f0e1cea0b013d6d286ef44e79babfd1bb2"},{"case":"context","file":"logust.log","lines":10000,"message_sha256":"a3cafb74508d45b48a8f35f7b2bf8fbf2edab6592b6f89a31eadca741eac2b3f"},{"case":"async","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"async_context","file":"logust_async_ctx.log","lines":10000,"message_sha256":"d16456e57608612f05517d14c887167c0d2f01d2b48c045fe7e1c3660ae9f18f"},{"case":"nonblocking","file":"logust_nonblock.log","lines":10000,"message_sha256":"a59bbd248568e533fdefd199dd935f13be0440847b7720fd479efeb719ceaee7"},{"case":"latency","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"latency","file":"logust_sync.log","lines":10000,"message_sha256":"d436d688b0fdd94bb31031db49528d72e5566e4c20e76dce59b77b43daebcf15"}],"pid":86340,"tmpdir":"/study/tmp"},
+    {"label":"old","python":"3.14.9 (main, Oct 21 2026, 17:47:42) [Clang 23.1.3 ]","package":"/study/old/env/lib/python3.14/site-packages/logust/__init__.py","native":"/study/old/env/lib/python3.14/site-packages/logust/_logust.cpython-314-darwin.so","loguru":"0.7.3","n":10000,"warmup_suites":1,"samples":[{"file":{"logging":0.07180741702904925,"loguru":0.07782570802373812,"logust":0.014550083025824279},"formatted":{"logging":0.07033000001683831,"loguru":0.07888995803659782,"logust":0.0155539580155164},"json":{"logging":null,"loguru":0.15521412499947473,"logust":0.015218415996059775},"context":{"logging":null,"loguru":0.07748891599476337,"logust":0.014423540967982262},"async":{"logging":null,"loguru":0.31208120798692107,"logust":0.014104040979873389},"async_context":{"logging":null,"loguru":0.34428520797519013,"logust":0.014653875026851892},"nonblocking":{"logging":null,"loguru":0.32514450000599027,"logust":0.014148207963444293},"callable_sink":{"loguru":0.03969250002410263,"logust":0.00793791702017188},"latency.sync":{"loguru":0.07725770794786513,"logust":0.01519920799182728},"latency.async":{"loguru":0.3247010000050068,"logust":0.015828458999749273}},{"file":{"logging":0.07086025003809482,"loguru":0.08284133404958993,"logust":0.014295917004346848},"formatted":{"logging":0.06832550000399351,"loguru":0.07713816699106246,"logust":0.015405249956529588},"json":{"logging":null,"loguru":0.15517420799005777,"logust":0.01557383401086554},"context":{"logging":null,"loguru":0.07607762498082593,"logust":0.01466291700489819},"async":{"logging":null,"loguru":0.32562770799268037,"logust":0.01440462499158457},"async_context":{"logging":null,"loguru":0.3135922079673037,"logust":0.014214208000339568},"nonblocking":{"logging":null,"loguru":0.316302084014751,"logust":0.014383707952219993},"callable_sink":{"loguru":0.04037787503330037,"logust":0.007935790985357016},"latency.sync":{"loguru":0.07762016699416563,"logust":0.015164290962275118},"latency.async":{"loguru":0.31824887497350574,"logust":0.015986791986506432}},{"file":{"logging":0.07193179096793756,"loguru":0.08148416597396135,"logust":0.014526707993354648},"formatted":{"logging":0.07958483300171793,"loguru":0.08536629198351875,"logust":0.016261042037513107},"json":{"logging":null,"loguru":0.16728441597661003,"logust":0.01574891700875014},"context":{"logging":null,"loguru":0.08026154100662097,"logust":0.014570374973118305},"async":{"logging":null,"loguru":0.3459986670059152,"logust":0.014620749978348613},"async_context":{"logging":null,"loguru":0.36881870799697936,"logust":0.014930541976355016},"nonblocking":{"logging":null,"loguru":0.3319351669633761,"logust":0.014092833967879415},"callable_sink":{"loguru":0.04023479198804125,"logust":0.007931208005174994},"latency.sync":{"loguru":0.07710379204945639,"logust":0.015750041988212615},"latency.async":{"loguru":0.3299396660295315,"logust":0.016495332994963974}}],"output_checks":[{"case":"file","file":"logust.log","lines":10000,"message_sha256":"44093c8c669d67a7f9c7f2bd89638200be71dbc8373c7a712a914699380674b0"},{"case":"formatted","file":"logust.log","lines":10000,"message_sha256":"40cd4acccdcb7f1e2a2a0d88fa58dae63866b68084a94841f769a38a01548a5e"},{"case":"json","file":"logust.json","lines":10000,"message_sha256":"4bc0f0b4c39b12df6bc1aa983e41b8f0e1cea0b013d6d286ef44e79babfd1bb2"},{"case":"context","file":"logust.log","lines":10000,"message_sha256":"a3cafb74508d45b48a8f35f7b2bf8fbf2edab6592b6f89a31eadca741eac2b3f"},{"case":"async","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"async_context","file":"logust_async_ctx.log","lines":10000,"message_sha256":"d16456e57608612f05517d14c887167c0d2f01d2b48c045fe7e1c3660ae9f18f"},{"case":"nonblocking","file":"logust_nonblock.log","lines":10000,"message_sha256":"a59bbd248568e533fdefd199dd935f13be0440847b7720fd479efeb719ceaee7"},{"case":"latency","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"latency","file":"logust_sync.log","lines":10000,"message_sha256":"d436d688b0fdd94bb31031db49528d72e5566e4c20e76dce59b77b43daebcf15"},{"case":"file","file":"logust.log","lines":10000,"message_sha256":"44093c8c669d67a7f9c7f2bd89638200be71dbc8373c7a712a914699380674b0"},{"case":"formatted","file":"logust.log","lines":10000,"message_sha256":"40cd4acccdcb7f1e2a2a0d88fa58dae63866b68084a94841f769a38a01548a5e"},{"case":"json","file":"logust.json","lines":10000,"message_sha256":"4bc0f0b4c39b12df6bc1aa983e41b8f0e1cea0b013d6d286ef44e79babfd1bb2"},{"case":"context","file":"logust.log","lines":10000,"message_sha256":"a3cafb74508d45b48a8f35f7b2bf8fbf2edab6592b6f89a31eadca741eac2b3f"},{"case":"async","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"async_context","file":"logust_async_ctx.log","lines":10000,"message_sha256":"d16456e57608612f05517d14c887167c0d2f01d2b48c045fe7e1c3660ae9f18f"},{"case":"nonblocking","file":"logust_nonblock.log","lines":10000,"message_sha256":"a59bbd248568e533fdefd199dd935f13be0440847b7720fd479efeb719ceaee7"},{"case":"latency","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"latency","file":"logust_sync.log","lines":10000,"message_sha256":"d436d688b0fdd94bb31031db49528d72e5566e4c20e76dce59b77b43daebcf15"},{"case":"file","file":"logust.log","lines":10000,"message_sha256":"44093c8c669d67a7f9c7f2bd89638200be71dbc8373c7a712a914699380674b0"},{"case":"formatted","file":"logust.log","lines":10000,"message_sha256":"40cd4acccdcb7f1e2a2a0d88fa58dae63866b68084a94841f769a38a01548a5e"},{"case":"json","file":"logust.json","lines":10000,"message_sha256":"4bc0f0b4c39b12df6bc1aa983e41b8f0e1cea0b013d6d286ef44e79babfd1bb2"},{"case":"context","file":"logust.log","lines":10000,"message_sha256":"a3cafb74508d45b48a8f35f7b2bf8fbf2edab6592b6f89a31eadca741eac2b3f"},{"case":"async","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"async_context","file":"logust_async_ctx.log","lines":10000,"message_sha256":"d16456e57608612f05517d14c887167c0d2f01d2b48c045fe7e1c3660ae9f18f"},{"case":"nonblocking","file":"logust_nonblock.log","lines":10000,"message_sha256":"a59bbd248568e533fdefd199dd935f13be0440847b7720fd479efeb719ceaee7"},{"case":"latency","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"latency","file":"logust_sync.log","lines":10000,"message_sha256":"d436d688b0fdd94bb31031db49528d72e5566e4c20e76dce59b77b43daebcf15"},{"case":"file","file":"logust.log","lines":10000,"message_sha256":"44093c8c669d67a7f9c7f2bd89638200be71dbc8373c7a712a914699380674b0"},{"case":"formatted","file":"logust.log","lines":10000,"message_sha256":"40cd4acccdcb7f1e2a2a0d88fa58dae63866b68084a94841f769a38a01548a5e"},{"case":"json","file":"logust.json","lines":10000,"message_sha256":"4bc0f0b4c39b12df6bc1aa983e41b8f0e1cea0b013d6d286ef44e79babfd1bb2"},{"case":"context","file":"logust.log","lines":10000,"message_sha256":"a3cafb74508d45b48a8f35f7b2bf8fbf2edab6592b6f89a31eadca741eac2b3f"},{"case":"async","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"async_context","file":"logust_async_ctx.log","lines":10000,"message_sha256":"d16456e57608612f05517d14c887167c0d2f01d2b48c045fe7e1c3660ae9f18f"},{"case":"nonblocking","file":"logust_nonblock.log","lines":10000,"message_sha256":"a59bbd248568e533fdefd199dd935f13be0440847b7720fd479efeb719ceaee7"},{"case":"latency","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"latency","file":"logust_sync.log","lines":10000,"message_sha256":"d436d688b0fdd94bb31031db49528d72e5566e4c20e76dce59b77b43daebcf15"}],"pid":86360,"tmpdir":"/study/tmp"},
+    {"label":"old","python":"3.14.9 (main, Oct 21 2026, 17:47:42) [Clang 23.1.3 ]","package":"/study/old/env/lib/python3.14/site-packages/logust/__init__.py","native":"/study/old/env/lib/python3.14/site-packages/logust/_logust.cpython-314-darwin.so","loguru":"0.7.3","n":10000,"warmup_suites":1,"samples":[{"file":{"logging":0.07063104200642556,"loguru":0.08001891698222607,"logust":0.014794042042922229},"formatted":{"logging":0.07012995897093788,"loguru":0.07823033299064264,"logust":0.01633233402390033},"json":{"logging":null,"loguru":0.15541229100199416,"logust":0.015697791997808963},"context":{"logging":null,"loguru":0.07719283300684765,"logust":0.015017333964351565},"async":{"logging":null,"loguru":0.3298923330148682,"logust":0.016365792020224035},"async_context":{"logging":null,"loguru":0.3301295000128448,"logust":0.014734915981534868},"nonblocking":{"logging":null,"loguru":0.31917508301557973,"logust":0.014841374999377877},"callable_sink":{"loguru":0.04073954198975116,"logust":0.007903583988081664},"latency.sync":{"loguru":0.07669412496034056,"logust":0.015772000013384968},"latency.async":{"loguru":0.31443429103819653,"logust":0.01741974998731166}},{"file":{"logging":0.06924775004154071,"loguru":0.07974683400243521,"logust":0.0148070840514265},"formatted":{"logging":0.06935558299301192,"loguru":0.0792702499893494,"logust":0.015730416984297335},"json":{"logging":null,"loguru":0.16848658298840746,"logust":0.016019542003050447},"context":{"logging":null,"loguru":0.08469262503786013,"logust":0.015386708022560924},"async":{"logging":null,"loguru":0.3423369170050137,"logust":0.015034749987535179},"async_context":{"logging":null,"loguru":0.3283313329447992,"logust":0.014694292040076107},"nonblocking":{"logging":null,"loguru":0.31210712500615045,"logust":0.014603915973566473},"callable_sink":{"loguru":0.039565499988384545,"logust":0.007826540968380868},"latency.sync":{"loguru":0.07653112499974668,"logust":0.015597374993376434},"latency.async":{"loguru":0.3220515410066582,"logust":0.017602959007490426}},{"file":{"logging":0.07341808301862329,"loguru":0.08093520801048726,"logust":0.014828582992777228},"formatted":{"logging":0.07258120801998302,"loguru":0.08107766602188349,"logust":0.016247541003394872},"json":{"logging":null,"loguru":0.1591387499938719,"logust":0.01640629197936505},"context":{"logging":null,"loguru":0.08427916700020432,"logust":0.014896375010721385},"async":{"logging":null,"loguru":0.33688145800260827,"logust":0.014949249976780266},"async_context":{"logging":null,"loguru":0.3182741249911487,"logust":0.01470050000352785},"nonblocking":{"logging":null,"loguru":0.3039957919972949,"logust":0.014395125035662204},"callable_sink":{"loguru":0.04026920796604827,"logust":0.008072249998804182},"latency.sync":{"loguru":0.07693849998759106,"logust":0.015629875008016825},"latency.async":{"loguru":0.31598820799263194,"logust":0.01656629197532311}}],"output_checks":[{"case":"file","file":"logust.log","lines":10000,"message_sha256":"44093c8c669d67a7f9c7f2bd89638200be71dbc8373c7a712a914699380674b0"},{"case":"formatted","file":"logust.log","lines":10000,"message_sha256":"40cd4acccdcb7f1e2a2a0d88fa58dae63866b68084a94841f769a38a01548a5e"},{"case":"json","file":"logust.json","lines":10000,"message_sha256":"4bc0f0b4c39b12df6bc1aa983e41b8f0e1cea0b013d6d286ef44e79babfd1bb2"},{"case":"context","file":"logust.log","lines":10000,"message_sha256":"a3cafb74508d45b48a8f35f7b2bf8fbf2edab6592b6f89a31eadca741eac2b3f"},{"case":"async","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"async_context","file":"logust_async_ctx.log","lines":10000,"message_sha256":"d16456e57608612f05517d14c887167c0d2f01d2b48c045fe7e1c3660ae9f18f"},{"case":"nonblocking","file":"logust_nonblock.log","lines":10000,"message_sha256":"a59bbd248568e533fdefd199dd935f13be0440847b7720fd479efeb719ceaee7"},{"case":"latency","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"latency","file":"logust_sync.log","lines":10000,"message_sha256":"d436d688b0fdd94bb31031db49528d72e5566e4c20e76dce59b77b43daebcf15"},{"case":"file","file":"logust.log","lines":10000,"message_sha256":"44093c8c669d67a7f9c7f2bd89638200be71dbc8373c7a712a914699380674b0"},{"case":"formatted","file":"logust.log","lines":10000,"message_sha256":"40cd4acccdcb7f1e2a2a0d88fa58dae63866b68084a94841f769a38a01548a5e"},{"case":"json","file":"logust.json","lines":10000,"message_sha256":"4bc0f0b4c39b12df6bc1aa983e41b8f0e1cea0b013d6d286ef44e79babfd1bb2"},{"case":"context","file":"logust.log","lines":10000,"message_sha256":"a3cafb74508d45b48a8f35f7b2bf8fbf2edab6592b6f89a31eadca741eac2b3f"},{"case":"async","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"async_context","file":"logust_async_ctx.log","lines":10000,"message_sha256":"d16456e57608612f05517d14c887167c0d2f01d2b48c045fe7e1c3660ae9f18f"},{"case":"nonblocking","file":"logust_nonblock.log","lines":10000,"message_sha256":"a59bbd248568e533fdefd199dd935f13be0440847b7720fd479efeb719ceaee7"},{"case":"latency","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"latency","file":"logust_sync.log","lines":10000,"message_sha256":"d436d688b0fdd94bb31031db49528d72e5566e4c20e76dce59b77b43daebcf15"},{"case":"file","file":"logust.log","lines":10000,"message_sha256":"44093c8c669d67a7f9c7f2bd89638200be71dbc8373c7a712a914699380674b0"},{"case":"formatted","file":"logust.log","lines":10000,"message_sha256":"40cd4acccdcb7f1e2a2a0d88fa58dae63866b68084a94841f769a38a01548a5e"},{"case":"json","file":"logust.json","lines":10000,"message_sha256":"4bc0f0b4c39b12df6bc1aa983e41b8f0e1cea0b013d6d286ef44e79babfd1bb2"},{"case":"context","file":"logust.log","lines":10000,"message_sha256":"a3cafb74508d45b48a8f35f7b2bf8fbf2edab6592b6f89a31eadca741eac2b3f"},{"case":"async","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"async_context","file":"logust_async_ctx.log","lines":10000,"message_sha256":"d16456e57608612f05517d14c887167c0d2f01d2b48c045fe7e1c3660ae9f18f"},{"case":"nonblocking","file":"logust_nonblock.log","lines":10000,"message_sha256":"a59bbd248568e533fdefd199dd935f13be0440847b7720fd479efeb719ceaee7"},{"case":"latency","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"latency","file":"logust_sync.log","lines":10000,"message_sha256":"d436d688b0fdd94bb31031db49528d72e5566e4c20e76dce59b77b43daebcf15"},{"case":"file","file":"logust.log","lines":10000,"message_sha256":"44093c8c669d67a7f9c7f2bd89638200be71dbc8373c7a712a914699380674b0"},{"case":"formatted","file":"logust.log","lines":10000,"message_sha256":"40cd4acccdcb7f1e2a2a0d88fa58dae63866b68084a94841f769a38a01548a5e"},{"case":"json","file":"logust.json","lines":10000,"message_sha256":"4bc0f0b4c39b12df6bc1aa983e41b8f0e1cea0b013d6d286ef44e79babfd1bb2"},{"case":"context","file":"logust.log","lines":10000,"message_sha256":"a3cafb74508d45b48a8f35f7b2bf8fbf2edab6592b6f89a31eadca741eac2b3f"},{"case":"async","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"async_context","file":"logust_async_ctx.log","lines":10000,"message_sha256":"d16456e57608612f05517d14c887167c0d2f01d2b48c045fe7e1c3660ae9f18f"},{"case":"nonblocking","file":"logust_nonblock.log","lines":10000,"message_sha256":"a59bbd248568e533fdefd199dd935f13be0440847b7720fd479efeb719ceaee7"},{"case":"latency","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"latency","file":"logust_sync.log","lines":10000,"message_sha256":"d436d688b0fdd94bb31031db49528d72e5566e4c20e76dce59b77b43daebcf15"}],"pid":86390,"tmpdir":"/study/tmp"},
+    {"label":"new","python":"3.14.9 (main, Oct 21 2026, 17:47:42) [Clang 23.1.3 ]","package":"/study/new/env/lib/python3.14/site-packages/logust/__init__.py","native":"/study/new/env/lib/python3.14/site-packages/logust/_logust.cpython-314-darwin.so","loguru":"0.7.3","n":10000,"warmup_suites":1,"samples":[{"file":{"logging":0.06957662501372397,"loguru":0.07817237498238683,"logust":0.006910292024258524},"formatted":{"logging":0.06885454198345542,"loguru":0.07915362500352785,"logust":0.007451667042914778},"json":{"logging":null,"loguru":0.16186662501422688,"logust":0.0073629170074127614},"context":{"logging":null,"loguru":0.07872662501176819,"logust":0.006892625009641051},"async":{"logging":null,"loguru":0.3112755829934031,"logust":0.007378916954621673},"async_context":{"logging":null,"loguru":0.3237357080215588,"logust":0.00692033302038908},"nonblocking":{"logging":null,"loguru":0.3113210409646854,"logust":0.006494999979622662},"callable_sink":{"loguru":0.04022670799167827,"logust":0.004098666948266327},"latency.sync":{"loguru":0.07754354202188551,"logust":0.007652083993889391},"latency.async":{"loguru":0.3175212080241181,"logust":0.008286790980491787}},{"file":{"logging":0.06973725004354492,"loguru":0.0811106669716537,"logust":0.006942167005036026},"formatted":{"logging":0.06763116701040417,"loguru":0.07836037501692772,"logust":0.0075722910114564},"json":{"logging":null,"loguru":0.16529983398504555,"logust":0.007779291947372258},"context":{"logging":null,"loguru":0.08067908301018178,"logust":0.006857083993963897},"async":{"logging":null,"loguru":0.3331688329926692,"logust":0.006713999959174544},"async_context":{"logging":null,"loguru":0.3235335000208579,"logust":0.00674012495437637},"nonblocking":{"logging":null,"loguru":0.3107657079817727,"logust":0.006522917014081031},"callable_sink":{"loguru":0.03972737502772361,"logust":0.004100124991964549},"latency.sync":{"loguru":0.07840887497877702,"logust":0.00845533300889656},"latency.async":{"loguru":0.3418510420015082,"logust":0.010970083996653557}},{"file":{"logging":0.07031141698826104,"loguru":0.07878066704142839,"logust":0.007111000013537705},"formatted":{"logging":0.07371166697703302,"loguru":0.08694754197495058,"logust":0.007669374987017363},"json":{"logging":null,"loguru":0.16404020797926933,"logust":0.007530000002589077},"context":{"logging":null,"loguru":0.08215437503531575,"logust":0.006980541977100074},"async":{"logging":null,"loguru":0.33079383301083,"logust":0.00667979201534763},"async_context":{"logging":null,"loguru":0.32085008395370096,"logust":0.007566541025880724},"nonblocking":{"logging":null,"loguru":0.3224163329578005,"logust":0.006647542002610862},"callable_sink":{"loguru":0.039532958006020635,"logust":0.0040645000408403575},"latency.sync":{"loguru":0.07763579103630036,"logust":0.007652166998013854},"latency.async":{"loguru":0.3118157919961959,"logust":0.008226249949075282}}],"output_checks":[{"case":"file","file":"logust.log","lines":10000,"message_sha256":"44093c8c669d67a7f9c7f2bd89638200be71dbc8373c7a712a914699380674b0"},{"case":"formatted","file":"logust.log","lines":10000,"message_sha256":"40cd4acccdcb7f1e2a2a0d88fa58dae63866b68084a94841f769a38a01548a5e"},{"case":"json","file":"logust.json","lines":10000,"message_sha256":"4bc0f0b4c39b12df6bc1aa983e41b8f0e1cea0b013d6d286ef44e79babfd1bb2"},{"case":"context","file":"logust.log","lines":10000,"message_sha256":"a3cafb74508d45b48a8f35f7b2bf8fbf2edab6592b6f89a31eadca741eac2b3f"},{"case":"async","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"async_context","file":"logust_async_ctx.log","lines":10000,"message_sha256":"d16456e57608612f05517d14c887167c0d2f01d2b48c045fe7e1c3660ae9f18f"},{"case":"nonblocking","file":"logust_nonblock.log","lines":10000,"message_sha256":"a59bbd248568e533fdefd199dd935f13be0440847b7720fd479efeb719ceaee7"},{"case":"latency","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"latency","file":"logust_sync.log","lines":10000,"message_sha256":"d436d688b0fdd94bb31031db49528d72e5566e4c20e76dce59b77b43daebcf15"},{"case":"file","file":"logust.log","lines":10000,"message_sha256":"44093c8c669d67a7f9c7f2bd89638200be71dbc8373c7a712a914699380674b0"},{"case":"formatted","file":"logust.log","lines":10000,"message_sha256":"40cd4acccdcb7f1e2a2a0d88fa58dae63866b68084a94841f769a38a01548a5e"},{"case":"json","file":"logust.json","lines":10000,"message_sha256":"4bc0f0b4c39b12df6bc1aa983e41b8f0e1cea0b013d6d286ef44e79babfd1bb2"},{"case":"context","file":"logust.log","lines":10000,"message_sha256":"a3cafb74508d45b48a8f35f7b2bf8fbf2edab6592b6f89a31eadca741eac2b3f"},{"case":"async","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"async_context","file":"logust_async_ctx.log","lines":10000,"message_sha256":"d16456e57608612f05517d14c887167c0d2f01d2b48c045fe7e1c3660ae9f18f"},{"case":"nonblocking","file":"logust_nonblock.log","lines":10000,"message_sha256":"a59bbd248568e533fdefd199dd935f13be0440847b7720fd479efeb719ceaee7"},{"case":"latency","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"latency","file":"logust_sync.log","lines":10000,"message_sha256":"d436d688b0fdd94bb31031db49528d72e5566e4c20e76dce59b77b43daebcf15"},{"case":"file","file":"logust.log","lines":10000,"message_sha256":"44093c8c669d67a7f9c7f2bd89638200be71dbc8373c7a712a914699380674b0"},{"case":"formatted","file":"logust.log","lines":10000,"message_sha256":"40cd4acccdcb7f1e2a2a0d88fa58dae63866b68084a94841f769a38a01548a5e"},{"case":"json","file":"logust.json","lines":10000,"message_sha256":"4bc0f0b4c39b12df6bc1aa983e41b8f0e1cea0b013d6d286ef44e79babfd1bb2"},{"case":"context","file":"logust.log","lines":10000,"message_sha256":"a3cafb74508d45b48a8f35f7b2bf8fbf2edab6592b6f89a31eadca741eac2b3f"},{"case":"async","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"async_context","file":"logust_async_ctx.log","lines":10000,"message_sha256":"d16456e57608612f05517d14c887167c0d2f01d2b48c045fe7e1c3660ae9f18f"},{"case":"nonblocking","file":"logust_nonblock.log","lines":10000,"message_sha256":"a59bbd248568e533fdefd199dd935f13be0440847b7720fd479efeb719ceaee7"},{"case":"latency","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"latency","file":"logust_sync.log","lines":10000,"message_sha256":"d436d688b0fdd94bb31031db49528d72e5566e4c20e76dce59b77b43daebcf15"},{"case":"file","file":"logust.log","lines":10000,"message_sha256":"44093c8c669d67a7f9c7f2bd89638200be71dbc8373c7a712a914699380674b0"},{"case":"formatted","file":"logust.log","lines":10000,"message_sha256":"40cd4acccdcb7f1e2a2a0d88fa58dae63866b68084a94841f769a38a01548a5e"},{"case":"json","file":"logust.json","lines":10000,"message_sha256":"4bc0f0b4c39b12df6bc1aa983e41b8f0e1cea0b013d6d286ef44e79babfd1bb2"},{"case":"context","file":"logust.log","lines":10000,"message_sha256":"a3cafb74508d45b48a8f35f7b2bf8fbf2edab6592b6f89a31eadca741eac2b3f"},{"case":"async","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"async_context","file":"logust_async_ctx.log","lines":10000,"message_sha256":"d16456e57608612f05517d14c887167c0d2f01d2b48c045fe7e1c3660ae9f18f"},{"case":"nonblocking","file":"logust_nonblock.log","lines":10000,"message_sha256":"a59bbd248568e533fdefd199dd935f13be0440847b7720fd479efeb719ceaee7"},{"case":"latency","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"latency","file":"logust_sync.log","lines":10000,"message_sha256":"d436d688b0fdd94bb31031db49528d72e5566e4c20e76dce59b77b43daebcf15"}],"pid":86456,"tmpdir":"/study/tmp"},
+    {"label":"old","python":"3.14.9 (main, Oct 21 2026, 17:47:42) [Clang 23.1.3 ]","package":"/study/old/env/lib/python3.14/site-packages/logust/__init__.py","native":"/study/old/env/lib/python3.14/site-packages/logust/_logust.cpython-314-darwin.so","loguru":"0.7.3","n":10000,"warmup_suites":1,"samples":[{"file":{"logging":0.07411774998763576,"loguru":0.07924354099668562,"logust":0.014315332984551787},"formatted":{"logging":0.0711850420339033,"loguru":0.07770483399508521,"logust":0.015858541009947658},"json":{"logging":null,"loguru":0.15386345802107826,"logust":0.015271542011760175},"context":{"logging":null,"loguru":0.07726091699441895,"logust":0.014375375001691282},"async":{"logging":null,"loguru":0.31880220799939707,"logust":0.014153833035379648},"async_context":{"logging":null,"loguru":0.3118055420345627,"logust":0.01441450003767386},"nonblocking":{"logging":null,"loguru":0.30632237502140924,"logust":0.01473300001816824},"callable_sink":{"loguru":0.0406789580010809,"logust":0.008125124964863062},"latency.sync":{"loguru":0.07865491701522842,"logust":0.015389624983072281},"latency.async":{"loguru":0.3142993339570239,"logust":0.01608604204375297}},{"file":{"logging":0.07129420799901709,"loguru":0.07936708303168416,"logust":0.014697167032863945},"formatted":{"logging":0.06904049997683614,"loguru":0.0779903749935329,"logust":0.015762833994813263},"json":{"logging":null,"loguru":0.15309945802437142,"logust":0.01534500002162531},"context":{"logging":null,"loguru":0.08846479101339355,"logust":0.014513832982629538},"async":{"logging":null,"loguru":0.3226340420078486,"logust":0.014404040994122624},"async_context":{"logging":null,"loguru":0.35517104202881455,"logust":0.014883208030369133},"nonblocking":{"logging":null,"loguru":0.3486004999722354,"logust":0.014953041973058134},"callable_sink":{"loguru":0.040009832999203354,"logust":0.008084667031653225},"latency.sync":{"loguru":0.07760158396558836,"logust":0.015146874997299165},"latency.async":{"loguru":0.34834270901046693,"logust":0.016055000014603138}},{"file":{"logging":0.0727095830370672,"loguru":0.07809437497053295,"logust":0.014352875004988164},"formatted":{"logging":0.06903158302884549,"loguru":0.07861129200318828,"logust":0.015940957993734628},"json":{"logging":null,"loguru":0.15446079202229157,"logust":0.0153184580267407},"context":{"logging":null,"loguru":0.07589516701409593,"logust":0.014365624985657632},"async":{"logging":null,"loguru":0.3056254999828525,"logust":0.014306375000160187},"async_context":{"logging":null,"loguru":0.3065113329794258,"logust":0.014256041962653399},"nonblocking":{"logging":null,"loguru":0.31903716700617224,"logust":0.01428195898188278},"callable_sink":{"loguru":0.039177458034828305,"logust":0.008034125028643757},"latency.sync":{"loguru":0.08573670900659636,"logust":0.01509820797946304},"latency.async":{"loguru":0.32164349994855,"logust":0.016033958992920816}}],"output_checks":[{"case":"file","file":"logust.log","lines":10000,"message_sha256":"44093c8c669d67a7f9c7f2bd89638200be71dbc8373c7a712a914699380674b0"},{"case":"formatted","file":"logust.log","lines":10000,"message_sha256":"40cd4acccdcb7f1e2a2a0d88fa58dae63866b68084a94841f769a38a01548a5e"},{"case":"json","file":"logust.json","lines":10000,"message_sha256":"4bc0f0b4c39b12df6bc1aa983e41b8f0e1cea0b013d6d286ef44e79babfd1bb2"},{"case":"context","file":"logust.log","lines":10000,"message_sha256":"a3cafb74508d45b48a8f35f7b2bf8fbf2edab6592b6f89a31eadca741eac2b3f"},{"case":"async","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"async_context","file":"logust_async_ctx.log","lines":10000,"message_sha256":"d16456e57608612f05517d14c887167c0d2f01d2b48c045fe7e1c3660ae9f18f"},{"case":"nonblocking","file":"logust_nonblock.log","lines":10000,"message_sha256":"a59bbd248568e533fdefd199dd935f13be0440847b7720fd479efeb719ceaee7"},{"case":"latency","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"latency","file":"logust_sync.log","lines":10000,"message_sha256":"d436d688b0fdd94bb31031db49528d72e5566e4c20e76dce59b77b43daebcf15"},{"case":"file","file":"logust.log","lines":10000,"message_sha256":"44093c8c669d67a7f9c7f2bd89638200be71dbc8373c7a712a914699380674b0"},{"case":"formatted","file":"logust.log","lines":10000,"message_sha256":"40cd4acccdcb7f1e2a2a0d88fa58dae63866b68084a94841f769a38a01548a5e"},{"case":"json","file":"logust.json","lines":10000,"message_sha256":"4bc0f0b4c39b12df6bc1aa983e41b8f0e1cea0b013d6d286ef44e79babfd1bb2"},{"case":"context","file":"logust.log","lines":10000,"message_sha256":"a3cafb74508d45b48a8f35f7b2bf8fbf2edab6592b6f89a31eadca741eac2b3f"},{"case":"async","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"async_context","file":"logust_async_ctx.log","lines":10000,"message_sha256":"d16456e57608612f05517d14c887167c0d2f01d2b48c045fe7e1c3660ae9f18f"},{"case":"nonblocking","file":"logust_nonblock.log","lines":10000,"message_sha256":"a59bbd248568e533fdefd199dd935f13be0440847b7720fd479efeb719ceaee7"},{"case":"latency","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"latency","file":"logust_sync.log","lines":10000,"message_sha256":"d436d688b0fdd94bb31031db49528d72e5566e4c20e76dce59b77b43daebcf15"},{"case":"file","file":"logust.log","lines":10000,"message_sha256":"44093c8c669d67a7f9c7f2bd89638200be71dbc8373c7a712a914699380674b0"},{"case":"formatted","file":"logust.log","lines":10000,"message_sha256":"40cd4acccdcb7f1e2a2a0d88fa58dae63866b68084a94841f769a38a01548a5e"},{"case":"json","file":"logust.json","lines":10000,"message_sha256":"4bc0f0b4c39b12df6bc1aa983e41b8f0e1cea0b013d6d286ef44e79babfd1bb2"},{"case":"context","file":"logust.log","lines":10000,"message_sha256":"a3cafb74508d45b48a8f35f7b2bf8fbf2edab6592b6f89a31eadca741eac2b3f"},{"case":"async","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"async_context","file":"logust_async_ctx.log","lines":10000,"message_sha256":"d16456e57608612f05517d14c887167c0d2f01d2b48c045fe7e1c3660ae9f18f"},{"case":"nonblocking","file":"logust_nonblock.log","lines":10000,"message_sha256":"a59bbd248568e533fdefd199dd935f13be0440847b7720fd479efeb719ceaee7"},{"case":"latency","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"latency","file":"logust_sync.log","lines":10000,"message_sha256":"d436d688b0fdd94bb31031db49528d72e5566e4c20e76dce59b77b43daebcf15"},{"case":"file","file":"logust.log","lines":10000,"message_sha256":"44093c8c669d67a7f9c7f2bd89638200be71dbc8373c7a712a914699380674b0"},{"case":"formatted","file":"logust.log","lines":10000,"message_sha256":"40cd4acccdcb7f1e2a2a0d88fa58dae63866b68084a94841f769a38a01548a5e"},{"case":"json","file":"logust.json","lines":10000,"message_sha256":"4bc0f0b4c39b12df6bc1aa983e41b8f0e1cea0b013d6d286ef44e79babfd1bb2"},{"case":"context","file":"logust.log","lines":10000,"message_sha256":"a3cafb74508d45b48a8f35f7b2bf8fbf2edab6592b6f89a31eadca741eac2b3f"},{"case":"async","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"async_context","file":"logust_async_ctx.log","lines":10000,"message_sha256":"d16456e57608612f05517d14c887167c0d2f01d2b48c045fe7e1c3660ae9f18f"},{"case":"nonblocking","file":"logust_nonblock.log","lines":10000,"message_sha256":"a59bbd248568e533fdefd199dd935f13be0440847b7720fd479efeb719ceaee7"},{"case":"latency","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"latency","file":"logust_sync.log","lines":10000,"message_sha256":"d436d688b0fdd94bb31031db49528d72e5566e4c20e76dce59b77b43daebcf15"}],"pid":86494,"tmpdir":"/study/tmp"},
+    {"label":"new","python":"3.14.9 (main, Oct 21 2026, 17:47:42) [Clang 23.1.3 ]","package":"/study/new/env/lib/python3.14/site-packages/logust/__init__.py","native":"/study/new/env/lib/python3.14/site-packages/logust/_logust.cpython-314-darwin.so","loguru":"0.7.3","n":10000,"warmup_suites":1,"samples":[{"file":{"logging":0.07065237499773502,"loguru":0.079150874982588,"logust":0.006886916991788894},"formatted":{"logging":0.06928720796713606,"loguru":0.07973904197569937,"logust":0.007493833021726459},"json":{"logging":null,"loguru":0.15681670798221603,"logust":0.007691832957789302},"context":{"logging":null,"loguru":0.08020095899701118,"logust":0.00701325002592057},"async":{"logging":null,"loguru":0.3105784999788739,"logust":0.0067790839821100235},"async_context":{"logging":null,"loguru":0.3080970000009984,"logust":0.007132625032681972},"nonblocking":{"logging":null,"loguru":0.3277498329989612,"logust":0.006591041979845613},"callable_sink":{"loguru":0.039937500027008355,"logust":0.004059750004671514},"latency.sync":{"loguru":0.07633212499786168,"logust":0.007551999995484948},"latency.async":{"loguru":0.32816899998579174,"logust":0.01067887496901676}},{"file":{"logging":0.07159195799613371,"loguru":0.08016891602892429,"logust":0.007158791006077081},"formatted":{"logging":0.07096679200185463,"loguru":0.07948729203781113,"logust":0.007694167026784271},"json":{"logging":null,"loguru":0.17840008396888152,"logust":0.0077864580089226365},"context":{"logging":null,"loguru":0.0825025420053862,"logust":0.007251666975207627},"async":{"logging":null,"loguru":0.39902904198970646,"logust":0.009652707958593965},"async_context":{"logging":null,"loguru":0.3461109999916516,"logust":0.006803416996262968},"nonblocking":{"logging":null,"loguru":0.3182174579706043,"logust":0.00717320799594745},"callable_sink":{"loguru":0.03998799994587898,"logust":0.0040361249702982605},"latency.sync":{"loguru":0.07750754203880206,"logust":0.007535042008385062},"latency.async":{"loguru":0.31594566599233076,"logust":0.008149041968863457}},{"file":{"logging":0.08607700001448393,"loguru":0.07791283400729299,"logust":0.00676779099740088},"formatted":{"logging":0.06982437503756955,"loguru":0.07723145798081532,"logust":0.007502916036173701},"json":{"logging":null,"loguru":0.17045637499541044,"logust":0.007174875005148351},"context":{"logging":null,"loguru":0.07728037500055507,"logust":0.007080834009684622},"async":{"logging":null,"loguru":0.30941445799544454,"logust":0.006944749969989061},"async_context":{"logging":null,"loguru":0.3181205830187537,"logust":0.006757833005394787},"nonblocking":{"logging":null,"loguru":0.3119729160098359,"logust":0.00782579102087766},"callable_sink":{"loguru":0.03956304199527949,"logust":0.004053250013384968},"latency.sync":{"loguru":0.08018829097272828,"logust":0.007864082988817245},"latency.async":{"loguru":0.3427842920063995,"logust":0.00998662505298853}}],"output_checks":[{"case":"file","file":"logust.log","lines":10000,"message_sha256":"44093c8c669d67a7f9c7f2bd89638200be71dbc8373c7a712a914699380674b0"},{"case":"formatted","file":"logust.log","lines":10000,"message_sha256":"40cd4acccdcb7f1e2a2a0d88fa58dae63866b68084a94841f769a38a01548a5e"},{"case":"json","file":"logust.json","lines":10000,"message_sha256":"4bc0f0b4c39b12df6bc1aa983e41b8f0e1cea0b013d6d286ef44e79babfd1bb2"},{"case":"context","file":"logust.log","lines":10000,"message_sha256":"a3cafb74508d45b48a8f35f7b2bf8fbf2edab6592b6f89a31eadca741eac2b3f"},{"case":"async","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"async_context","file":"logust_async_ctx.log","lines":10000,"message_sha256":"d16456e57608612f05517d14c887167c0d2f01d2b48c045fe7e1c3660ae9f18f"},{"case":"nonblocking","file":"logust_nonblock.log","lines":10000,"message_sha256":"a59bbd248568e533fdefd199dd935f13be0440847b7720fd479efeb719ceaee7"},{"case":"latency","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"latency","file":"logust_sync.log","lines":10000,"message_sha256":"d436d688b0fdd94bb31031db49528d72e5566e4c20e76dce59b77b43daebcf15"},{"case":"file","file":"logust.log","lines":10000,"message_sha256":"44093c8c669d67a7f9c7f2bd89638200be71dbc8373c7a712a914699380674b0"},{"case":"formatted","file":"logust.log","lines":10000,"message_sha256":"40cd4acccdcb7f1e2a2a0d88fa58dae63866b68084a94841f769a38a01548a5e"},{"case":"json","file":"logust.json","lines":10000,"message_sha256":"4bc0f0b4c39b12df6bc1aa983e41b8f0e1cea0b013d6d286ef44e79babfd1bb2"},{"case":"context","file":"logust.log","lines":10000,"message_sha256":"a3cafb74508d45b48a8f35f7b2bf8fbf2edab6592b6f89a31eadca741eac2b3f"},{"case":"async","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"async_context","file":"logust_async_ctx.log","lines":10000,"message_sha256":"d16456e57608612f05517d14c887167c0d2f01d2b48c045fe7e1c3660ae9f18f"},{"case":"nonblocking","file":"logust_nonblock.log","lines":10000,"message_sha256":"a59bbd248568e533fdefd199dd935f13be0440847b7720fd479efeb719ceaee7"},{"case":"latency","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"latency","file":"logust_sync.log","lines":10000,"message_sha256":"d436d688b0fdd94bb31031db49528d72e5566e4c20e76dce59b77b43daebcf15"},{"case":"file","file":"logust.log","lines":10000,"message_sha256":"44093c8c669d67a7f9c7f2bd89638200be71dbc8373c7a712a914699380674b0"},{"case":"formatted","file":"logust.log","lines":10000,"message_sha256":"40cd4acccdcb7f1e2a2a0d88fa58dae63866b68084a94841f769a38a01548a5e"},{"case":"json","file":"logust.json","lines":10000,"message_sha256":"4bc0f0b4c39b12df6bc1aa983e41b8f0e1cea0b013d6d286ef44e79babfd1bb2"},{"case":"context","file":"logust.log","lines":10000,"message_sha256":"a3cafb74508d45b48a8f35f7b2bf8fbf2edab6592b6f89a31eadca741eac2b3f"},{"case":"async","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"async_context","file":"logust_async_ctx.log","lines":10000,"message_sha256":"d16456e57608612f05517d14c887167c0d2f01d2b48c045fe7e1c3660ae9f18f"},{"case":"nonblocking","file":"logust_nonblock.log","lines":10000,"message_sha256":"a59bbd248568e533fdefd199dd935f13be0440847b7720fd479efeb719ceaee7"},{"case":"latency","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"latency","file":"logust_sync.log","lines":10000,"message_sha256":"d436d688b0fdd94bb31031db49528d72e5566e4c20e76dce59b77b43daebcf15"},{"case":"file","file":"logust.log","lines":10000,"message_sha256":"44093c8c669d67a7f9c7f2bd89638200be71dbc8373c7a712a914699380674b0"},{"case":"formatted","file":"logust.log","lines":10000,"message_sha256":"40cd4acccdcb7f1e2a2a0d88fa58dae63866b68084a94841f769a38a01548a5e"},{"case":"json","file":"logust.json","lines":10000,"message_sha256":"4bc0f0b4c39b12df6bc1aa983e41b8f0e1cea0b013d6d286ef44e79babfd1bb2"},{"case":"context","file":"logust.log","lines":10000,"message_sha256":"a3cafb74508d45b48a8f35f7b2bf8fbf2edab6592b6f89a31eadca741eac2b3f"},{"case":"async","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"async_context","file":"logust_async_ctx.log","lines":10000,"message_sha256":"d16456e57608612f05517d14c887167c0d2f01d2b48c045fe7e1c3660ae9f18f"},{"case":"nonblocking","file":"logust_nonblock.log","lines":10000,"message_sha256":"a59bbd248568e533fdefd199dd935f13be0440847b7720fd479efeb719ceaee7"},{"case":"latency","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"latency","file":"logust_sync.log","lines":10000,"message_sha256":"d436d688b0fdd94bb31031db49528d72e5566e4c20e76dce59b77b43daebcf15"}],"pid":86530,"tmpdir":"/study/tmp"},
+    {"label":"new","python":"3.14.9 (main, Oct 21 2026, 17:47:42) [Clang 23.1.3 ]","package":"/study/new/env/lib/python3.14/site-packages/logust/__init__.py","native":"/study/new/env/lib/python3.14/site-packages/logust/_logust.cpython-314-darwin.so","loguru":"0.7.3","n":10000,"warmup_suites":1,"samples":[{"file":{"logging":0.07246616599150002,"loguru":0.08271758398041129,"logust":0.006825916992966086},"formatted":{"logging":0.06947958405362442,"loguru":0.0797865409986116,"logust":0.007670874998439103},"json":{"logging":null,"loguru":0.16082187503343448,"logust":0.0073499169666320086},"context":{"logging":null,"loguru":0.07847354101249948,"logust":0.0069477499928325415},"async":{"logging":null,"loguru":0.3265464160358533,"logust":0.0066541669657453895},"async_context":{"logging":null,"loguru":0.331768625008408,"logust":0.009445750038139522},"nonblocking":{"logging":null,"loguru":0.31859737500781193,"logust":0.006377417012117803},"callable_sink":{"loguru":0.03976075001992285,"logust":0.0042508330079726875},"latency.sync":{"loguru":0.07801479200134054,"logust":0.007538207981269807},"latency.async":{"loguru":0.3155924589955248,"logust":0.00852129200939089}},{"file":{"logging":0.06999454199103639,"loguru":0.07878104102564976,"logust":0.0072537080268375576},"formatted":{"logging":0.06795612495625392,"loguru":0.07918541698018089,"logust":0.0074382079765200615},"json":{"logging":null,"loguru":0.15714299998944625,"logust":0.007423541974276304},"context":{"logging":null,"loguru":0.07736700004898012,"logust":0.006864125025458634},"async":{"logging":null,"loguru":0.33531737502198666,"logust":0.007890417007729411},"async_context":{"logging":null,"loguru":0.3444528339896351,"logust":0.006900416046846658},"nonblocking":{"logging":null,"loguru":0.32797620800556615,"logust":0.006416290998458862},"callable_sink":{"loguru":0.04069929104298353,"logust":0.003940165974199772},"latency.sync":{"loguru":0.0778635410242714,"logust":0.007499166997149587},"latency.async":{"loguru":0.3156503750360571,"logust":0.008226083009503782}},{"file":{"logging":0.06966695899609476,"loguru":0.07739462499739602,"logust":0.006740875018294901},"formatted":{"logging":0.06860283302376047,"loguru":0.08001137501560152,"logust":0.007477334002032876},"json":{"logging":null,"loguru":0.16191341704688966,"logust":0.007401457987725735},"context":{"logging":null,"loguru":0.08105233398964629,"logust":0.0071121250512078404},"async":{"logging":null,"loguru":0.3658383750007488,"logust":0.006598250009119511},"async_context":{"logging":null,"loguru":0.3358409159700386,"logust":0.006857499945908785},"nonblocking":{"logging":null,"loguru":0.3150493749999441,"logust":0.00652049999916926},"callable_sink":{"loguru":0.040022916975431144,"logust":0.004160791984759271},"latency.sync":{"loguru":0.07667095900978893,"logust":0.007821333012543619},"latency.async":{"loguru":0.31969520897837356,"logust":0.008613250043708831}}],"output_checks":[{"case":"file","file":"logust.log","lines":10000,"message_sha256":"44093c8c669d67a7f9c7f2bd89638200be71dbc8373c7a712a914699380674b0"},{"case":"formatted","file":"logust.log","lines":10000,"message_sha256":"40cd4acccdcb7f1e2a2a0d88fa58dae63866b68084a94841f769a38a01548a5e"},{"case":"json","file":"logust.json","lines":10000,"message_sha256":"4bc0f0b4c39b12df6bc1aa983e41b8f0e1cea0b013d6d286ef44e79babfd1bb2"},{"case":"context","file":"logust.log","lines":10000,"message_sha256":"a3cafb74508d45b48a8f35f7b2bf8fbf2edab6592b6f89a31eadca741eac2b3f"},{"case":"async","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"async_context","file":"logust_async_ctx.log","lines":10000,"message_sha256":"d16456e57608612f05517d14c887167c0d2f01d2b48c045fe7e1c3660ae9f18f"},{"case":"nonblocking","file":"logust_nonblock.log","lines":10000,"message_sha256":"a59bbd248568e533fdefd199dd935f13be0440847b7720fd479efeb719ceaee7"},{"case":"latency","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"latency","file":"logust_sync.log","lines":10000,"message_sha256":"d436d688b0fdd94bb31031db49528d72e5566e4c20e76dce59b77b43daebcf15"},{"case":"file","file":"logust.log","lines":10000,"message_sha256":"44093c8c669d67a7f9c7f2bd89638200be71dbc8373c7a712a914699380674b0"},{"case":"formatted","file":"logust.log","lines":10000,"message_sha256":"40cd4acccdcb7f1e2a2a0d88fa58dae63866b68084a94841f769a38a01548a5e"},{"case":"json","file":"logust.json","lines":10000,"message_sha256":"4bc0f0b4c39b12df6bc1aa983e41b8f0e1cea0b013d6d286ef44e79babfd1bb2"},{"case":"context","file":"logust.log","lines":10000,"message_sha256":"a3cafb74508d45b48a8f35f7b2bf8fbf2edab6592b6f89a31eadca741eac2b3f"},{"case":"async","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"async_context","file":"logust_async_ctx.log","lines":10000,"message_sha256":"d16456e57608612f05517d14c887167c0d2f01d2b48c045fe7e1c3660ae9f18f"},{"case":"nonblocking","file":"logust_nonblock.log","lines":10000,"message_sha256":"a59bbd248568e533fdefd199dd935f13be0440847b7720fd479efeb719ceaee7"},{"case":"latency","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"latency","file":"logust_sync.log","lines":10000,"message_sha256":"d436d688b0fdd94bb31031db49528d72e5566e4c20e76dce59b77b43daebcf15"},{"case":"file","file":"logust.log","lines":10000,"message_sha256":"44093c8c669d67a7f9c7f2bd89638200be71dbc8373c7a712a914699380674b0"},{"case":"formatted","file":"logust.log","lines":10000,"message_sha256":"40cd4acccdcb7f1e2a2a0d88fa58dae63866b68084a94841f769a38a01548a5e"},{"case":"json","file":"logust.json","lines":10000,"message_sha256":"4bc0f0b4c39b12df6bc1aa983e41b8f0e1cea0b013d6d286ef44e79babfd1bb2"},{"case":"context","file":"logust.log","lines":10000,"message_sha256":"a3cafb74508d45b48a8f35f7b2bf8fbf2edab6592b6f89a31eadca741eac2b3f"},{"case":"async","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"async_context","file":"logust_async_ctx.log","lines":10000,"message_sha256":"d16456e57608612f05517d14c887167c0d2f01d2b48c045fe7e1c3660ae9f18f"},{"case":"nonblocking","file":"logust_nonblock.log","lines":10000,"message_sha256":"a59bbd248568e533fdefd199dd935f13be0440847b7720fd479efeb719ceaee7"},{"case":"latency","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"latency","file":"logust_sync.log","lines":10000,"message_sha256":"d436d688b0fdd94bb31031db49528d72e5566e4c20e76dce59b77b43daebcf15"},{"case":"file","file":"logust.log","lines":10000,"message_sha256":"44093c8c669d67a7f9c7f2bd89638200be71dbc8373c7a712a914699380674b0"},{"case":"formatted","file":"logust.log","lines":10000,"message_sha256":"40cd4acccdcb7f1e2a2a0d88fa58dae63866b68084a94841f769a38a01548a5e"},{"case":"json","file":"logust.json","lines":10000,"message_sha256":"4bc0f0b4c39b12df6bc1aa983e41b8f0e1cea0b013d6d286ef44e79babfd1bb2"},{"case":"context","file":"logust.log","lines":10000,"message_sha256":"a3cafb74508d45b48a8f35f7b2bf8fbf2edab6592b6f89a31eadca741eac2b3f"},{"case":"async","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"async_context","file":"logust_async_ctx.log","lines":10000,"message_sha256":"d16456e57608612f05517d14c887167c0d2f01d2b48c045fe7e1c3660ae9f18f"},{"case":"nonblocking","file":"logust_nonblock.log","lines":10000,"message_sha256":"a59bbd248568e533fdefd199dd935f13be0440847b7720fd479efeb719ceaee7"},{"case":"latency","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"latency","file":"logust_sync.log","lines":10000,"message_sha256":"d436d688b0fdd94bb31031db49528d72e5566e4c20e76dce59b77b43daebcf15"}],"pid":86561,"tmpdir":"/study/tmp"},
+    {"label":"old","python":"3.14.9 (main, Oct 21 2026, 17:47:42) [Clang 23.1.3 ]","package":"/study/old/env/lib/python3.14/site-packages/logust/__init__.py","native":"/study/old/env/lib/python3.14/site-packages/logust/_logust.cpython-314-darwin.so","loguru":"0.7.3","n":10000,"warmup_suites":1,"samples":[{"file":{"logging":0.07435020903358236,"loguru":0.08427566604223102,"logust":0.015122791985049844},"formatted":{"logging":0.07763191597769037,"loguru":0.08164862502599135,"logust":0.015839625033549964},"json":{"logging":null,"loguru":0.168087333033327,"logust":0.016114916012156755},"context":{"logging":null,"loguru":0.08149579097516835,"logust":0.015107124985661358},"async":{"logging":null,"loguru":0.36025170801440254,"logust":0.013993041997309774},"async_context":{"logging":null,"loguru":0.3537900419905782,"logust":0.016908875026274472},"nonblocking":{"logging":null,"loguru":0.3569332500337623,"logust":0.015461582981515676},"callable_sink":{"loguru":0.0409309160313569,"logust":0.008037457999307662},"latency.sync":{"loguru":0.08006779197603464,"logust":0.015381500008516014},"latency.async":{"loguru":0.3290139170130715,"logust":0.01568825001595542}},{"file":{"logging":0.06994050001958385,"loguru":0.07795025000814348,"logust":0.014567541948053986},"formatted":{"logging":0.07040787499863654,"loguru":0.08017812500474975,"logust":0.016325125005096197},"json":{"logging":null,"loguru":0.15933829202549532,"logust":0.015651834022719413},"context":{"logging":null,"loguru":0.08096549997571856,"logust":0.014901707996614277},"async":{"logging":null,"loguru":0.36041491699870676,"logust":0.01620087499031797},"async_context":{"logging":null,"loguru":0.3479269999661483,"logust":0.0150438750279136},"nonblocking":{"logging":null,"loguru":0.32884879200719297,"logust":0.01436687505338341},"callable_sink":{"loguru":0.03911520802648738,"logust":0.007824791013263166},"latency.sync":{"loguru":0.07711795798968524,"logust":0.016028291021939367},"latency.async":{"loguru":0.34893224999541417,"logust":0.017705250007566065}},{"file":{"logging":0.07294237503083423,"loguru":0.08209441596409306,"logust":0.01568429102189839},"formatted":{"logging":0.07142170902807266,"loguru":0.08144525001989678,"logust":0.017146083002444357},"json":{"logging":null,"loguru":0.17962670797714964,"logust":0.015541042026598006},"context":{"logging":null,"loguru":0.07974741701036692,"logust":0.014546166989021003},"async":{"logging":null,"loguru":0.3174540410400368,"logust":0.014147625013720244},"async_context":{"logging":null,"loguru":0.316037583979778,"logust":0.014178292010910809},"nonblocking":{"logging":null,"loguru":0.3204742500092834,"logust":0.015579374972730875},"callable_sink":{"loguru":0.0392240840010345,"logust":0.008859333000145853},"latency.sync":{"loguru":0.07888241700129583,"logust":0.015692457964178175},"latency.async":{"loguru":0.32075395801803097,"logust":0.016549166990444064}}],"output_checks":[{"case":"file","file":"logust.log","lines":10000,"message_sha256":"44093c8c669d67a7f9c7f2bd89638200be71dbc8373c7a712a914699380674b0"},{"case":"formatted","file":"logust.log","lines":10000,"message_sha256":"40cd4acccdcb7f1e2a2a0d88fa58dae63866b68084a94841f769a38a01548a5e"},{"case":"json","file":"logust.json","lines":10000,"message_sha256":"4bc0f0b4c39b12df6bc1aa983e41b8f0e1cea0b013d6d286ef44e79babfd1bb2"},{"case":"context","file":"logust.log","lines":10000,"message_sha256":"a3cafb74508d45b48a8f35f7b2bf8fbf2edab6592b6f89a31eadca741eac2b3f"},{"case":"async","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"async_context","file":"logust_async_ctx.log","lines":10000,"message_sha256":"d16456e57608612f05517d14c887167c0d2f01d2b48c045fe7e1c3660ae9f18f"},{"case":"nonblocking","file":"logust_nonblock.log","lines":10000,"message_sha256":"a59bbd248568e533fdefd199dd935f13be0440847b7720fd479efeb719ceaee7"},{"case":"latency","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"latency","file":"logust_sync.log","lines":10000,"message_sha256":"d436d688b0fdd94bb31031db49528d72e5566e4c20e76dce59b77b43daebcf15"},{"case":"file","file":"logust.log","lines":10000,"message_sha256":"44093c8c669d67a7f9c7f2bd89638200be71dbc8373c7a712a914699380674b0"},{"case":"formatted","file":"logust.log","lines":10000,"message_sha256":"40cd4acccdcb7f1e2a2a0d88fa58dae63866b68084a94841f769a38a01548a5e"},{"case":"json","file":"logust.json","lines":10000,"message_sha256":"4bc0f0b4c39b12df6bc1aa983e41b8f0e1cea0b013d6d286ef44e79babfd1bb2"},{"case":"context","file":"logust.log","lines":10000,"message_sha256":"a3cafb74508d45b48a8f35f7b2bf8fbf2edab6592b6f89a31eadca741eac2b3f"},{"case":"async","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"async_context","file":"logust_async_ctx.log","lines":10000,"message_sha256":"d16456e57608612f05517d14c887167c0d2f01d2b48c045fe7e1c3660ae9f18f"},{"case":"nonblocking","file":"logust_nonblock.log","lines":10000,"message_sha256":"a59bbd248568e533fdefd199dd935f13be0440847b7720fd479efeb719ceaee7"},{"case":"latency","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"latency","file":"logust_sync.log","lines":10000,"message_sha256":"d436d688b0fdd94bb31031db49528d72e5566e4c20e76dce59b77b43daebcf15"},{"case":"file","file":"logust.log","lines":10000,"message_sha256":"44093c8c669d67a7f9c7f2bd89638200be71dbc8373c7a712a914699380674b0"},{"case":"formatted","file":"logust.log","lines":10000,"message_sha256":"40cd4acccdcb7f1e2a2a0d88fa58dae63866b68084a94841f769a38a01548a5e"},{"case":"json","file":"logust.json","lines":10000,"message_sha256":"4bc0f0b4c39b12df6bc1aa983e41b8f0e1cea0b013d6d286ef44e79babfd1bb2"},{"case":"context","file":"logust.log","lines":10000,"message_sha256":"a3cafb74508d45b48a8f35f7b2bf8fbf2edab6592b6f89a31eadca741eac2b3f"},{"case":"async","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"async_context","file":"logust_async_ctx.log","lines":10000,"message_sha256":"d16456e57608612f05517d14c887167c0d2f01d2b48c045fe7e1c3660ae9f18f"},{"case":"nonblocking","file":"logust_nonblock.log","lines":10000,"message_sha256":"a59bbd248568e533fdefd199dd935f13be0440847b7720fd479efeb719ceaee7"},{"case":"latency","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"latency","file":"logust_sync.log","lines":10000,"message_sha256":"d436d688b0fdd94bb31031db49528d72e5566e4c20e76dce59b77b43daebcf15"},{"case":"file","file":"logust.log","lines":10000,"message_sha256":"44093c8c669d67a7f9c7f2bd89638200be71dbc8373c7a712a914699380674b0"},{"case":"formatted","file":"logust.log","lines":10000,"message_sha256":"40cd4acccdcb7f1e2a2a0d88fa58dae63866b68084a94841f769a38a01548a5e"},{"case":"json","file":"logust.json","lines":10000,"message_sha256":"4bc0f0b4c39b12df6bc1aa983e41b8f0e1cea0b013d6d286ef44e79babfd1bb2"},{"case":"context","file":"logust.log","lines":10000,"message_sha256":"a3cafb74508d45b48a8f35f7b2bf8fbf2edab6592b6f89a31eadca741eac2b3f"},{"case":"async","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"async_context","file":"logust_async_ctx.log","lines":10000,"message_sha256":"d16456e57608612f05517d14c887167c0d2f01d2b48c045fe7e1c3660ae9f18f"},{"case":"nonblocking","file":"logust_nonblock.log","lines":10000,"message_sha256":"a59bbd248568e533fdefd199dd935f13be0440847b7720fd479efeb719ceaee7"},{"case":"latency","file":"logust_async.log","lines":10000,"message_sha256":"e179e62bc6d69002c0fe94168b3fd7129a2c3f2b37ab015908c4208b84ad50dd"},{"case":"latency","file":"logust_sync.log","lines":10000,"message_sha256":"d436d688b0fdd94bb31031db49528d72e5566e4c20e76dce59b77b43daebcf15"}],"pid":86617,"tmpdir":"/study/tmp"}
+  ]
+}

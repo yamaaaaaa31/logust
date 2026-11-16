@@ -1,0 +1,13 @@
+{
+  "linux": {
+    "python_passed": 1342,
+    "python_skipped": 2,
+    "python_warnings": 1,
+    "rust_passed": 127,
+    "version_smoke": "logust.__version__ == importlib.metadata.version(\"logust\") == 0.6.0",
+    "wheel": "logust-0.6.0-cp314-cp314-manylinux_2_34_aarch64.whl"
+  },
+  "benchmark_implementation_commit": "936c7821ad07c8c95d0e20200615215ce56c1c92",
+  "baseline_commit": "6d7962129c55d8c98eb9b77cce0b7ad0c0f7e573",
+  "candidate_changes": "Linux adds 0.6.0 package metadata to the implementation commit; macOS benchmarks use that implementation before the metadata bump. No production performance code is changed by this release preparation."
+}

@@ -1,104 +1,62 @@
 # Benchmarks { #benchmarks }
 
-How fast is Logust, compared to the standard `logging` module and loguru? Here are the numbers. 🚀
+The 0.6.0 candidate was compared directly with 0.5.0 using the same benchmark
+and interpreter within each environment. Main file workloads took about
+53–56% less time on macOS and 48–52% less time in Linux ARM64 Docker.
 
-They are the medians of three runs of the benchmark suite in the repository (`benchmarks/bench_throughput.py`), with a **release** build, on an Apple Silicon Mac with CPython 3.14. Your numbers will be different, but the proportions should be similar. You can [run them yourself](#run-the-benchmarks).
+| Workload | macOS: 0.5.0 → candidate | Linux Docker: 0.5.0 → candidate | Time reduction: macOS / Linux |
+|---|---:|---:|---:|
+| Sync file, default format | 14.84 → **6.89 ms** | 17.47 → **8.80 ms** | 53.6% / 49.6% |
+| Formatted messages | 16.28 → **7.55 ms** | 18.42 → **9.52 ms** | 53.6% / 48.3% |
+| JSON | 15.60 → **7.39 ms** | 18.13 → **8.78 ms** | 52.6% / 51.6% |
+| Bound context, sync | 14.74 → **6.89 ms** | 17.36 → **8.62 ms** | 53.3% / 50.3% |
+| Async + complete() | 14.39 → **6.74 ms** | 18.03 → **9.06 ms** | 53.1% / 49.8% |
+| Bound context, async + complete() | 14.76 → **6.91 ms** | 19.10 → **9.51 ms** | 53.2% / 50.2% |
+| Async queue only | 14.67 → **6.53 ms** | 18.27 → **9.28 ms** | 55.5% / 49.2% |
+| Callable sink, message only | 7.92 → **4.13 ms** | 8.31 → **4.15 ms** | 47.9% / 50.0% |
+| Sync latency | 15.43 → **7.55 ms** | 18.32 → **9.73 ms** | 51.1% / 46.9% |
+| Async queue latency | 16.30 → **8.32 ms** | 23.54 → **11.39 ms** | 48.9% / 51.6% |
 
-## What is measured { #what-is-measured }
+Measured on 2026-11-16 using source-built release wheels, the same CPython
+3.14.9 interpreter and Rust 1.96.0, on an Apple M4 Pro. Linux is native ARM64
+inside an OrbStack Docker VM; logs use the container filesystem. Each version
+ran in six independent processes, each with three timed suites after warmup;
+the table compares the medians of the six process medians. Each throughput
+case logs 10,000 messages, with output counts/content checked after timing.
+The default file buffer is 8 KB in both versions. Flush completion is included
+except in the explicitly labeled queue-only/async-queue-latency cases.
 
-Each scenario logs **10,000 messages** with each library and measures the total time, including the final flush (`complete()`), except in the "no wait" and latency scenarios. Lower is better.
+## Other performance changes
 
-The libraries are configured to write the same kind of line to a file: time, level, `module:function:line` and the message. The console is turned off for all of them.
+The additional 32-workload check found no case meeting the predeclared repeated
+slowdown screen (a median slowdown of at least 5%, with at least five of six
+pairs also at least 5% slower). This does **not** mean every case improved:
+active exception output was **3.3% slower on macOS** (only 1/6 pairs faster),
+and its Linux result was mixed (median 2.9% faster, only 2/6 pairs faster).
+Long plain messages on macOS had one pair more than 5% slower despite an
+improved overall median. All adverse samples are retained.
 
-## Throughput { #throughput }
+The 32 common-API cases include kwargs, module-level calls, small/large bind
+values, JSON escaping, filters, patchers, callbacks, custom levels, Unicode,
+long messages, markup, console writes, queues, rotation, opt/lazy/suppressed
+calls, and active exceptions. New-only APIs and other configurations remain
+outside this comparison. Regular-CPython performance results do not establish
+free-threaded, Windows, x86-64 or bare-metal Linux performance.
 
-| Scenario | logging | loguru | logust |
-|----------|---------|--------|--------|
-| File write (sync) | 81.58 ms | 90.61 ms | **8.32 ms** |
-| File write (sync, one write per line) | 83.42 ms | 89.44 ms | **29.75 ms** |
-| Formatted messages | 82.34 ms | 106.49 ms | **8.80 ms** |
-| JSON serialize | N/A | 188.64 ms | **9.12 ms** |
-| With context (sync) | N/A | 88.73 ms | **7.12 ms** |
+## Reproduce and inspect
 
-Logust buffers file writes by default (8 KB), while loguru and `logging` write each line before the logging call returns. The "one write per line" row compares like with like: Logust with `buffering=1`, so that every logged line survives a kill. The `write()` system call per message is then most of Logust's time. See [When it's written](../tutorial/file-output.md#make-sure-its-written).
+The repository contains the
+[full tables and all raw results](https://github.com/yamaaaaaa31/logust/blob/main/benchmarks/results/0.6.0/README.md)
+and the [comparison runner / pinned Linux tool image](https://github.com/yamaaaaaa31/logust/tree/main/benchmarks/release).
+The throughput benchmark is benchmarks/bench_throughput.py. Build release
+wheels for both revisions, install them in separate virtual environments with
+the same Python, and alternate their execution outside the source checkouts.
+Linux logs should remain on the container filesystem, not a host bind mount.
 
-`N/A`: the standard `logging` module has no built-in JSON output or context binding, so those scenarios are not measured for it.
+## Reading the results
 
-## Async writes { #async-writes }
-
-With `enqueue=True`, the file writes happen in a background thread. See [Async Writes](../advanced/async-writes.md).
-
-| Scenario | loguru | logust |
-|----------|--------|--------|
-| File write (async + complete) | 437.38 ms | **7.09 ms** |
-| With context (async + complete) | 402.73 ms | **7.15 ms** |
-| Async non-blocking (no wait) | 425.22 ms | **6.88 ms** |
-
-## Sync vs async latency { #sync-vs-async-latency }
-
-This one measures the time spent in the **main thread** only. That's the real benefit of async writes: your code doesn't wait for the disk.
-
-| Library | Sync | Async |
-|---------|------|-------|
-| loguru | 86.60 ms | 370.86 ms |
-| logust | 8.25 ms | 9.06 ms |
-
-In these runs, loguru's `enqueue=True` path was slower than its sync path, while Logust's async path stayed close to its sync latency.
-
-## Run the benchmarks { #run-the-benchmarks }
-
-You can reproduce these numbers from a clone of the repository.
-
-/// warning
-
-Build the extension in **release** mode first. A debug build is much slower, and its numbers are not comparable to the published wheels.
-
-///
-
-<div class="termy">
-
-```console
-// Install the development dependencies
-$ uv sync
-
----> 100%
-
-// Build the Rust extension in release mode
-$ maturin develop --release
-
----> 100%
-
-// Optional: install loguru to get its rows too
-$ uv pip install loguru
-
----> 100%
-
-// Run the full suite, it prints the comparison tables
-$ python benchmarks/bench_throughput.py
-```
-
-</div>
-
-The same scenarios are available as a pytest suite, and there are a few more focused scripts:
-
-<div class="termy">
-
-```console
-$ pytest benchmarks/bench_throughput.py -v
-
-// Filters on a mix of handlers
-$ python benchmarks/bench_filter_mixed.py
-
-// The format_record hot path (thread, process, elapsed, padded level)
-$ python benchmarks/bench_format_record.py
-```
-
-</div>
-
-/// tip
-
-To check if a change makes Logust faster or slower, compare the numbers on the **baseline** commit and **after** your change, on the same machine, with the same `N`, and with the system as quiet as possible. One run on its own only tells you the absolute speed.
-
-///
-
-You can find more details in <a href="https://github.com/yamaaaaaa31/logust/blob/main/benchmarks/README.md" class="external-link" target="_blank">`benchmarks/README.md`</a>.
+- These are cumulative source-version comparisons, not a sum or product of earlier PR percentages.
+- Flush is included in ordinary and async-complete cases. Queue-only and async queue latency exclude drain from the timer; cleanup still drains before validating output.
+- Both Logust versions use the same default 8 KB file buffer. The previous cross-library snapshot used a different environment and is not mixed into these percentages. Loguru/logging normally write each line before returning; a per-line comparison requires buffering=1 and separate measurements.
+- The previous PR #103 immediate-before enqueue regression remains an unresolved, separate comparison. No universal no-regression claim is made.
+- Native serialize=True remains supported; the record migration described in the release notes concerns whole-record json.dumps() in filters, patchers and callbacks.
