@@ -1022,23 +1022,40 @@ impl FileSinkInner {
     }
 
     fn write_owned(&self, message: String) -> io::Result<()> {
-        self.maybe_rotate()?;
+        let coordinate_rotation = self.rotation_coordination_enabled();
+        if coordinate_rotation {
+            self.maybe_rotate()?;
+        }
 
         let msg_len = message.len() as u64 + 1;
-        let coordinate_rotation = self.rotation_coordination_enabled();
 
         let maybe_sender = {
             let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
             self.ensure_backend_ready_locked(&mut state)?;
 
             match &mut state.backend {
-                WriterBackend::Async(async_state) => Some(
-                    async_state
+                WriterBackend::Async(async_state) => {
+                    let sender = async_state
                         .sender
                         .as_ref()
-                        .expect("async backend must have sender after ensure")
-                        .clone(),
-                ),
+                        .expect("async backend must have sender after ensure");
+                    if !coordinate_rotation {
+                        // A ready queue can use the state's sender directly.
+                        // Capacity waits and backend recovery stay outside the
+                        // state lock, retaining ownership of the original line.
+                        let pending = match sender.try_send(WriterMessage::Write(message)) {
+                            Ok(()) => None,
+                            Err(error) => Some((error.into_inner(), sender.clone())),
+                        };
+                        drop(state);
+                        if let Some((message, sender)) = pending {
+                            self.send_with_retry(message, sender)?;
+                        }
+                        self.current_size.fetch_add(msg_len, Ordering::Relaxed);
+                        return Ok(());
+                    }
+                    Some(sender.clone())
+                }
                 WriterBackend::Sync(sync_state) => {
                     let writer = sync_state
                         .writer
@@ -2681,6 +2698,274 @@ mod tests {
         fs::remove_dir(&path).unwrap();
     }
 
+    #[test]
+    fn test_async_writer_prefilled_queue_flush_barrier_and_disconnect() {
+        for coordinate_rotation in [false, true] {
+            let dir = unique_temp_path("async-flush-barrier");
+            let path = dir.join("app.log");
+            let mut state =
+                FileSinkInner::create_async_writer_state(&path, coordinate_rotation).unwrap();
+            let sender = state.sender.take().unwrap();
+            let handle = state.handle.take().unwrap();
+
+            // Block at an initial flush ack, so all the following messages
+            // are queued before the worker can receive any of them.
+            let (start_ack, start_receiver) = bounded(0);
+            sender
+                .send(WriterMessage::Flush { ack: start_ack })
+                .unwrap();
+            for message in ["first", "second", "third"] {
+                sender
+                    .send(WriterMessage::Write(message.to_owned()))
+                    .unwrap();
+            }
+            let (ack, ack_receiver) = bounded(0);
+            sender.send(WriterMessage::Flush { ack }).unwrap();
+            sender
+                .send(WriterMessage::Write("after barrier".to_owned()))
+                .unwrap();
+            drop(sender);
+            start_receiver.recv_timeout(Duration::from_secs(5)).unwrap();
+
+            // The zero-capacity ack blocks the worker at the second Flush.
+            // Its prefix must already be visible, while the next queued line
+            // cannot pass that barrier, even though the channel disconnected.
+            let deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                let contents = fs::read_to_string(&path).unwrap();
+                if contents == "first\nsecond\nthird\n" {
+                    break;
+                }
+                assert!(Instant::now() < deadline, "flush prefix: {contents:?}");
+                thread::sleep(Duration::from_millis(1));
+            }
+            ack_receiver.recv_timeout(Duration::from_secs(5)).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !handle.is_finished() {
+                assert!(Instant::now() < deadline, "writer did not drain and exit");
+                thread::sleep(Duration::from_millis(1));
+            }
+            handle.join().unwrap();
+            assert_eq!(
+                fs::read_to_string(&path).unwrap(),
+                "first\nsecond\nthird\nafter barrier\n"
+            );
+            fs::remove_dir_all(dir).unwrap();
+        }
+    }
+
+    #[test]
+    fn test_async_writer_idle_deadline_flushes_without_barrier() {
+        for coordinate_rotation in [false, true] {
+            let dir = unique_temp_path("async-idle-deadline");
+            let path = dir.join("app.log");
+            let mut state =
+                FileSinkInner::create_async_writer_state(&path, coordinate_rotation).unwrap();
+            let sender = state.sender.take().unwrap();
+            sender
+                .send(WriterMessage::Write("idle line".to_owned()))
+                .unwrap();
+
+            // Keep the channel connected: neither an explicit flush nor
+            // disconnect may make this line visible in place of the deadline.
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while fs::read_to_string(&path).unwrap() != "idle line\n" {
+                assert!(Instant::now() < deadline, "idle line was not flushed");
+                thread::sleep(Duration::from_millis(1));
+            }
+            drop(sender);
+            FileSinkInner::stop_async_writer_locked(&mut state, true);
+            fs::remove_dir_all(dir).unwrap();
+        }
+    }
+
+    #[test]
+    fn test_async_prefilled_writes_reach_idle_flush_then_disconnect() {
+        for coordinate_rotation in [false, true] {
+            let dir = unique_temp_path("async-prefilled-idle");
+            let path = dir.join("app.log");
+            let mut state =
+                FileSinkInner::create_async_writer_state(&path, coordinate_rotation).unwrap();
+            let sender = state.sender.take().unwrap();
+
+            // The initial rendezvous ack holds the worker until both writes
+            // are queued. Within one dirty interval, the second write is a
+            // ready receive, followed by an empty connected channel. A long
+            // scheduling pause can instead trigger the post-write flush.
+            let (start_ack, start_receiver) = bounded(0);
+            sender
+                .send(WriterMessage::Flush { ack: start_ack })
+                .unwrap();
+            for message in ["first 猫\0", "second 😀"] {
+                sender
+                    .send(WriterMessage::Write(message.to_owned()))
+                    .unwrap();
+            }
+            start_receiver.recv_timeout(Duration::from_secs(5)).unwrap();
+
+            // No explicit Flush or disconnect can make this prefix visible.
+            // Periodic or idle flushing must make both writes visible.
+            let expected = "first 猫\0\nsecond 😀\n";
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while fs::read_to_string(&path).unwrap() != expected {
+                assert!(Instant::now() < deadline, "prefilled writes did not flush");
+                thread::sleep(Duration::from_millis(1));
+            }
+
+            sender
+                .send(WriterMessage::Write("tail after idle".into()))
+                .unwrap();
+            drop(sender);
+            FileSinkInner::stop_async_writer_locked(&mut state, true);
+            assert_eq!(
+                fs::read_to_string(path).unwrap(),
+                format!("{expected}tail after idle\n")
+            );
+            fs::remove_dir_all(dir).unwrap();
+        }
+    }
+
+    #[test]
+    fn test_async_ready_writes_preserve_flush_order_and_size() {
+        let dir = unique_temp_path("async-ready-send");
+        let path = dir.join("app.log");
+        let sink = FileSink::new(FileSinkConfig {
+            path: path.clone(),
+            enqueue: true,
+            ..FileSinkConfig::default()
+        })
+        .unwrap();
+        let mut expected = String::new();
+        // Fewer total writes than queue slots: capacity cannot force fallback.
+        for i in 0..32 {
+            let message = format!("ready {i} 猫\0");
+            expected.push_str(&message);
+            expected.push('\n');
+            sink.write_owned(message).unwrap();
+        }
+        sink.flush().unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), expected);
+        assert_eq!(
+            sink.inner.current_size.load(Ordering::Relaxed),
+            expected.len() as u64
+        );
+        drop(sink);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn test_async_full_queue_releases_state_before_waiting() {
+        let dir = unique_temp_path("async-full-send");
+        let path = write_test_log(&dir, "app.log", b"");
+        let sink = FileSink::new(FileSinkConfig {
+            path,
+            enqueue: true,
+            delay: true,
+            ..FileSinkConfig::default()
+        })
+        .unwrap();
+        let (sender, receiver) = bounded(1);
+        sender
+            .send(WriterMessage::Write("already queued".to_owned()))
+            .unwrap();
+        let (start, started) = bounded(0);
+        let (received, result) = bounded(1);
+        let inner = Arc::clone(&sink.inner);
+        let handle = thread::spawn(move || {
+            started.recv_timeout(Duration::from_secs(5)).unwrap();
+            // Give the producer a full queue, then require access to state
+            // before allowing any capacity to become available.
+            thread::sleep(Duration::from_millis(20));
+            let deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                if let Ok(state) = inner.state.try_lock() {
+                    drop(state);
+                    break;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "producer retained state while waiting for queue capacity"
+                );
+                thread::sleep(Duration::from_millis(1));
+            }
+            let WriterMessage::Write(first) =
+                receiver.recv_timeout(Duration::from_secs(5)).unwrap()
+            else {
+                panic!("expected queued write");
+            };
+            let WriterMessage::Write(second) =
+                receiver.recv_timeout(Duration::from_secs(5)).unwrap()
+            else {
+                panic!("expected producer write");
+            };
+            received.send((first, second)).unwrap();
+        });
+        {
+            let mut state = sink.inner.state.lock().unwrap();
+            state.backend = WriterBackend::Async(AsyncWriterState {
+                sender: Some(sender),
+                handle: Some(handle),
+                file_identity: Arc::new(SharedFileIdentity::default()),
+            });
+        }
+        let message = "producer\0猫\n".repeat(128);
+        let original_pointer = message.as_ptr();
+        let original_size = message.len() as u64 + 1;
+        start.send(()).unwrap();
+        sink.write_owned(message).unwrap();
+        let (first, second) = result.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(first, "already queued");
+        assert_eq!(second, "producer\0猫\n".repeat(128));
+        assert_eq!(second.as_ptr(), original_pointer);
+        assert_eq!(
+            sink.inner.current_size.load(Ordering::Relaxed),
+            original_size
+        );
+        {
+            let mut state = sink.inner.state.lock().unwrap();
+            let WriterBackend::Async(async_state) = &mut state.backend else {
+                panic!("expected injected async backend");
+            };
+            FileSinkInner::stop_async_writer_locked(async_state, true);
+        }
+        drop(sink);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn test_async_disconnected_queue_retries_original_line_once() {
+        let dir = unique_temp_path("async-disconnected-send");
+        let path = write_test_log(&dir, "app.log", b"old\n");
+        let sink = FileSink::new(FileSinkConfig {
+            path: path.clone(),
+            enqueue: true,
+            delay: true,
+            ..FileSinkConfig::default()
+        })
+        .unwrap();
+        let (sender, receiver) = bounded(1);
+        drop(receiver);
+        {
+            let mut state = sink.inner.state.lock().unwrap();
+            state.backend = WriterBackend::Async(AsyncWriterState {
+                sender: Some(sender),
+                handle: Some(thread::spawn(|| {})),
+                file_identity: Arc::new(SharedFileIdentity::default()),
+            });
+        }
+        let message = "retry\0猫\n".repeat(128);
+        let expected = format!("old\n{message}\n");
+        sink.write_owned(message).unwrap();
+        sink.flush().unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), expected);
+        assert_eq!(
+            sink.inner.current_size.load(Ordering::Relaxed),
+            expected.len() as u64
+        );
+        drop(sink);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
     fn write_test_log(dir: &Path, name: &str, contents: &[u8]) -> PathBuf {
         fs::create_dir_all(dir).unwrap();
         let path = dir.join(name);
@@ -3030,6 +3315,82 @@ mod tests {
             drop(sink);
             let _ = fs::remove_dir_all(&dir);
         }
+    }
+
+    #[test]
+    fn test_non_rotating_owned_write_prepares_delayed_and_restarted_backend() {
+        for enqueue in [false, true] {
+            let dir = unique_temp_path(&format!("owned-restart-{enqueue}"));
+            let path = write_test_log(&dir, "app.log", b"old content\n");
+            let sink = FileSink::new(FileSinkConfig {
+                path: path.clone(),
+                enqueue,
+                delay: true,
+                truncate: true,
+                ..FileSinkConfig::default()
+            })
+            .unwrap();
+
+            sink.flush().unwrap();
+            assert_eq!(fs::read_to_string(&path).unwrap(), "old content\n");
+            sink.write_owned("first".to_owned()).unwrap();
+            sink.flush().unwrap();
+
+            // Teardown keeps the original configuration. The next owned
+            // write must prepare it again without applying mode="w" twice.
+            {
+                let mut state = sink.inner.state.lock().unwrap();
+                match &mut state.backend {
+                    WriterBackend::Async(async_state) => {
+                        FileSinkInner::stop_async_writer_locked(async_state, true);
+                    }
+                    WriterBackend::Sync(sync_state) => {
+                        sync_state.writer.take();
+                    }
+                }
+            }
+            sink.write_owned("second".to_owned()).unwrap();
+            sink.flush().unwrap();
+            assert_eq!(fs::read_to_string(&path).unwrap(), "first\nsecond\n");
+            assert!(!sink.inner.truncate_on_open.load(Ordering::Acquire));
+
+            drop(sink);
+            fs::remove_dir_all(dir).unwrap();
+        }
+    }
+
+    #[test]
+    fn test_non_rotating_owned_write_checks_pid_before_opening() {
+        let dir = unique_temp_path("owned-inherited-pid");
+        let path = write_test_log(&dir, "app.log", b"old content\n");
+        let sink = FileSink::new(FileSinkConfig {
+            path: path.clone(),
+            enqueue: true,
+            delay: true,
+            truncate: true,
+            ..FileSinkConfig::default()
+        })
+        .unwrap();
+
+        // Exercise the inherited-PID branch without forking a multithreaded
+        // Rust test process. The delayed async backend owns no live thread.
+        sink.inner.creation_pid.store(0, Ordering::Release);
+        sink.write_owned("child".to_owned()).unwrap();
+        {
+            let state = sink.inner.state.lock().unwrap();
+            assert!(matches!(state.backend, WriterBackend::Sync(_)));
+        }
+        assert_eq!(
+            sink.inner.creation_pid.load(Ordering::Acquire),
+            std::process::id()
+        );
+        sink.write_owned("more".to_owned()).unwrap();
+        sink.flush().unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "child\nmore\n");
+        assert!(!sink.inner.truncate_on_open.load(Ordering::Acquire));
+
+        drop(sink);
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
