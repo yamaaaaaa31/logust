@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-16
+
+### Upgrade notes
+- **Default console output moves to stderr** and colors are detected automatically. Programs consuming logs from stdout need to select `sys.stdout` explicitly or redirect stderr. See the detailed migration example under Changed.
+- **Record values gain loguru-compatible types**: `record["time"]`, `record["elapsed"]`, `record["thread"]`, and `record["process"]` are not directly JSON-serializable. Code serializing an entire filter/patcher/callback record needs `json.dumps(record, default=str)` or an explicit subset of fields. Native `serialize=True` output remains supported.
+- **Filters now enforce their documented behavior**: string/dict filters take effect, and a callable filter that raises drops the record according to `catch=` rather than letting it through. Unsupported rotation/retention strings now raise `ValueError` instead of silently doing nothing.
+
+### Performance compared with 0.5.0
+- **Same-environment release-wheel comparison** (10,000 messages, six independent processes/version): sync file output 14.84 → 6.89 ms on macOS (**53.6% less time**) and 17.47 → 8.80 ms in Linux ARM64 Docker (**49.6%**); JSON 15.60 → 7.39 ms (**52.6%**) and 18.13 → 8.78 ms (**51.6%**); async output including complete() 14.39 → 6.74 ms (**53.1%**) and 18.03 → 9.06 ms (**49.8%**). Apple M4 Pro, regular CPython 3.14.9, Rust 1.96.0; Linux runs in an OrbStack VM with container-local log files. Percentages are relative to 0.5.0, not the older cross-library snapshot.
+- **32 additional common-API workloads checked on both systems**: none met the predeclared repeated ≥5% slowdown screen. This is not an all-cases improvement claim: active exception output was **3.3% slower on macOS** (1/6 pairs faster), with a mixed Linux result (median 2.9% faster, 2/6 pairs faster). One long-message pair on macOS was also more than 5% slower despite an improved median. The smaller intermediate-version enqueue regression from PR #103 remains unresolved; this cumulative comparison does not supersede it.
+- **Scope and evidence**: output counts/content were checked after timing; all samples, adverse results, hashes and reproduction steps are retained in [the 0.6.0 benchmark evidence](https://github.com/yamaaaaaa31/logust/blob/main/benchmarks/results/0.6.0/README.md). These regular-CPython results do not establish free-threaded, Windows, x86-64 Linux or all-configuration performance. Linux Docker validation: Python **1,342 passed / 2 skipped**, Rust **127 passed**, plus 0.6.0 installed-wheel/version checks.
+
 ### Added
 - **Python 3.15 support**: CI tests CPython 3.15 and free-threaded 3.15t on Linux, macOS, and Windows, including a check that importing Logust keeps the GIL disabled. Free-threaded release builds now target both 3.14t and 3.15t. The Rust bindings use PyO3 0.30.1, and source builds require maturin 1.14.1 or newer. Python 3.10 remains the minimum supported version.
 - **`buffering=` for file sinks**: the `open()` argument loguru passes through. `buffering=1` writes each line to the file before the logging call returns (one `write()` per message, as loguru and `logging.FileHandler` do), so logged lines are visible to `tail -f` right away and survive a process killed by `SIGTERM` (Uvicorn re-raises it after a graceful shutdown), stopped with `os._exit()`, or crashed; no `fsync()` is done. `buffering=N` sets the buffer size in bytes, and a negative value means 8192, as in `open()`. The default is unchanged: an 8 KB buffer for sinks without rotation, one write per line for sinks with rotation. `buffering=0` raises `ValueError` (`open()` rejects unbuffered text files), a non-`int` raises `TypeError`, and passing it to a stream or callable sink raises `TypeError` like `mode` and `encoding`. It is ignored with `enqueue=True`, whose writer thread batches on its own. Accepted by `configure(handlers=[...])` and `HandlerConfig`. Per message with the default format: about 0.9 µs by default, 2.5 µs with `buffering=1` (`bench_throughput.py`, 10,000 messages: 29.8 ms, against 89.4 ms for loguru and 83.4 ms for `logging`).
@@ -237,7 +249,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 1.3x faster than Python standard logging
 - Lock-free fast path for filtered messages
 
-[Unreleased]: https://github.com/yamaaaaaa31/logust/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/yamaaaaaa31/logust/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/yamaaaaaa31/logust/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/yamaaaaaa31/logust/compare/v0.4.2...v0.5.0
 [0.4.2]: https://github.com/yamaaaaaa31/logust/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/yamaaaaaa31/logust/compare/v0.4.0...v0.4.1

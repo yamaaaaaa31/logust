@@ -57,6 +57,10 @@ Mixing raw callbacks or filters changes what gets measured.
 
 See [Benchmarks](../docs/about/benchmarks.md) for latest benchmark results.
 
+For the 0.5.0-to-0.6.0 comparison and the 32-case check for other performance
+changes, see [Release comparison](release/README.md) and the
+[recorded evidence](results/0.6.0/README.md).
+
 ## Collection and context regression benchmark
 
 `bench_review_fixes.py` exercises ordinary file, JSON, callable and console output,
