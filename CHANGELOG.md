@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Release uploads**: macOS and Windows free-threaded wheels are published only by the dedicated workflow, avoiding duplicate filenames with different build hashes in the regular PyPI upload.
+
 ## [0.6.1] - 2026-11-16
 
 ### Fixed
