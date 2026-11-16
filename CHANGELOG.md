@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-11-16
+
+### Fixed
+- **PyPy release builds**: caller collection uses frame attributes on PyPy, whose C API lacks `PyFrame_GetBack` and, on Python 3.11, `PyFrame_GetCode`. CPython keeps the existing native path. CI now tests PyPy 3.11 and 3.12 so build/import failures are caught before tagging a release.
+
 ## [0.6.0] - 2026-11-16
 
 ### Upgrade notes
@@ -249,7 +254,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 1.3x faster than Python standard logging
 - Lock-free fast path for filtered messages
 
-[Unreleased]: https://github.com/yamaaaaaa31/logust/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/yamaaaaaa31/logust/compare/v0.6.1...HEAD
+[0.6.1]: https://github.com/yamaaaaaa31/logust/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/yamaaaaaa31/logust/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/yamaaaaaa31/logust/compare/v0.4.2...v0.5.0
 [0.4.2]: https://github.com/yamaaaaaa31/logust/compare/v0.4.1...v0.4.2

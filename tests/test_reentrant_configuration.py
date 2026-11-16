@@ -150,6 +150,7 @@ SCENARIOS = {
                 finalized.append(True)
         handler_id = logger.add(path, filter=Filter())
         logger.remove(handler_id)
+        collect_finalizers()
         assert finalized == [True]
         emit("after")
         logger.complete()
@@ -165,6 +166,7 @@ SCENARIOS = {
                 finalized.append(True)
         callback_id = logger.add_callback(Callback())
         logger.remove_callback(callback_id)
+        collect_finalizers()
         assert finalized == [True]
         emit("after")
         logger.complete()
@@ -182,6 +184,7 @@ SCENARIOS = {
                 finalized.append(True)
         logger.add_callback(Callback())
         logger.remove()
+        collect_finalizers()
         assert finalized == [True]
         emit("after")
         assert seen == ["after"]
@@ -199,6 +202,7 @@ SCENARIOS = {
                 new_ids.append(logger.add(seen.append, format="{message}"))
         logger.add(path, filter=Filter())
         logger.remove()
+        collect_finalizers()
         emit("after")
         assert seen == ["after"]
         assert logger.remove(new_ids[0])
@@ -285,12 +289,18 @@ SCENARIOS = {
 @pytest.mark.parametrize("custom_level", [False, True], ids=["builtin", "custom"])
 def test_configuration_during_dispatch(tmp_path: Path, scenario: str, custom_level: bool) -> None:
     setup = """
-        import sys
+        import gc, sys
         from pathlib import Path
         from logust import logger
         logger.remove()
         path = Path(sys.argv[1])
         logger.level("CONFIG_SNAPSHOT", no=23)
+        def collect_finalizers():
+            # CPython must still finalize synchronously during remove().
+            # PyPy's tracing GC can defer cpyext wrapper finalization.
+            if sys.implementation.name == "pypy":
+                for _ in range(3):
+                    gc.collect()
         def emit(message):
             if sys.argv[2] == "custom":
                 logger.log("CONFIG_SNAPSHOT", message)

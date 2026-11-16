@@ -48,11 +48,18 @@ pub fn caller_info(py: Python<'_>, depth: usize) -> PyResult<Option<CallerInfo>>
     };
 
     for _ in 0..depth {
+        #[cfg(not(PyPy))]
         // SAFETY: `frame` is a live frame object (owned by the `Bound`).
         // `PyFrame_GetBack` returns a *new* reference (or NULL at the outermost
         // frame), which `from_owned_ptr_or_opt` adopts without another INCREF.
         let back = unsafe {
             Bound::from_owned_ptr_or_opt(py, ffi::PyFrame_GetBack(frame.as_ptr().cast()).cast())
+        };
+        // PyPy does not expose PyFrame_GetBack through its C API.
+        #[cfg(PyPy)]
+        let back = {
+            let back = frame.getattr(intern!(py, "f_back"))?;
+            (!back.is_none()).then_some(back)
         };
         match back {
             Some(back) => frame = back,
@@ -60,14 +67,28 @@ pub fn caller_info(py: Python<'_>, depth: usize) -> PyResult<Option<CallerInfo>>
         }
     }
 
+    #[cfg(not(PyPy))]
     // SAFETY: `frame` is a live frame object; `PyFrame_GetCode` returns a new
     // reference to its code object and never NULL.
     let code = unsafe {
         Bound::from_owned_ptr_or_err(py, ffi::PyFrame_GetCode(frame.as_ptr().cast()).cast())
     }?;
+    // PyPy 3.11 does not export PyFrame_GetCode either.
+    #[cfg(PyPy)]
+    let code = frame.getattr(intern!(py, "f_code"))?;
+    #[cfg(not(PyPy))]
     // SAFETY: `frame` is a live frame object. The line is -1 when it is unknown
     // (where Python's `f_lineno` is `None`, which the Python path turns into 0).
     let line = unsafe { ffi::PyFrame_GetLineNumber(frame.as_ptr().cast()) };
+    #[cfg(PyPy)]
+    let line = {
+        let line = frame.getattr(intern!(py, "f_lineno"))?;
+        if line.is_none() {
+            0
+        } else {
+            line.extract::<i64>()?
+        }
+    };
     let line = u32::try_from(line).unwrap_or(0);
 
     let Some(function) = owned_str(&code.getattr(intern!(py, "co_name"))?)? else {
